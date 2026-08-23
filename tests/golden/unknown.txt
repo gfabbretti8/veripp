@@ -1,0 +1,117 @@
+Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
+Parsing tests/golden/unknown.cpp
+Converting
+Generating GOTO Program
+GOTO program creation time: 0.161s
+GOTO program processing time: 0.000s
+Checking base case, k = 1
+Starting Bounded Model Checking
+Not unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.001s (37 assignments)
+Slicing time: 0.000s (removed 31 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (6 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.000s
+BMC program time: 0.001s
+No bug has been found in the base case
+Checking forward condition, k = 1
+Starting Bounded Model Checking
+Not unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.000s (36 assignments)
+Slicing time: 0.000s (removed 31 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (5 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.000s
+The forward condition is unable to prove the property
+Checking base case, k = 2
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Not unwinding loop 3 iteration 2   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.000s (42 assignments)
+Slicing time: 0.000s (removed 34 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (8 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.001s
+BMC program time: 0.001s
+No bug has been found in the base case
+Checking forward condition, k = 2
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Not unwinding loop 3 iteration 2   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.000s (41 assignments)
+Slicing time: 0.000s (removed 35 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (6 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.001s
+The forward condition is unable to prove the property
+Checking inductive step, k = 2
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Not unwinding loop 3 iteration 2   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.000s (44 assignments)
+Slicing time: 0.000s (removed 30 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (14 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.001s
+The inductive step is unable to prove the property
+Checking base case, k = 3
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Unwinding loop 3 iteration 2   file tests/golden/unknown.cpp line 11 column 5 function main
+Not unwinding loop 3 iteration 3   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.000s (47 assignments)
+Slicing time: 0.000s (removed 37 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (10 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.000s
+BMC program time: 0.001s
+No bug has been found in the base case
+Checking forward condition, k = 3
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Unwinding loop 3 iteration 2   file tests/golden/unknown.cpp line 11 column 5 function main
+Not unwinding loop 3 iteration 3   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.000s (46 assignments)
+Slicing time: 0.000s (removed 39 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (7 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.000s
+The forward condition is unable to prove the property
+Checking inductive step, k = 3
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
+Unwinding loop 3 iteration 2   file tests/golden/unknown.cpp line 11 column 5 function main
+Not unwinding loop 3 iteration 3   file tests/golden/unknown.cpp line 11 column 5 function main
+Symex completed in: 0.000s (49 assignments)
+Slicing time: 0.000s (removed 31 assignments)
+Generated 1 VCC(s), 1 remaining after simplification (18 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.000s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.001s
+The inductive step is unable to prove the property
+Unable to prove or falsify the program, giving up.
+VERIFICATION UNKNOWN
+ESBMC version 8.4.0 64-bit aarch64 macos

@@ -1,0 +1,6 @@
+Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
+Parsing examples/off_by_one.cpp
+Converting
+ERROR: main symbol `main' not found
+ERROR: CONVERSION ERROR
+ESBMC version 8.4.0 64-bit aarch64 macos

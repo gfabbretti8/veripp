@@ -26,6 +26,7 @@ void __ESBMC_assert(bool, const char*);
 // Nondeterministic value constructors for harnesses.
 extern "C" {
 int __VERIFIER_nondet_int();
+short __VERIFIER_nondet_short();
 unsigned __VERIFIER_nondet_uint();
 long __VERIFIER_nondet_long();
 unsigned long __VERIFIER_nondet_ulong();
@@ -37,9 +38,21 @@ double __VERIFIER_nondet_double();
 
 #define VERIPP_NONDET_INT() __VERIFIER_nondet_int()
 #define VERIPP_NONDET_UINT() __VERIFIER_nondet_uint()
+#define VERIPP_NONDET_LONG() __VERIFIER_nondet_long()
+#define VERIPP_NONDET_ULONG() __VERIFIER_nondet_ulong()
 #define VERIPP_NONDET_SIZE() ((unsigned long)__VERIFIER_nondet_ulong())
+#define VERIPP_NONDET_CHAR() __VERIFIER_nondet_char()
 #define VERIPP_NONDET_BOOL() __VERIFIER_nondet_bool()
+#define VERIPP_NONDET_FLOAT() __VERIFIER_nondet_float()
 #define VERIPP_NONDET_DOUBLE() __VERIFIER_nondet_double()
+
+// Guard for a demo/self-test main() living inside a verified source file.
+// veripp defines VERIPP_GENERATED_HARNESS in the harness it generates for a
+// specific function and #includes the source from it, so the file's own main
+// must step aside there; when ESBMC checks the file directly, it is used.
+#if !defined(VERIPP_GENERATED_HARNESS)
+#define VERIPP_HAS_OWN_MAIN 1
+#endif
 
 #elif defined(VERIPP_RUNTIME_CHECKS)
 

@@ -3,6 +3,9 @@
 This module is deliberately LLM-free: it builds command lines, runs the
 verifier, and parses its output into structured results. It is the sole
 source of truth for verification outcomes.
+
+Everything here is calibrated against real ESBMC 8.4 output (see
+`tests/golden/` for the captured transcripts the parser is tested on).
 """
 
 from __future__ import annotations
@@ -10,18 +13,24 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+#: ESBMC does not predefine a macro identifying itself, so veripp defines one.
+#: `include/veripp/contracts.hpp` keys all of its behaviour off it.
+ESBMC_MACRO = "__ESBMC__"
+
 
 class Outcome(Enum):
-    VERIFIED = "verified"            # VERIFICATION SUCCESSFUL
-    COUNTEREXAMPLE = "counterexample"  # VERIFICATION FAILED with trace
-    UNWIND_LIMIT = "unwind_limit"    # bound too small to conclude
-    PARSE_ERROR = "parse_error"      # frontend rejected the input
+    VERIFIED = "verified"              # VERIFICATION SUCCESSFUL
+    COUNTEREXAMPLE = "counterexample"  # VERIFICATION FAILED with a real property
+    UNWIND_LIMIT = "unwind_limit"      # bound too small to conclude
+    PARSE_ERROR = "parse_error"        # frontend rejected the input
     TIMEOUT = "timeout"
-    UNKNOWN = "unknown"
+    TOOL_ERROR = "tool_error"          # esbmc itself crashed or was misinvoked
+    UNKNOWN = "unknown"                # VERIFICATION UNKNOWN (e.g. k-induction gave up)
 
 
 @dataclass
@@ -33,11 +42,13 @@ class VerifyConfig:
     k_induction: bool = False
     incremental_bmc: bool = False
     overflow_check: bool = True
+    unsigned_overflow_check: bool = False  # unsigned wraparound is defined behaviour
     bounds_check: bool = True
     pointer_check: bool = True
     div_by_zero_check: bool = True
     extra_args: list[str] = field(default_factory=list)
     include_dirs: list[Path] = field(default_factory=list)
+    defines: list[str] = field(default_factory=list)
     cpp_std: str = "c++17"
 
     def to_args(self) -> list[str]:
@@ -50,45 +61,186 @@ class VerifyConfig:
             args += ["--unwind", str(self.unwind)]
         if self.overflow_check:
             args.append("--overflow-check")
-        # bounds/pointer checks are on by default in ESBMC; flags below
-        # exist so a config can disable them explicitly.
+        if self.unsigned_overflow_check:
+            args.append("--unsigned-overflow-check")
+        # Bounds, pointer and division checks are on by default in ESBMC and
+        # have no positive flag; the negative flags below let a config disable
+        # them explicitly.
         if not self.bounds_check:
             args.append("--no-bounds-check")
         if not self.pointer_check:
             args.append("--no-pointer-check")
-        if self.div_by_zero_check:
-            args.append("--div-by-zero-check")
+        if not self.div_by_zero_check:
+            args.append("--no-div-by-zero-check")
         for inc in self.include_dirs:
             args += ["-I", str(inc)]
+        for macro in [ESBMC_MACRO, *self.defines]:
+            args += ["-D", macro]
         args += self.extra_args
         return args
+
+    def describe(self) -> str:
+        """One-line statement of the bounds this result was obtained under."""
+        if self.k_induction:
+            mode = "k-induction (unbounded if it converges)"
+        elif self.incremental_bmc:
+            mode = "incremental BMC"
+        else:
+            mode = f"bounded, unwind={self.unwind}"
+        checks = [
+            name
+            for name, on in (
+                ("overflow", self.overflow_check),
+                ("unsigned-overflow", self.unsigned_overflow_check),
+                ("bounds", self.bounds_check),
+                ("pointer", self.pointer_check),
+                ("div-by-zero", self.div_by_zero_check),
+            )
+            if on
+        ]
+        return f"{mode}; checks: {', '.join(checks) or 'none'}; std={self.cpp_std}"
+
+
+@dataclass
+class SourceLoc:
+    file: str
+    line: int
+    column: int | None = None
+    function: str | None = None
+
+    def __str__(self) -> str:
+        loc = f"{self.file}:{self.line}"
+        if self.column is not None:
+            loc += f":{self.column}"
+        return f"{loc} in {self.function}" if self.function else loc
+
+
+@dataclass
+class Assignment:
+    """One variable assignment from a counterexample state."""
+
+    lvalue: str
+    value: str          # human-readable value, binary expansion stripped
+    raw: str            # the line exactly as ESBMC printed it
+
+    def __str__(self) -> str:
+        return f"{self.lvalue} = {self.value}"
 
 
 @dataclass
 class TraceStep:
     file: str
     line: int
-    text: str
+    column: int | None = None
+    function: str | None = None
+    state: int | None = None
+    thread: int | None = None
+    assignments: list[Assignment] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return "; ".join(str(a) for a in self.assignments)
+
+    @property
+    def loc(self) -> SourceLoc:
+        return SourceLoc(self.file, self.line, self.column, self.function)
+
+
+@dataclass
+class ViolatedProperty:
+    loc: SourceLoc
+    description: str
+    expression: str | None = None
+    cwes: list[str] = field(default_factory=list)
+
+    @property
+    def is_unwinding_assertion(self) -> bool:
+        return "unwinding assertion" in self.description
+
+    def __str__(self) -> str:
+        out = f"{self.description}\n  at {self.loc}"
+        if self.expression:
+            out += f"\n  {self.expression}"
+        if self.cwes:
+            out += f"\n  CWE: {', '.join(self.cwes)}"
+        return out
 
 
 @dataclass
 class VerifyResult:
     outcome: Outcome
     config: VerifyConfig
-    violated_property: str | None = None
+    properties: list[ViolatedProperty] = field(default_factory=list)
     trace: list[TraceStep] = field(default_factory=list)
     raw_output: str = ""
     duration_s: float | None = None
+    exit_code: int | None = None
+    error: str | None = None  # frontend/tool error message, when there is one
+
+    @property
+    def violated_property(self) -> ViolatedProperty | None:
+        return self.properties[0] if self.properties else None
 
     @property
     def is_conclusive(self) -> bool:
         return self.outcome in (Outcome.VERIFIED, Outcome.COUNTEREXAMPLE)
 
+    @property
+    def failing_step(self) -> TraceStep | None:
+        """The last state of the trace: where the property was violated."""
+        return self.trace[-1] if self.trace else None
 
-_PROPERTY_RE = re.compile(r"Violated property:\s*\n(.*?)(?:\n\n|\Z)", re.S)
-_STATE_LINE_RE = re.compile(
-    r"^State \d+ file (?P<file>\S+) line (?P<line>\d+)", re.M
+    def assignments(self) -> list[Assignment]:
+        """Every assignment in the counterexample, in execution order."""
+        return [a for step in self.trace for a in step.assignments]
+
+    def input_assignments(self) -> list[Assignment]:
+        """Assignments made in main(): the concrete inputs that trigger the bug.
+
+        These are what a developer needs to reproduce a counterexample, and
+        they are the part of a trace that survives being read out of context.
+        """
+        return [
+            a
+            for step in self.trace
+            if step.function == "main"
+            for a in step.assignments
+        ]
+
+
+# --------------------------------------------------------------- parsing ---
+#
+# Shapes this parser is calibrated against (ESBMC 8.4):
+#
+#   VERIFICATION SUCCESSFUL
+#   VERIFICATION FAILED    (preceded by [Counterexample] and a property block)
+#   VERIFICATION UNKNOWN   (k-induction gave up)
+#   ERROR: PARSING ERROR / ERROR: CONVERSION ERROR
+#
+# The critical distinction is that an insufficient unwind bound is *also*
+# reported as VERIFICATION FAILED, with `unwinding assertion loop N` as the
+# violated property. Reporting that as a counterexample would turn "I don't
+# know" into "your code is broken", which is exactly the kind of overclaim
+# this project refuses to make.
+
+_STATE_RE = re.compile(
+    r"^State (?P<state>\d+) file (?P<file>.+?) line (?P<line>\d+)"
+    r"(?: column (?P<column>\d+))?"
+    r"(?: function (?P<function>\S+))?"
+    r"(?: thread (?P<thread>\d+))?\s*$",
+    re.M,
 )
+_PROPERTY_RE = re.compile(r"^Violated property:\s*$", re.M)
+_PROP_LOC_RE = re.compile(
+    r"^\s*file (?P<file>.+?) line (?P<line>\d+)"
+    r"(?: column (?P<column>\d+))?"
+    r"(?: function (?P<function>\S+))?\s*$"
+)
+_ASSIGNMENT_RE = re.compile(r"^\s{2,}(?P<lvalue>\S.*?)\s*=\s*(?P<value>.*)$")
+_BINARY_SUFFIX_RE = re.compile(r"\s*\((?:[01?]{8}(?:\s+[01?]{8})*)\)\s*$")
+_DASHES_RE = re.compile(r"^\s*-{5,}\s*$")
+_ERROR_RE = re.compile(r"^ERROR: (?P<message>.+)$", re.M)
+_CLANG_ERROR_RE = re.compile(r"^(?P<message>.*?:\d+:\d+: (?:error|fatal error): .+)$", re.M)
 
 
 def find_esbmc() -> str | None:
@@ -101,47 +253,191 @@ def run(source: Path, config: VerifyConfig, esbmc_bin: str | None = None) -> Ver
     if binary is None:
         raise RuntimeError(
             "esbmc not found on PATH. Install from "
-            "https://github.com/esbmc/esbmc/releases"
+            "https://github.com/esbmc/esbmc/releases, or `brew install esbmc`"
         )
     cmd = [binary, str(source), *config.to_args()]
+    started = time.monotonic()
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=config.timeout_s,
-        )
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=config.timeout_s)
     except subprocess.TimeoutExpired as exc:
-        partial = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-        return VerifyResult(Outcome.TIMEOUT, config, raw_output=partial)
-
-    output = proc.stdout + "\n" + proc.stderr
-    return _parse_output(output, config)
-
-
-def _parse_output(output: str, config: VerifyConfig) -> VerifyResult:
-    if "VERIFICATION SUCCESSFUL" in output:
-        return VerifyResult(Outcome.VERIFIED, config, raw_output=output)
-
-    if "VERIFICATION FAILED" in output:
-        m = _PROPERTY_RE.search(output)
-        violated = m.group(1).strip() if m else None
-        trace = [
-            TraceStep(file=s.group("file"), line=int(s.group("line")), text="")
-            for s in _STATE_LINE_RE.finditer(output)
-        ]
         return VerifyResult(
-            Outcome.COUNTEREXAMPLE,
+            Outcome.TIMEOUT,
             config,
-            violated_property=violated,
+            raw_output=_as_text(exc.stdout) + _as_text(exc.stderr),
+            duration_s=time.monotonic() - started,
+            error=f"esbmc exceeded the {config.timeout_s}s per-attempt timeout",
+        )
+
+    duration = time.monotonic() - started
+    output = proc.stdout + ("\n" if proc.stdout and proc.stderr else "") + proc.stderr
+    result = parse_output(output, config, exit_code=proc.returncode)
+    result.duration_s = duration
+    return result
+
+
+def _as_text(stream) -> str:
+    if stream is None:
+        return ""
+    return stream if isinstance(stream, str) else stream.decode("utf-8", "replace")
+
+
+def parse_output(output: str, config: VerifyConfig, exit_code: int | None = None) -> VerifyResult:
+    """Turn one ESBMC transcript into a structured result."""
+    properties = _parse_properties(output)
+    trace = _parse_trace(output)
+
+    def result(outcome: Outcome, error: str | None = None) -> VerifyResult:
+        return VerifyResult(
+            outcome=outcome,
+            config=config,
+            properties=properties,
             trace=trace,
             raw_output=output,
+            exit_code=exit_code,
+            error=error,
         )
 
-    if "unwinding assertion" in output.lower():
-        return VerifyResult(Outcome.UNWIND_LIMIT, config, raw_output=output)
+    if "VERIFICATION SUCCESSFUL" in output:
+        return result(Outcome.VERIFIED)
 
-    if re.search(r"(PARSING ERROR|error: |Conversion failed)", output):
-        return VerifyResult(Outcome.PARSE_ERROR, config, raw_output=output)
+    if "VERIFICATION FAILED" in output:
+        # An unwinding assertion means the bound was too small, not that the
+        # program is wrong. Only report a counterexample when at least one
+        # violated property is a genuine one.
+        real = [p for p in properties if not p.is_unwinding_assertion]
+        if properties and not real:
+            return result(Outcome.UNWIND_LIMIT)
+        if real:
+            # Keep the genuine properties first so `violated_property` is one.
+            properties[:] = real + [p for p in properties if p.is_unwinding_assertion]
+        return result(Outcome.COUNTEREXAMPLE)
 
-    return VerifyResult(Outcome.UNKNOWN, config, raw_output=output)
+    if "VERIFICATION UNKNOWN" in output:
+        return result(Outcome.UNKNOWN, error=_unknown_reason(output))
+
+    if "Timed out" in output:
+        return result(Outcome.TIMEOUT, error="esbmc reported its own timeout")
+
+    frontend = _frontend_error(output)
+    if frontend is not None:
+        return result(Outcome.PARSE_ERROR, error=frontend)
+
+    tool = _tool_error(output, exit_code)
+    if tool is not None:
+        return result(Outcome.TOOL_ERROR, error=tool)
+
+    return result(Outcome.UNKNOWN, error="esbmc produced no recognisable verdict")
+
+
+# Kept for the internal callers/tests that predate the public name.
+_parse_output = parse_output
+
+
+def _parse_properties(output: str) -> list[ViolatedProperty]:
+    properties: list[ViolatedProperty] = []
+    for header in _PROPERTY_RE.finditer(output):
+        block: list[str] = []
+        for line in output[header.end() :].splitlines()[1:]:
+            if not line.strip() or not line.startswith(" "):
+                break
+            block.append(line)
+        if not block:
+            continue
+        loc_match = _PROP_LOC_RE.match(block[0])
+        if loc_match is None:
+            continue
+        rest = [line.strip() for line in block[1:] if line.strip()]
+        cwes: list[str] = []
+        detail: list[str] = []
+        for line in rest:
+            if line.startswith("CWE:"):
+                cwes += [c.strip() for c in line[len("CWE:") :].split(",") if c.strip()]
+            else:
+                detail.append(line)
+        # When ESBMC prints both a description and the guard it checked, the
+        # guard comes last. A single line is the description.
+        expression = detail.pop() if len(detail) > 1 else None
+        properties.append(
+            ViolatedProperty(
+                loc=SourceLoc(
+                    file=loc_match.group("file"),
+                    line=int(loc_match.group("line")),
+                    column=int(loc_match.group("column") or 0) or None,
+                    function=loc_match.group("function"),
+                ),
+                description=" ".join(detail) or "(no description)",
+                expression=expression,
+                cwes=cwes,
+            )
+        )
+    return properties
+
+
+def _parse_trace(output: str) -> list[TraceStep]:
+    steps: list[TraceStep] = []
+    matches = list(_STATE_RE.finditer(output))
+    for idx, m in enumerate(matches):
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(output)
+        step = TraceStep(
+            file=m.group("file"),
+            line=int(m.group("line")),
+            column=int(m.group("column")) if m.group("column") else None,
+            function=m.group("function"),
+            state=int(m.group("state")),
+            thread=int(m.group("thread")) if m.group("thread") else None,
+            assignments=_parse_assignments(output[m.end() : end]),
+        )
+        steps.append(step)
+    return steps
+
+
+def _parse_assignments(block: str) -> list[Assignment]:
+    assignments: list[Assignment] = []
+    for line in block.splitlines():
+        if not line.strip() or _DASHES_RE.match(line):
+            continue
+        if line.strip().startswith("Violated property"):
+            break
+        m = _ASSIGNMENT_RE.match(line)
+        if m is None:
+            # A continuation of a multi-line struct/array value.
+            if assignments:
+                assignments[-1].value += " " + line.strip()
+                assignments[-1].raw += "\n" + line
+            continue
+        value = _BINARY_SUFFIX_RE.sub("", m.group("value")).strip()
+        assignments.append(Assignment(lvalue=m.group("lvalue"), value=value, raw=line))
+    return assignments
+
+
+def _unknown_reason(output: str) -> str | None:
+    for marker in (
+        "The inductive step is unable to prove the property",
+        "Unable to prove or falsify the program, giving up.",
+        "Unwinding assertion",
+    ):
+        if marker in output:
+            return marker.rstrip(".")
+    return None
+
+
+def _frontend_error(output: str) -> str | None:
+    errors = [m.group("message") for m in _ERROR_RE.finditer(output)]
+    frontend = [e for e in errors if "PARSING ERROR" in e or "CONVERSION ERROR" in e]
+    if not frontend:
+        return None
+    details = [m.group("message").strip() for m in _CLANG_ERROR_RE.finditer(output)]
+    details += [e for e in errors if e not in frontend]
+    head = frontend[0].strip()
+    return f"{head}: {details[0]}" if details else head
+
+
+def _tool_error(output: str, exit_code: int | None) -> str | None:
+    for line in output.splitlines():
+        if "unrecognised option" in line or "unrecognized option" in line:
+            return line.strip()
+        if "terminating due to uncaught exception" in line:
+            return line.strip()
+    if exit_code not in (None, 0, 1):
+        return f"esbmc exited with status {exit_code}"
+    return None

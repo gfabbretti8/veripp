@@ -8,7 +8,7 @@ int sum_array(const int* a, unsigned n) {
     return s;
 }
 
-#if defined(__ESBMC__)
+#if defined(VERIPP_HAS_OWN_MAIN)
 int main() {
     unsigned n = VERIPP_NONDET_UINT();
     VERIPP_ASSUME(n >= 1 && n <= 4);

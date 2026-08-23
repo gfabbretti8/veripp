@@ -1,0 +1,10 @@
+Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
+Parsing tests/golden/syntax_error.cpp
+tests/golden/syntax_error.cpp:2:23: error: expected '}'
+    2 | int main() { return 0;
+      |                       ^
+tests/golden/syntax_error.cpp:2:12: note: to match this '{'
+    2 | int main() { return 0;
+      |            ^
+ERROR: PARSING ERROR
+ESBMC version 8.4.0 64-bit aarch64 macos

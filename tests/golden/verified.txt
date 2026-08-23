@@ -1,0 +1,26 @@
+Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
+Parsing examples/ring_buffer.cpp
+Converting
+Generating GOTO Program
+GOTO program creation time: 0.162s
+GOTO program processing time: 0.001s
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file examples/ring_buffer.cpp line 35 column 5 function main
+Unwinding loop 3 iteration 2   file examples/ring_buffer.cpp line 35 column 5 function main
+Unwinding loop 3 iteration 3   file examples/ring_buffer.cpp line 35 column 5 function main
+Unwinding loop 3 iteration 4   file examples/ring_buffer.cpp line 35 column 5 function main
+Unwinding loop 3 iteration 5   file examples/ring_buffer.cpp line 35 column 5 function main
+Unwinding loop 3 iteration 6   file examples/ring_buffer.cpp line 35 column 5 function main
+Symex completed in: 0.015s (313 assignments)
+Caching time: 0.000s (removed 0 assertions)
+Slicing time: 0.004s (removed 97 assignments)
+Generated 354 VCC(s), 53 remaining after simplification (216 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.005s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.011s
+BMC program time: 0.035s
+
+VERIFICATION SUCCESSFUL
+ESBMC version 8.4.0 64-bit aarch64 macos

@@ -1,0 +1,84 @@
+Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
+Parsing examples/off_by_one.cpp
+Converting
+Generating GOTO Program
+GOTO program creation time: 0.161s
+GOTO program processing time: 0.000s
+Starting Bounded Model Checking
+Unwinding loop 3 iteration 1   file examples/off_by_one.cpp line 16 column 5 function main
+Unwinding loop 3 iteration 2   file examples/off_by_one.cpp line 16 column 5 function main
+Unwinding loop 3 iteration 3   file examples/off_by_one.cpp line 16 column 5 function main
+Unwinding loop 3 iteration 4   file examples/off_by_one.cpp line 16 column 5 function main
+Unwinding loop 4 iteration 1   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Unwinding loop 4 iteration 2   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Unwinding loop 4 iteration 3   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Unwinding loop 4 iteration 4   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Unwinding loop 4 iteration 5   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Unwinding loop 4 iteration 6   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Unwinding loop 4 iteration 7   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Not unwinding loop 4 iteration 8   file examples/off_by_one.cpp line 6 column 5 function sum_array
+Symex completed in: 0.004s (109 assignments)
+Caching time: 0.000s (removed 4 assertions)
+Slicing time: 0.001s (removed 60 assignments)
+Generated 65 VCC(s), 13 remaining after simplification (45 assignments)
+No solver specified; defaulting to bitwuzla
+Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
+Encoding to solver time: 0.001s
+Solving with solver Bitwuzla 0.9.1
+Runtime decision procedure: 0.008s
+Building error trace
+
+[Counterexample]
+
+
+State 1 file examples/off_by_one.cpp line 13 column 5 function main thread 0
+----------------------------------------------------
+  n = 4 (00000000 00000000 00000000 00000100)
+
+State 3 file examples/off_by_one.cpp line 15 column 5 function main thread 0
+----------------------------------------------------
+  a = { 0, 0, 0, 0 }
+
+State 4 file examples/off_by_one.cpp line 16 column 38 function main thread 0
+----------------------------------------------------
+  a[0] = -1 (11111111 11111111 11111111 11111111)
+
+State 5 file examples/off_by_one.cpp line 16 column 38 function main thread 0
+----------------------------------------------------
+  a[1] = -1 (11111111 11111111 11111111 11111111)
+
+State 6 file examples/off_by_one.cpp line 16 column 38 function main thread 0
+----------------------------------------------------
+  a[2] = -1 (11111111 11111111 11111111 11111111)
+
+State 7 file examples/off_by_one.cpp line 16 column 38 function main thread 0
+----------------------------------------------------
+  a[3] = -1 (11111111 11111111 11111111 11111111)
+
+State 9 file examples/off_by_one.cpp line 7 column 9 function sum_array thread 0
+----------------------------------------------------
+  s = -1 (11111111 11111111 11111111 11111111)
+
+State 11 file examples/off_by_one.cpp line 7 column 9 function sum_array thread 0
+----------------------------------------------------
+  s = -2 (11111111 11111111 11111111 11111110)
+
+State 13 file examples/off_by_one.cpp line 7 column 9 function sum_array thread 0
+----------------------------------------------------
+  s = -3 (11111111 11111111 11111111 11111101)
+
+State 15 file examples/off_by_one.cpp line 7 column 9 function sum_array thread 0
+----------------------------------------------------
+  s = -4 (11111111 11111111 11111111 11111100)
+
+State 16 file examples/off_by_one.cpp line 7 column 9 function sum_array thread 0
+----------------------------------------------------
+Violated property:
+  file examples/off_by_one.cpp line 7 column 9 function sum_array
+  dereference failure: array bounds violated
+  CWE: CWE-121, CWE-125, CWE-129, CWE-131, CWE-193, CWE-787
+  !overflow("+", s, a::0[(signed long int)i])
+
+
+VERIFICATION FAILED
+ESBMC version 8.4.0 64-bit aarch64 macos

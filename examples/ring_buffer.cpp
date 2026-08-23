@@ -29,7 +29,7 @@ public:
     unsigned size() const { return size_; }
 };
 
-#if defined(__ESBMC__)
+#if defined(VERIPP_HAS_OWN_MAIN)
 int main() {
     RingBuffer rb;
     for (int step = 0; step < 6; ++step) {

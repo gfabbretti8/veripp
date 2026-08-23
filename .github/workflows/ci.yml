@@ -1,5 +1,10 @@
 name: ci
 on: [push, pull_request]
+
+env:
+  # Pinned: the golden transcripts in tests/golden/ are this version's output.
+  ESBMC_VERSION: v8.4
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -7,5 +12,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+
+      - name: Cache ESBMC
+        id: cache-esbmc
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/esbmc
+          key: esbmc-${{ env.ESBMC_VERSION }}-linux
+
+      - name: Install ESBMC
+        if: steps.cache-esbmc.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/esbmc
+          curl -fsSL -o /tmp/esbmc.zip \
+            "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/esbmc-linux.zip"
+          unzip -q /tmp/esbmc.zip -d ~/.local/esbmc
+          chmod +x "$(find ~/.local/esbmc -name esbmc -type f | head -1)"
+
+      - name: Put ESBMC on PATH
+        run: dirname "$(find ~/.local/esbmc -name esbmc -type f | head -1)" >> "$GITHUB_PATH"
+
+      - run: esbmc --version
       - run: pip install -e .[dev]
       - run: pytest -q

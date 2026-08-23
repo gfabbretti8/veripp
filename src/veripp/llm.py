@@ -36,8 +36,13 @@ class NullLLM:
         return None
 
     def explain_trace(self, source: Path, result: VerifyResult) -> str:
-        prop = result.violated_property or "unknown property"
-        return f"Property violated: {prop}. Run with an LLM enabled for analysis."
+        prop = result.violated_property
+        where = f" at {prop.loc}" if prop else ""
+        what = prop.description if prop else "unknown property"
+        return (
+            f"{what}{where}. Offline mode: no analysis of the trace was done; "
+            "run without --no-llm for a plain-language explanation."
+        )
 
     def classify_failure(self, source: Path, result: VerifyResult) -> str:
         return "real_bug"  # conservative default: surface it to the user

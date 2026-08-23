@@ -1,0 +1,7 @@
+Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
+Parsing examples/off_by_one.cpp
+examples/off_by_one.cpp:2:10: fatal error: 'veripp/contracts.hpp' file not found
+    2 | #include "veripp/contracts.hpp"
+      |          ^~~~~~~~~~~~~~~~~~~~~~
+ERROR: PARSING ERROR
+ESBMC version 8.4.0 64-bit aarch64 macos
