@@ -121,6 +121,19 @@ veripp harness examples/off_by_one.cpp --function sum_array
 Without `--function`, veripp verifies the file's own `main()` — useful when you
 have written the harness yourself.
 
+## Killer example: a real CVE, found and fixed
+
+```bash
+./demo/cve-2019-13223/run.sh
+```
+
+veripp rediscovers [CVE-2019-13223](https://nvd.nist.gov/vuln/detail/CVE-2019-13223)
+— a division-by-zero in stb_vorbis's `predict_point()`, reachable from a crafted
+Ogg Vorbis file — on the real, unmodified upstream source, then proves that the
+precondition the official fix enforces (`x1 != x0`) eliminates it. In agent mode
+the triage proposes that precondition itself; the solver confirms it. See
+[demo/cve-2019-13223](demo/cve-2019-13223/README.md).
+
 ## What a result looks like
 
 ```

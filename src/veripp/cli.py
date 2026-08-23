@@ -78,6 +78,28 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
     )
     p.add_argument("-I", "--include", action="append", type=Path, default=[])
     p.add_argument("-D", "--define", action="append", default=[], help="preprocessor macro")
+    p.add_argument(
+        "--include-file",
+        action="append",
+        default=[],
+        metavar="HEADER",
+        help="force-include a header before the source (e.g. a libc/typedef shim "
+        "for a symbol esbmclibc lacks); repeatable",
+    )
+    p.add_argument(
+        "--no-overflow-check",
+        action="store_true",
+        help="disable arithmetic overflow checking (isolate other properties)",
+    )
+    p.add_argument(
+        "--assume",
+        action="append",
+        default=[],
+        metavar="EXPR",
+        help="add a precondition over the target's parameters (e.g. --assume "
+        "'x1 != x0'); this is what LLM triage proposes automatically, exposed "
+        "for manual use. Repeatable. Requires --function.",
+    )
 
 
 def _build_harness(args) -> Harness:
@@ -85,6 +107,7 @@ def _build_harness(args) -> Harness:
         args.source,
         args.function,
         HarnessOptions(max_array_len=args.max_array_len),
+        extra_preconditions=list(getattr(args, "assume", []) or []),
     )
 
 
@@ -99,12 +122,17 @@ def _verify(args) -> int:
             return EXIT_USAGE
         target = harness.write(scratch_dir())
 
+    extra_args: list[str] = []
+    for header in args.include_file:
+        extra_args += ["--include-file", str(header)]
     config = VerifyConfig(
         unwind=args.unwind,
         timeout_s=args.timeout,
         cpp_std=args.std,
         include_dirs=_include_dirs(args),
         defines=list(args.define),
+        overflow_check=not args.no_overflow_check,
+        extra_args=extra_args,
     )
     llm = NullLLM() if args.no_llm else _make_llm()
     target_info = (
@@ -125,6 +153,8 @@ def _verify(args) -> int:
         harness=target if harness else None,
         target=target_info,
     )
+    if harness and getattr(args, "assume", None):
+        report.accepted_preconditions = list(args.assume) + report.accepted_preconditions
 
     if args.json:
         print(json.dumps(_payload(report, harness), indent=2, default=str))
