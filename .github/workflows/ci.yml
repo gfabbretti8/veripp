@@ -10,8 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
 
       - name: Cache ESBMC
         id: cache-esbmc
@@ -33,5 +36,29 @@ jobs:
         run: dirname "$(find ~/.local/esbmc -name esbmc -type f | head -1)" >> "$GITHUB_PATH"
 
       - run: esbmc --version
-      - run: pip install -e .[dev]
-      - run: pytest -q
+
+      # --locked fails if uv.lock is out of date with pyproject.toml, so a
+      # dependency change cannot land without its lockfile update.
+      - run: uv sync --locked
+      - run: uv run veripp doctor
+      - run: uv run pytest -q
+
+  # The tests run from a source checkout; this proves the published artifact
+  # works too. The contracts header must ship inside the wheel or every
+  # verification fails with "'veripp/contracts.hpp' file not found".
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv build
+      - name: The header must be in the wheel
+        run: unzip -l dist/*.whl | grep -q 'veripp/include/veripp/contracts.hpp'
+      - name: Install the wheel on its own and check it can find its header
+        run: |
+          uv tool install ./dist/*.whl
+          cd "$(mktemp -d)"   # nowhere near the source tree
+          veripp doctor | tee doctor.txt
+          grep -q 'contracts header: /' doctor.txt

@@ -41,7 +41,7 @@ LLM can be that operator, and the solver keeps it honest.
 ├─────────────────────────────────────────────────────────┤
 │ 2. Specification implicit properties (overflow, bounds,  │
 │                  UB, null deref — free) + explicit       │
-│                  contracts via include/veripp/contracts  │
+│                  contracts via veripp/contracts.hpp      │
 ├─────────────────────────────────────────────────────────┤
 │ 1. Ingestion     compile_commands.json + libclang slice  │
 │                  of the target function and its deps;    │
@@ -58,20 +58,56 @@ next. See `ROADMAP.md`.
 
 ## Requirements
 
-- Python ≥ 3.10
+- [uv](https://docs.astral.sh/uv/) (it installs Python for you)
 - [ESBMC](https://github.com/esbmc/esbmc/releases) ≥ 8.x on `PATH`
-  (`brew install esbmc`, or grab a release binary)
 - An Anthropic API key in `ANTHROPIC_API_KEY` (only needed for agent mode;
   `--no-llm` runs the plain verifier pipeline)
 
-Run `veripp doctor` to check all of the above.
+ESBMC is a C++ binary, not a Python package, so uv cannot install it — that
+one is on you:
+
+```bash
+brew install esbmc          # macOS
+# or download esbmc-linux.zip from the releases page above and put it on PATH
+```
+
+`veripp doctor` checks all of the above and tells you what is missing.
 
 ## Quick start
 
 ```bash
-pip install -e .
-veripp verify examples/ring_buffer.cpp --function push       # proves a postcondition
-veripp verify examples/off_by_one.cpp --function sum_array   # finds a real bug
+curl -LsSf https://astral.sh/uv/install.sh | sh   # if you do not have uv yet
+git clone https://github.com/gfabbretti8/veripp && cd veripp
+
+uv run veripp doctor
+uv run veripp verify examples/ring_buffer.cpp --function push       # proves a postcondition
+uv run veripp verify examples/off_by_one.cpp --function sum_array   # finds a real bug
+```
+
+`uv run` creates the environment on first use; there is no install step and
+nothing to activate.
+
+To put `veripp` on your `PATH` and use it on your own code:
+
+```bash
+uv tool install git+https://github.com/gfabbretti8/veripp
+veripp verify src/parser.cpp --function parse_header
+```
+
+or run it once without installing anything:
+
+```bash
+uvx --from git+https://github.com/gfabbretti8/veripp veripp verify mycode.cpp --function f
+```
+
+Plain pip works too (`pip install -e .`); uv is a convenience, not a
+dependency of the tool.
+
+### Working on veripp
+
+```bash
+uv sync             # exact environment from uv.lock
+uv run pytest -q    # tests needing esbmc skip themselves when it is absent
 ```
 
 `--function f` generates a harness: nondeterministic values for every
