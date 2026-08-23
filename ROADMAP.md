@@ -29,5 +29,7 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 
 ## M3 — sell it
 - GitHub Action.
-- Benchmarks: ETL containers, a JSON parser hot path, one reproduced CVE.
+- Benchmarks: grown from `benchmarks/` (lodepng, stb_image_write today;
+  tinyxml2/jsoncpp once the upstream ESBMC defects there are fixed),
+  plus one reproduced CVE.
 - CppCon lightning talk / Show HN.
