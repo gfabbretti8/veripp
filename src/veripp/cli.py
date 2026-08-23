@@ -14,6 +14,7 @@ from .esbmc import Outcome, VerifyConfig, find_esbmc
 from .harness import Harness, HarnessError, HarnessOptions, generate
 from .llm import AnthropicLLM, NullLLM
 from .paths import contracts_include_dir, scratch_dir
+from .triage import TargetInfo
 
 EXIT_VERIFIED = 0
 EXIT_COUNTEREXAMPLE = 1
@@ -62,7 +63,8 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
     p.add_argument(
         "--function",
         required=require_function,
-        help="target function; veripp generates a harness for it "
+        help="target function; veripp generates a harness for it. Overloads "
+        "are picked by parameter types: --function 'f(int, unsigned)'. "
         "(omit to verify the file's own main)",
     )
     p.add_argument("--unwind", type=int, default=8)
@@ -105,6 +107,15 @@ def _verify(args) -> int:
         defines=list(args.define),
     )
     llm = NullLLM() if args.no_llm else _make_llm()
+    target_info = (
+        TargetInfo(
+            source=args.source,
+            function=args.function,
+            options=HarnessOptions(max_array_len=args.max_array_len),
+        )
+        if harness
+        else None
+    )
     report = verify_with_agent(
         target,
         config,
@@ -112,6 +123,7 @@ def _verify(args) -> int:
         budget=Budget(),
         assumptions=harness.assumptions if harness else [],
         harness=target if harness else None,
+        target=target_info,
     )
 
     if args.json:
@@ -142,6 +154,7 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "bounded": not report.final.config.k_induction,
         "config": asdict(report.final.config),
         "assumptions": report.assumptions,
+        "accepted_preconditions": report.accepted_preconditions,
         "harness": str(report.harness) if report.harness else None,
         "function": harness.signature.qualified_name if harness else None,
         "violated_property": asdict(prop) if prop else None,

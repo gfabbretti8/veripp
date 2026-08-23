@@ -11,20 +11,22 @@ Found by probing popular single-TU libraries through the ESBMC 8.4 frontend
 | [lodepng](https://github.com/lvandeve/lodepng) | ~2k stars, ubiquitous PNG codec | OK | 54/260 functions (21%) | best target; exercises every triage category |
 | [stb_image_write](https://github.com/nothings/stb) | ~30k stars (stb) | OK | 14/49 functions (29%) | needs `-D STB_IMAGE_WRITE_IMPLEMENTATION` |
 | [cJSON](https://github.com/DaveGamble/cJSON) | ~12k stars | OK (as C++ TU) | 4/117 | most functions take `cJSON*` structs |
-| [miniz](https://github.com/richgel999/miniz) | ~2k stars | OK (needs stub `miniz_export.h`) | 2/24 | blocked on project typedefs (`mz_ulong`) — cheap veripp gap |
+| [miniz](https://github.com/richgel999/miniz) | ~2k stars | OK (needs stub `miniz_export.h`) | 8/24 | project typedefs (`mz_ulong`) now resolve via local includes |
 | [uthash](https://github.com/troydhanson/uthash) | ~4k stars | OK | n/a | macro library; no functions to target |
 
 ## Reference results (ESBMC 8.4, defaults)
 
-These are observations, not assertions — they exercise all three triage
-categories and are the seed corpus for the LLM triage milestone:
+These are observations, not assertions. With Anthropic credentials set,
+`./benchmarks/eval_triage.py` grades the live LLM triage against the
+counterexample rows below (ground truth from the 2026-08-23 pilot):
 
 | target | result | meaning |
 |---|---|---|
 | `lodepng.cpp --function lodepng_addofl` | **verified** | overflow-check helper proven (bounded) |
 | `lodepng.cpp --function reverseBits` | counterexample: UB shift when `num > 32` | missing precondition — internal callers pass small `num` |
-| `lodepng.cpp --function lodepng_strlen` | counterexample: out-of-bounds read | harness artifact — 1-char buffer, no NUL guarantee |
-| `stb_image_write.h --function stbiw__zlib_bitrev` | counterexample: `shl` overflow | missing precondition on `codebits` |
+| `lodepng.cpp --function lodepng_strlen` | **verified** | was a harness-artifact counterexample until `const char*` params got a NUL-terminated string model |
+| `stb_image_write.h --function stbiw__zlib_bitrev` | counterexample: `shl` overflow | missing precondition on `codebits`; with LLM triage, becomes a solver-checked conditional proof |
+| `miniz.c --function mz_adler32` | **verified** | the Adler-32 checksum core, via typedef resolution + `buf_len` pairing |
 
 ## Known-broken targets (upstream ESBMC defects, not veripp)
 

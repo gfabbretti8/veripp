@@ -22,7 +22,16 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .cppsig import Param, Signature, SignatureError, find_function, match_bracket, scrub
+from .cppsig import (
+    Param,
+    Signature,
+    SignatureError,
+    collect_scalar_typedefs,
+    find_function,
+    match_bracket,
+    normalize_type,
+    scrub,
+)
 
 #: Default bound on the length of a generated buffer. Small on purpose: BMC
 #: cost grows fast, and off-by-one bugs show up at any length.
@@ -49,9 +58,10 @@ class Harness:
     assumptions: list[str] = field(default_factory=list)
     source: Path | None = None
 
-    def write(self, directory: Path) -> Path:
+    def write(self, directory: Path, tag: str = "") -> Path:
         directory.mkdir(parents=True, exist_ok=True)
-        out = directory / f"veripp_harness_{self.signature.name}.cpp"
+        suffix = f".{tag}" if tag else ""
+        out = directory / f"veripp_harness_{self.signature.name}{suffix}.cpp"
         out.write_text(self.code)
         return out
 
@@ -85,38 +95,20 @@ _NONDET_BY_TYPE = {
     "uint64_t": "(uint64_t)VERIPP_NONDET_ULONG()",
 }
 
-_TYPE_ALIASES = {
-    "signed": "int",
-    "signed int": "int",
-    "unsigned int": "unsigned",
-    "signed long": "long",
-    "long int": "long",
-    "unsigned long int": "unsigned long",
-    "signed long long": "long long",
-    "long long int": "long long",
-    "unsigned long long int": "unsigned long long",
-    "signed short": "short",
-    "short int": "short",
-    "unsigned short int": "unsigned short",
-    "long double": "double",  # ESBMC models it as double
-}
-
 _LENGTH_NAMES = {
     "n", "len", "length", "size", "count", "num", "nmemb", "sz", "cnt", "nelem",
     "n_elems", "num_elements", "capacity",
 }
 
 
-def normalize_type(type_: str) -> str:
-    """Canonical spelling of a scalar type: no cv-qualifiers, no namespaces."""
-    t = re.sub(r"\b(const|volatile|constexpr)\b", " ", type_)
-    t = t.replace("std::", "").replace("::", " ")
-    t = re.sub(r"\s+", " ", t).strip()
-    return _TYPE_ALIASES.get(t, t)
-
-
-def nondet_for(type_: str) -> str | None:
-    return _NONDET_BY_TYPE.get(normalize_type(type_))
+def nondet_for(type_: str, typedefs: dict[str, str] | None = None) -> str | None:
+    canonical = normalize_type(type_, typedefs)
+    nondet = _NONDET_BY_TYPE.get(canonical)
+    if nondet is not None and canonical != normalize_type(type_):
+        # A project typedef resolved to a scalar; cast so the harness compiles
+        # even where the alias is more than a plain renaming.
+        return nondet
+    return nondet
 
 
 # ------------------------------------------------------------- generator ---
@@ -126,27 +118,35 @@ def generate(
     source: Path,
     function: str,
     options: HarnessOptions | None = None,
+    extra_preconditions: list[str] | None = None,
 ) -> Harness:
-    """Build a harness for `function` as defined in `source`."""
+    """Build a harness for `function` as defined in `source`.
+
+    `extra_preconditions` are boolean C++ expressions over the function's
+    parameters, proposed by triage and to be CHECKED BY THE SOLVER in the run
+    that follows. They are labelled as proposals in the assumptions list; a
+    "verified" under them is conditional on real callers satisfying them.
+    """
     options = options or HarnessOptions()
     text = source.read_text()
     signature = find_function(text, function)
+    typedefs = collect_scalar_typedefs(_with_local_includes(source, text))
     _reject_conflicting_main(text, source)
 
     body: list[str] = []
     assumptions: list[str] = []
-    lengths = _pair_buffers_with_lengths(signature.params)
+    lengths = _pair_buffers_with_lengths(signature.params, typedefs)
 
     # Scalars first: a buffer's length must exist before we bound it.
     buffers = set(lengths)
     for param in signature.params:
         if param.name in buffers:
             continue
-        body += _emit_scalar(param, signature, assumptions)
+        body += _emit_scalar(param, signature, assumptions, options, typedefs)
 
     for buffer_name, length in lengths.items():
         param = next(p for p in signature.params if p.name == buffer_name)
-        body += _emit_buffer(param, length, options, assumptions)
+        body += _emit_buffer(param, length, options, assumptions, typedefs)
 
     hoisted = _hoist_requires(signature)
     if hoisted:
@@ -154,6 +154,16 @@ def generate(
         body.append("// preconditions declared with VERIPP_REQUIRES in "
                     f"`{signature.qualified_name}`")
         body += [f"VERIPP_ASSUME({expr});" for expr in hoisted]
+
+    for expr in extra_preconditions or []:
+        _validate_precondition(expr, signature)
+        body.append("")
+        body.append("// PROPOSED precondition (from triage); the solver checks the")
+        body.append("// property under it, but nothing checks that real callers meet it.")
+        body.append(f"VERIPP_ASSUME({expr});")
+        assumptions.append(
+            f"PROPOSED precondition (not validated against callers): {expr}"
+        )
 
     body.append("")
     body += _emit_call(signature, assumptions)
@@ -164,6 +174,27 @@ def generate(
         assumptions=assumptions,
         source=source,
     )
+
+
+_LOCAL_INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"', re.M)
+
+
+def _with_local_includes(source: Path, text: str) -> str:
+    """`text` plus the contents of its local `#include "..."` headers (one level).
+
+    Project typedefs (`mz_ulong`) usually live in the library's own header,
+    not in the .cpp being targeted; without this the alias map misses them.
+    System includes are left alone -- their scalars are already known.
+    """
+    parts = [text]
+    for name in _LOCAL_INCLUDE_RE.findall(scrub(text) and text):
+        candidate = (source.parent / name)
+        if candidate.is_file():
+            try:
+                parts.append(candidate.read_text(errors="replace"))
+            except OSError:
+                continue
+    return "\n".join(parts)
 
 
 def _reject_conflicting_main(text: str, source: Path) -> None:
@@ -181,13 +212,15 @@ def _reject_conflicting_main(text: str, source: Path) -> None:
     )
 
 
-def _pair_buffers_with_lengths(params: list[Param]) -> dict[str, str]:
+def _pair_buffers_with_lengths(
+    params: list[Param], typedefs: dict[str, str] | None = None
+) -> dict[str, str]:
     """Map each pointer parameter to the parameter holding its length."""
     pairs: dict[str, str] = {}
     integer_params = {
         p.name: p
         for p in params
-        if not p.is_pointer and not p.is_reference and _is_integral(p.type)
+        if not p.is_pointer and not p.is_reference and _is_integral(p.type, typedefs)
     }
     for idx, param in enumerate(params):
         if not param.is_pointer:
@@ -203,7 +236,7 @@ def _pair_buffers_with_lengths(params: list[Param]) -> dict[str, str]:
                 (
                     p.name
                     for p in following
-                    if p.name in integer_params and p.name.lower() in _LENGTH_NAMES
+                    if p.name in integer_params and _is_length_name(p.name)
                 ),
                 None,
             )
@@ -212,18 +245,55 @@ def _pair_buffers_with_lengths(params: list[Param]) -> dict[str, str]:
     return pairs
 
 
-def _is_integral(type_: str) -> bool:
-    t = normalize_type(type_)
+def _is_length_name(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in _LENGTH_NAMES or lowered.endswith(
+        ("_len", "_size", "_count", "_n", "len", "size", "count")
+    )
+
+
+def _is_integral(type_: str, typedefs: dict[str, str] | None = None) -> bool:
+    t = normalize_type(type_, typedefs)
     return t in _NONDET_BY_TYPE and t not in ("float", "double", "bool")
 
 
-def _emit_scalar(param: Param, signature: Signature, assumptions: list[str]) -> list[str]:
-    if param.is_pointer:
-        return _emit_lone_pointer(param, assumptions)
-    if param.is_reference:
-        return _emit_reference(param, assumptions)
+def _validate_precondition(expr: str, signature: Signature) -> None:
+    """Refuse a proposed precondition that mentions anything not in scope.
 
-    nondet = nondet_for(param.type)
+    The guardrail behind the propose->check loop: a triage LLM may only
+    constrain the function's parameters. Anything else either would not
+    compile in main() or, worse, would compile and silently constrain the
+    wrong thing.
+    """
+    names = {p.name for p in signature.params}
+    identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", scrub(expr)))
+    unknown = identifiers - names - _CPP_WORDS
+    if unknown:
+        raise HarnessError(
+            f"proposed precondition {expr!r} mentions "
+            f"{', '.join(sorted(unknown))}, which are not parameters of "
+            f"`{signature.qualified_name}`; refusing it"
+        )
+    if not identifiers & names:
+        raise HarnessError(
+            f"proposed precondition {expr!r} constrains no parameter of "
+            f"`{signature.qualified_name}`; refusing it"
+        )
+
+
+def _emit_scalar(
+    param: Param,
+    signature: Signature,
+    assumptions: list[str],
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+) -> list[str]:
+    if param.is_pointer:
+        return _emit_lone_pointer(param, assumptions, options, typedefs)
+    if param.is_reference:
+        return _emit_reference(param, assumptions, typedefs)
+
+    nondet = nondet_for(param.type, typedefs)
     if nondet is None:
         raise HarnessError(
             f"cannot build a nondeterministic value for parameter "
@@ -234,9 +304,32 @@ def _emit_scalar(param: Param, signature: Signature, assumptions: list[str]) -> 
     return [f"{_decl_type(param.type)} {param.name} = {nondet};"]
 
 
-def _emit_lone_pointer(param: Param, assumptions: list[str]) -> list[str]:
+def _emit_lone_pointer(
+    param: Param,
+    assumptions: list[str],
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+) -> list[str]:
     pointee = param.pointee()
-    nondet = nondet_for(pointee)
+    if param.is_const and normalize_type(pointee, typedefs) == "char":
+        # A `const char*` with no length parameter is, in practice, a C
+        # string. A single nondet char is the wrong model: anything that
+        # walks to the terminator (strlen, parsers) reads past it, and the
+        # counterexample blames the library for the harness's lie.
+        cap = options.max_array_len
+        storage = f"{param.name}_str"
+        assumptions.append(
+            f"`{param.name}` is a NUL-terminated string of at most {cap} "
+            "characters (harness bound; string contents nondeterministic)"
+        )
+        return [
+            f"char {storage}[{cap + 1}];",
+            f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+            f"    {storage}[{_LOOP_VAR}] = VERIPP_NONDET_CHAR();",
+            f"{storage}[{cap}] = '\\0';",
+            f"{_decl_type(param.type)} {param.name} = {storage};",
+        ]
+    nondet = nondet_for(pointee, typedefs)
     if nondet is None:
         raise HarnessError(
             f"parameter `{param.type} {param.name}` points to `{pointee}`, which "
@@ -253,9 +346,11 @@ def _emit_lone_pointer(param: Param, assumptions: list[str]) -> list[str]:
     ]
 
 
-def _emit_reference(param: Param, assumptions: list[str]) -> list[str]:
+def _emit_reference(
+    param: Param, assumptions: list[str], typedefs: dict[str, str]
+) -> list[str]:
     pointee = param.pointee()
-    nondet = nondet_for(pointee)
+    nondet = nondet_for(pointee, typedefs)
     if nondet is None:
         raise HarnessError(
             f"parameter `{param.type} {param.name}` refers to `{pointee}`, which "
@@ -269,10 +364,14 @@ def _emit_reference(param: Param, assumptions: list[str]) -> list[str]:
 
 
 def _emit_buffer(
-    param: Param, length: str, options: HarnessOptions, assumptions: list[str]
+    param: Param,
+    length: str,
+    options: HarnessOptions,
+    assumptions: list[str],
+    typedefs: dict[str, str],
 ) -> list[str]:
     pointee = param.pointee()
-    nondet = nondet_for(pointee)
+    nondet = nondet_for(pointee, typedefs)
     if nondet is None:
         raise HarnessError(
             f"parameter `{param.type} {param.name}` points to `{pointee}`, which "

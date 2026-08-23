@@ -16,14 +16,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
+from .harness import HarnessError, generate
 from .llm import LLMClient, NullLLM
-from .triage import Diagnosis, triage_counterexample
+from .triage import Diagnosis, TargetInfo, triage_counterexample
 
 
 @dataclass
 class Budget:
     max_attempts: int = 8
     max_llm_calls: int = 12
+    max_precondition_rounds: int = 2  # LLM-proposed preconditions per run
     wall_time_s: int = 600
 
 
@@ -35,6 +37,7 @@ class AgentReport:
     narrative: str = ""
     assumptions: list[str] = field(default_factory=list)
     harness: Path | None = None
+    accepted_preconditions: list[str] = field(default_factory=list)
 
     @property
     def verified(self) -> bool:
@@ -52,6 +55,13 @@ class AgentReport:
                 "  This is a BOUNDED proof: it holds for executions within the "
                 "unwind bound above, not for all executions."
             )
+        if self.accepted_preconditions:
+            lines.append(
+                "  CONDITIONAL: verified only under triage-proposed "
+                "precondition(s) the solver confirmed sufficient. Nothing "
+                "checks that real callers satisfy them - review before trusting:"
+            )
+            lines += [f"    requires {p}" for p in self.accepted_preconditions]
         prop = self.final.violated_property
         if prop:
             lines.append(f"Violated property: {prop.description}")
@@ -96,13 +106,22 @@ def verify_with_agent(
     budget: Budget | None = None,
     assumptions: list[str] | None = None,
     harness: Path | None = None,
+    target: TargetInfo | None = None,
 ) -> AgentReport:
-    """Main entry point: drive ESBMC to a conclusive answer if possible."""
+    """Main entry point: drive ESBMC to a conclusive answer if possible.
+
+    `target` (set when --function generated the harness) enables the
+    propose->check loop: triage may propose a precondition, the harness is
+    regenerated with it, and ESBMC re-runs. The solver, never the LLM,
+    decides whether the proposal stands.
+    """
     llm = llm or NullLLM()
     budget = budget or Budget()
     config = base_config or VerifyConfig()
     started = time.monotonic()
     context = dict(assumptions=list(assumptions or []), harness=harness)
+    preconditions: list[str] = []
+    last_diagnosis: Diagnosis | None = None
 
     attempts: list[VerifyResult] = []
     unwind_idx = 0
@@ -118,16 +137,52 @@ def verify_with_agent(
         attempts.append(result)
 
         if result.outcome is Outcome.VERIFIED:
-            return AgentReport(final=result, attempts=attempts, **context)
+            return AgentReport(
+                final=result,
+                attempts=attempts,
+                diagnosis=last_diagnosis,
+                accepted_preconditions=preconditions,
+                **context,
+            )
 
         if result.outcome is Outcome.COUNTEREXAMPLE:
-            diagnosis = triage_counterexample(source, result, llm)
-            if diagnosis.kind == "missing_assumption" and diagnosis.patched_source:
-                # LLM proposed a precondition; verify the patched harness.
-                source = diagnosis.patched_source
+            diagnosis = triage_counterexample(target, source, result, llm)
+            last_diagnosis = diagnosis
+            if (
+                diagnosis.kind == "missing_assumption"
+                and diagnosis.proposed_precondition
+                and target is not None
+                and len(preconditions) < budget.max_precondition_rounds
+            ):
+                # Regenerate the harness with the proposal; the re-run is the
+                # solver's verdict on it. Unwind may need widening once the
+                # precondition admits longer loops, so reset the ladder.
+                candidate = preconditions + [diagnosis.proposed_precondition]
+                try:
+                    regenerated = generate(
+                        target.source,
+                        target.function,
+                        target.options,
+                        extra_preconditions=candidate,
+                    )
+                except HarnessError:
+                    # Proposal out of scope (guardrail refused it): report the
+                    # counterexample as triaged, without the proposal.
+                    return AgentReport(
+                        final=result, attempts=attempts, diagnosis=diagnosis, **context
+                    )
+                preconditions = candidate
+                source = regenerated.write(source.parent, tag=f"pre{len(preconditions)}")
+                context["assumptions"] = list(regenerated.assumptions)
+                context["harness"] = source
+                unwind_idx = 0
                 continue
             return AgentReport(
-                final=result, attempts=attempts, diagnosis=diagnosis, **context
+                final=result,
+                attempts=attempts,
+                diagnosis=diagnosis,
+                accepted_preconditions=[],
+                **context,
             )
 
         if result.outcome is Outcome.TOOL_ERROR:

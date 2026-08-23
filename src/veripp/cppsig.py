@@ -16,6 +16,80 @@ from dataclasses import dataclass, field
 
 _OPEN = {"(": ")", "[": "]", "{": "}", "<": ">"}
 
+_TYPE_ALIASES = {
+    "signed": "int",
+    "signed int": "int",
+    "unsigned int": "unsigned",
+    "signed long": "long",
+    "long int": "long",
+    "unsigned long int": "unsigned long",
+    "signed long long": "long long",
+    "long long int": "long long",
+    "unsigned long long int": "unsigned long long",
+    "signed short": "short",
+    "short int": "short",
+    "unsigned short int": "unsigned short",
+    "long double": "double",  # ESBMC models it as double
+}
+
+
+def normalize_type(type_: str, typedefs: dict[str, str] | None = None) -> str:
+    """Canonical spelling of a scalar type: no cv-qualifiers, no namespaces.
+
+    `typedefs` maps project-local aliases (`mz_ulong`) to their underlying
+    types; chains are resolved by `collect_scalar_typedefs`.
+    """
+    t = re.sub(r"\b(const|volatile|constexpr)\b", " ", type_)
+    t = t.replace("std::", "").replace("::", " ")
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s*([*&])", r"\1", t)  # `int *` == `int*`
+    if typedefs:
+        suffix = ""
+        while t and t[-1] in "*&":
+            suffix = t[-1] + suffix
+            t = t[:-1].strip()
+        t = typedefs.get(t, t) + suffix
+        t = re.sub(r"\s*([*&])", r"\1", t)
+    return _TYPE_ALIASES.get(t, t)
+
+
+_TYPEDEF_RE = re.compile(
+    r"\btypedef\s+((?:[A-Za-z_]\w*\s+)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*;"
+)
+_USING_RE = re.compile(r"\busing\s+([A-Za-z_]\w*)\s*=\s*([^;<>{}]+);")
+
+
+def collect_scalar_typedefs(source: str) -> dict[str, str]:
+    """Project-local aliases of scalar types: `typedef unsigned long mz_ulong;`.
+
+    Only aliases that bottom out at a plain scalar are kept -- a typedef of a
+    struct or a function pointer is not something a harness can nondet-fill,
+    so resolving it would only produce a better-looking wrong answer.
+    """
+    scrubbed = scrub(source)
+    raw: dict[str, str] = {}
+    for m in _TYPEDEF_RE.finditer(scrubbed):
+        raw[m.group(2)] = m.group(1).strip()
+    for m in _USING_RE.finditer(scrubbed):
+        raw[m.group(1)] = m.group(2).strip()
+
+    scalars = {
+        "void", "bool", "char", "signed char", "unsigned char", "short",
+        "unsigned short", "int", "unsigned", "long", "unsigned long",
+        "long long", "unsigned long long", "float", "double", "size_t",
+        "ptrdiff_t", "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t",
+        "uint32_t", "int64_t", "uint64_t",
+    }
+    resolved: dict[str, str] = {}
+    for alias in raw:
+        seen, current = set(), alias
+        while current in raw and current not in seen:
+            seen.add(current)
+            current = normalize_type(raw[current])
+        if current in scalars and current != alias:
+            resolved[alias] = current
+    return resolved
+
 
 class SignatureError(Exception):
     """The scanner could not recover a signature it is willing to stand behind."""
@@ -200,10 +274,36 @@ _LEADING_QUALS = {
 _TRAILING_QUALS = {"const", "noexcept", "override", "final", "volatile", "&", "&&"}
 
 
-def find_function(source: str, name: str) -> Signature:
-    """Recover the signature of the *definition* of `name` in `source`."""
+def parse_target(target: str) -> tuple[str, list[str] | None]:
+    """Split `--function` syntax: `f` or `f(int, unsigned long)`.
+
+    The optional parameter list disambiguates overloads. Types are compared
+    after normalisation, so `f(const int*,unsigned)` and
+    `f(int *, unsigned int)` name the same overload.
+    """
+    target = target.strip()
+    if "(" not in target:
+        return target, None
+    lparen = target.index("(")
+    name = target[:lparen].strip()
+    inner = target[lparen:].strip()
+    if not inner.endswith(")") or not re.fullmatch(r"[A-Za-z_]\w*", name):
+        raise SignatureError(
+            f"could not parse --function target {target!r}; expected `name` "
+            "or `name(type, type, ...)`"
+        )
+    return name, split_top_level(inner[1:-1])
+
+
+def find_function(source: str, target: str) -> Signature:
+    """Recover the signature of the *definition* of `target` in `source`.
+
+    `target` is a bare name, or `name(type, ...)` to pick one overload.
+    """
+    name, wanted = parse_target(target)
     scrubbed = scrub(source)
     classes = find_class_ranges(scrubbed)
+    typedefs = collect_scalar_typedefs(source)
 
     candidates = []
     for m in re.finditer(rf"\b{re.escape(name)}\s*\(", scrubbed):
@@ -222,10 +322,28 @@ def find_function(source: str, name: str) -> Signature:
             f"no definition of `{name}` found in the file "
             "(only definitions can be harnessed; declarations have no body)"
         )
+    if wanted is not None:
+        wanted_types = [normalize_type(w, typedefs) for w in wanted]
+        matching = []
+        for cand in candidates:
+            try:
+                params = _parse_params(source[cand[1] + 1 : cand[2]])
+            except SignatureError:
+                continue
+            if [normalize_type(p.type, typedefs) for p in params] == wanted_types:
+                matching.append(cand)
+        if not matching:
+            raise SignatureError(
+                f"no overload of `{name}` matches ({', '.join(wanted)}); "
+                f"candidates:\n{_describe_candidates(source, scrubbed, name, candidates)}"
+            )
+        candidates = matching
     if len(candidates) > 1:
         raise SignatureError(
-            f"`{name}` is defined {len(candidates)} times (overloads are not "
-            "supported yet); disambiguate by extracting the target into its own file"
+            f"`{name}` is defined {len(candidates)} times; pick one overload "
+            "by parameter types, e.g. --function "
+            f"'{name}(int, unsigned)'. Candidates:\n"
+            f"{_describe_candidates(source, scrubbed, name, candidates)}"
         )
 
     name_start, lparen, rparen, quals, brace = candidates[0]
@@ -252,6 +370,20 @@ def find_function(source: str, name: str) -> Signature:
         is_const="const" in quals,
         body=source[brace + 1 : body_end],
     )
+
+
+def _describe_candidates(source, scrubbed, name, candidates) -> str:
+    lines = []
+    for cand in candidates:
+        line_no = scrubbed.count("\n", 0, cand[0]) + 1
+        try:
+            params = ", ".join(
+                p.type for p in _parse_params(source[cand[1] + 1 : cand[2]])
+            )
+        except SignatureError:
+            params = "?"
+        lines.append(f"  line {line_no}: {name}({params})")
+    return "\n".join(lines)
 
 
 def _scan_trailing(scrubbed: str, pos: int) -> tuple[set[str], int | None]:
