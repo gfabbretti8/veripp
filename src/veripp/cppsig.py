@@ -150,6 +150,7 @@ class _ClassRange:
     name: str
     start: int  # offset of the '{'
     end: int  # offset of the matching '}'
+    templated: bool = False
 
 
 _CLASS_RE = re.compile(r"\b(class|struct)\s+([A-Za-z_]\w*)\s*(?::[^;{]*)?\{")
@@ -160,10 +161,33 @@ def find_class_ranges(scrubbed: str) -> list[_ClassRange]:
     for m in _CLASS_RE.finditer(scrubbed):
         brace = scrubbed.index("{", m.end() - 1)
         try:
-            ranges.append(_ClassRange(m.group(2), brace, match_bracket(scrubbed, brace)))
+            ranges.append(
+                _ClassRange(
+                    m.group(2),
+                    brace,
+                    match_bracket(scrubbed, brace),
+                    templated=_preceded_by_template(scrubbed, m.start()),
+                )
+            )
         except SignatureError:
             continue
     return ranges
+
+
+def _preceded_by_template(scrubbed: str, pos: int) -> bool:
+    """True if a `template <...>` clause sits immediately before `pos`."""
+    head = scrubbed[:pos].rstrip()
+    if not head.endswith(">"):
+        return False
+    depth = 0
+    for i in range(len(head) - 1, -1, -1):
+        if head[i] == ">":
+            depth += 1
+        elif head[i] == "<":
+            depth -= 1
+            if depth == 0:
+                return head[:i].rstrip().endswith("template")
+    return False
 
 
 # ------------------------------------------------------------- signature ---
@@ -207,11 +231,17 @@ def find_function(source: str, name: str) -> Signature:
     name_start, lparen, rparen, quals, brace = candidates[0]
 
     head = _decl_head(scrubbed, name_start)
+    enclosing = _enclosing_class_range(classes, name_start)
+    qualifier = _qualifier(scrubbed[head:name_start], name)
+    class_name = qualifier or (enclosing.name if enclosing else None)
+    if qualifier is not None:
+        enclosing = next((c for c in classes if c.name == qualifier), enclosing)
+    _reject_unmodellable(scrubbed, head, name_start, name, class_name, enclosing)
+
     # Read the return type off the scrubbed text: comments must not leak into it.
     return_type, is_static = _return_type(scrubbed[head:name_start], name)
     params = _parse_params(source[lparen + 1 : rparen])
     body_end = match_bracket(scrubbed, brace)
-    class_name = _enclosing_class(classes, name_start)
 
     return Signature(
         name=name,
@@ -225,37 +255,149 @@ def find_function(source: str, name: str) -> Signature:
 
 
 def _scan_trailing(scrubbed: str, pos: int) -> tuple[set[str], int | None]:
-    """Read qualifiers after the parameter list. Returns (quals, brace offset)."""
+    """Read qualifiers after the parameter list. Returns (quals, brace offset).
+
+    Strict on purpose. An earlier version skipped over `,`, which made every
+    entry of a constructor initialiser list -- `: Base( 0 ), member_( x )` --
+    look like a function definition whose body was the constructor's, and swept
+    the whole list into the "return type". Anything not recognised here means
+    "this is not a definition I understand", which is always the safe answer.
+    """
     quals: set[str] = set()
-    i = pos
-    n = len(scrubbed)
+    i, n = pos, len(scrubbed)
+    trailing_return = False
     while i < n:
         ch = scrubbed[i]
         if ch.isspace():
             i += 1
         elif ch == "{":
             return quals, i
-        elif ch == "(":  # noexcept(...) / attribute
-            i = match_bracket(scrubbed, i) + 1
-        elif scrubbed.startswith("->", i):  # trailing return type
+        elif scrubbed.startswith("->", i):
+            trailing_return = True
             i += 2
-        elif ch.isalnum() or ch in "_&:<>*,":
-            word = re.match(r"[A-Za-z_]\w*", scrubbed[i:])
-            if word:
-                if word.group(0) in _TRAILING_QUALS:
-                    quals.add(word.group(0))
-                i += word.end()
-            else:
-                i += 1
+        elif ch == "(":  # noexcept(...)
+            i = match_bracket(scrubbed, i) + 1
+        elif ch == "[":  # [[attribute]]
+            i = match_bracket(scrubbed, i) + 1
+        elif ch in "&*":
+            i += 1
+        elif trailing_return and ch in ":<>":
+            i += 1
         else:
-            return quals, None  # ';' or anything else: not a definition
+            word = re.match(r"[A-Za-z_]\w*", scrubbed[i:])
+            if word is None:
+                return quals, None  # ',' ':' '=' ';' ... : not a definition
+            if word.group(0) in _TRAILING_QUALS:
+                quals.add(word.group(0))
+            elif not trailing_return:
+                return quals, None  # an unknown token before the body
+            i += word.end()
     return quals, None
 
 
+def _reject_unmodellable(
+    scrubbed: str,
+    head: int,
+    name_start: int,
+    name: str,
+    class_name: str | None,
+    enclosing: "_ClassRange | None",
+) -> None:
+    """Refuse the shapes a harness cannot be built for, before guessing at one.
+
+    Every check here started as something this scanner happily accepted while
+    scanning real code: a destructor whose "return type" came out as `~`, and
+    template members whose parameters and receiver are type variables, so the
+    generated harness could not possibly compile.
+    """
+    before = scrubbed[head:name_start].rstrip()
+    if before.endswith("~"):
+        raise SignatureError(
+            f"`~{name}` is a destructor; veripp harnesses ordinary functions. "
+            "Verify the type's other operations instead."
+        )
+    if before.endswith("operator") or name == "operator":
+        raise SignatureError(f"`{name}` is an operator; operators are not supported yet")
+    if class_name == name:
+        raise SignatureError(
+            f"`{name}` is a constructor of `{class_name}`; constructors are not "
+            "supported yet (a harness needs an already-constructed object)"
+        )
+    if enclosing is not None and enclosing.templated:
+        raise SignatureError(
+            f"`{class_name}::{name}` is a member of the class template "
+            f"`{class_name}`: its parameter types are type variables, so no "
+            "concrete harness exists. Wrap a concrete instantiation "
+            f"(e.g. `{class_name}<int>`) in a non-template function and target that."
+        )
+    if _looks_like_an_initialiser_list(before):
+        raise SignatureError(
+            f"`{name}` here is an entry in a constructor initialiser list, not a "
+            "function definition (the last entry is followed by the constructor "
+            "body, which makes it look like one)"
+        )
+    if re.search(r"\btemplate\b", scrubbed[head:name_start]):
+        raise SignatureError(
+            f"`{name}` is a function template: its parameter types are type "
+            "variables, so no concrete harness exists. Wrap a concrete "
+            "instantiation in a non-template function and target that."
+        )
+
+
+_QUALIFIER_RE = re.compile(r"(?:^|[\s*&>])([A-Za-z_]\w*)\s*::\s*$")
+
+
+def _qualifier(head: str, name: str) -> str | None:
+    """Class name from an out-of-line definition head like `void Shape::area`."""
+    if not head.rstrip().endswith("::"):
+        return None
+    m = _QUALIFIER_RE.search(head.rstrip() + "")
+    if m is None:
+        raise SignatureError(
+            f"`{name}` is defined out of line under a qualifier this scanner "
+            "cannot read (an explicit template specialisation, or a nested "
+            "namespace-qualified name); it is not supported yet"
+        )
+    return m.group(1)
+
+
+def _looks_like_an_initialiser_list(head: str) -> bool:
+    """True if the text before the name cannot be a return type.
+
+    A return type may contain identifiers, `::`, `*`, `&` and `<...>`, but
+    never a bare parenthesis or comma. The last entry of a constructor
+    initialiser list -- `: Base( 0 ), a_( 1 ), b_()` followed by the body --
+    otherwise parses as a definition whose return type is the whole list.
+    """
+    head = re.sub(r"\bdecltype\s*\([^()]*\)", " ", head)  # a legitimate return type
+    depth, flat = 0, []
+    for ch in head:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            flat.append(ch)
+    return "(" in flat or "," in flat
+
+
 def _decl_head(scrubbed: str, name_start: int) -> int:
-    """Offset where the declaration containing `name_start` begins."""
+    """Offset where the declaration containing `name_start` begins.
+
+    A single `:` ends the previous thing (an access specifier, a label, the
+    start of a constructor initialiser list), but the `:` of a `::` does not:
+    stopping there truncated `std::size_t` to `size_t` and made every
+    out-of-line definition -- `void C::Clear() {}` -- look like it had no
+    return type at all, which refused the most common shape in real C++.
+    """
     i = name_start - 1
-    while i >= 0 and scrubbed[i] not in _DECL_STOP:
+    while i >= 0:
+        ch = scrubbed[i]
+        if ch == ":":
+            if not (scrubbed[i - 1 : i] == ":" or scrubbed[i + 1 : i + 2] == ":"):
+                break
+        elif ch in ";{}":
+            break
         i -= 1
     start = i + 1
     # A preprocessor directive also ends whatever came before it: without this,
@@ -274,7 +416,7 @@ def _return_type(head: str, name: str) -> tuple[str, bool]:
         kept = kept[:-1]
     ret = " ".join(kept).strip()
     # `Class::name` written as one token leaves the qualifier glued to the type.
-    ret = re.sub(rf"\b[A-Za-z_]\w*::\s*$", "", ret).strip()
+    ret = re.sub(r"\b[A-Za-z_]\w*::\s*$", "", ret).strip()
     if not ret:
         raise SignatureError(
             f"could not determine the return type of `{name}`; constructors and "
@@ -283,9 +425,11 @@ def _return_type(head: str, name: str) -> tuple[str, bool]:
     return ret, is_static
 
 
-def _enclosing_class(classes: list[_ClassRange], offset: int) -> str | None:
+def _enclosing_class_range(
+    classes: list[_ClassRange], offset: int
+) -> _ClassRange | None:
     inner = [c for c in classes if c.start < offset < c.end]
-    return max(inner, key=lambda c: c.start).name if inner else None
+    return max(inner, key=lambda c: c.start) if inner else None
 
 
 def _parse_params(text: str) -> list[Param]:

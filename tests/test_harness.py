@@ -158,3 +158,78 @@ class TestHarness:
 )
 def test_type_normalisation(written, canonical):
     assert normalize_type(written) == canonical
+
+
+class TestRefusalsFoundOnRealCode:
+    """Shapes the scanner used to accept, found by running it over tinyxml2.
+
+    Each of these produced a "signature" that could never compile, which is
+    worse than refusing: the generator's whole contract is that it declines
+    what it cannot model.
+    """
+
+    def test_destructor(self):
+        with pytest.raises(SignatureError, match="destructor"):
+            find_function("class C { public: ~C() { } };", "C")
+
+    def test_member_of_a_class_template(self):
+        src = "template <class T> class Box { T v_; public:\n  T get() { return v_; }\n};"
+        with pytest.raises(SignatureError, match="class template"):
+            find_function(src, "get")
+
+    def test_function_template(self):
+        with pytest.raises(SignatureError, match="function template"):
+            find_function("template <typename T>\nT twice(T x) { return x + x; }", "twice")
+
+    def test_last_entry_of_a_constructor_initialiser_list(self):
+        """`: Base(0), a_(1), pool_()` followed by the body looked like a definition."""
+        src = (
+            "class D : public B {\n  int a_; Pool pool_;\npublic:\n"
+            "  D(int a) :\n    B( 0 ),\n    a_( a ),\n    pool_()\n  {\n    a_ = 1;\n  }\n};"
+        )
+        with pytest.raises(SignatureError, match="initialiser list"):
+            find_function(src, "pool_")
+
+    def test_operator(self):
+        with pytest.raises(SignatureError, match="operator"):
+            find_function("struct C { bool operator(int x) { return true; } };", "operator")
+
+
+class TestOutOfLineDefinitions:
+    """`void C::Clear() { }` is the most common definition shape in real C++.
+
+    All of these were refused with "could not determine the return type",
+    because the head scan stopped at the `:` inside `::`.
+    """
+
+    def test_recovers_class_return_type_and_constness(self):
+        src = (
+            "class C { public: void Clear(); std::size_t N() const; };\n"
+            "void C::Clear() { }\n"
+            "std::size_t C::N() const { return 0; }\n"
+        )
+        clear = find_function(src, "Clear")
+        assert (clear.return_type, clear.class_name, clear.qualified_name) == (
+            "void", "C", "C::Clear",
+        )
+        n = find_function(src, "N")
+        assert (n.return_type, n.class_name, n.is_const) == ("std::size_t", "C", True)
+
+    def test_namespace_qualified_return_type_is_not_truncated(self):
+        assert find_function("std::size_t f(int x) { return 0; }", "f").return_type == "std::size_t"
+
+    def test_out_of_line_member_gets_a_receiver_in_the_harness(self, tmp_path):
+        src = tmp_path / "s.cpp"
+        src.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "class Counter { int n_; public:\n  Counter() : n_(0) {}\n  void bump(int by);\n};\n"
+            "void Counter::bump(int by) {\n    VERIPP_REQUIRES(by >= 0);\n    n_ += by;\n}\n"
+        )
+        code = generate(src, "bump").code
+        assert "Counter veripp_obj;" in code
+        assert "veripp_obj.bump(by);" in code
+        assert "VERIPP_ASSUME(by >= 0);" in code
+
+    def test_access_specifiers_and_labels_still_end_a_declaration(self):
+        src = "class C {\npublic:\n  int f(int x) { return x; }\n};"
+        assert find_function(src, "f").return_type == "int"

@@ -123,3 +123,21 @@ class TestConfigArgs:
     def test_describe_states_the_bound(self):
         assert "unwind=8" in VerifyConfig().describe()
         assert "k-induction" in VerifyConfig(k_induction=True).describe()
+
+
+def test_a_segfaulting_esbmc_is_a_tool_error_not_a_verdict():
+    """ESBMC 8.4 segfaults converting some real C++ translation units.
+
+    Seen for real on tinyxml2: it prints "Converting" and dies with SIGSEGV,
+    leaving no verdict at all. Anything other than TOOL_ERROR here would let
+    the agent escalate against a crashing binary, or worse, report the silence
+    as a result.
+    """
+    output = (
+        "Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc\n"
+        "Parsing harness.cpp\nConverting\n"
+    )
+    result = parse_output(output, CFG, exit_code=139)
+    assert result.outcome is Outcome.TOOL_ERROR
+    assert "139" in result.error
+    assert not result.is_conclusive
