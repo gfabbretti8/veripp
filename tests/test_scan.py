@@ -1,5 +1,7 @@
 """Whole-file scanning: point veripp at a file, not a function."""
 
+from pathlib import Path
+
 import pytest
 
 from veripp.cppsig import find_struct, function_definitions
@@ -189,3 +191,53 @@ class TestAdviceIsTimely:
             monkeypatch.delenv(var, raising=False)
         main(["verify", str(src), "--function", "unsafe_div", "--timeout", "90"])
         assert "no LLM configured" in capsys.readouterr().err
+
+
+class TestHarnessLanguage:
+    """A C file needs a C harness.
+
+    `T *p = malloc(...)` is idiomatic C and invalid C++, so compiling a C
+    source through a C++ harness fails outright. tinyexpr scored 45 of 47
+    functions "inconclusive" for exactly this reason, and every one was a
+    parse error rather than anything about the code.
+    """
+
+    def test_a_c_source_gets_a_c_harness(self, tmp_path):
+        from veripp.harness import generate
+
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "#include <stdlib.h>\n"
+            "typedef struct { int n; } box_t;\n"
+            "static box_t* make(void) { box_t* b = malloc(sizeof(box_t)); return b; }\n"
+        )
+        assert generate(p, "make").write(tmp_path / "out").suffix == ".c"
+
+    def test_a_cpp_source_gets_a_cpp_harness(self, tmp_path):
+        from veripp.harness import generate
+
+        p = tmp_path / "s.cpp"
+        p.write_text('#include "veripp/contracts.hpp"\nint f(int x) { return x; }\n')
+        assert generate(p, "f").write(tmp_path / "out").suffix == ".cpp"
+
+    def test_the_standard_follows_the_harness_language(self):
+        from veripp.esbmc import VerifyConfig
+
+        config = VerifyConfig()
+        assert config.std_for(Path("h.c")) == "c11"
+        assert config.std_for(Path("h.cpp")) == "c++17"
+        assert "c11" in config.to_args(Path("h.c"))
+        assert "c++17" in config.to_args(Path("h.cpp"))
+
+
+def test_contracts_header_is_usable_from_c():
+    """It is included by C and C++ harnesses alike, so `extern "C"` and `bool`
+    have to be guarded."""
+    from veripp.paths import contracts_include_dir
+
+    text = (contracts_include_dir() / "veripp" / "contracts.hpp").read_text()
+    assert "#if defined(__cplusplus)" in text
+    assert "_Bool" in text
+    # the brace must be inside the guard, not produced by a macro
+    assert 'extern "C" {' in text

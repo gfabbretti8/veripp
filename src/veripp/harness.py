@@ -52,6 +52,15 @@ DEFAULT_MAX_CALLS = 4
 #: Default depth for following pointer fields inside a constructed object.
 DEFAULT_MAX_STRUCT_DEPTH = 2
 
+def _looks_like_cxx(code: str) -> bool:
+    """Whether a generated harness needs a C++ compiler.
+
+    References and `::` have no C spelling, so a harness using them is C++
+    whatever the source file is named.
+    """
+    return bool(re.search(r"&\s*\w+\s*=|::", code))
+
+
 _LOOP_VAR = "veripp_i"
 _RECEIVER = "veripp_obj"
 
@@ -99,10 +108,25 @@ class Harness:
     #: effects are not modelled, so they weaken whatever the run concludes.
     unresolved_calls: list[str] = field(default_factory=list)
 
+    #: Source suffixes that must be compiled as C. Idiomatic C assigns
+    #: malloc's void* without a cast, which is not valid C++, so a C file
+    #: needs a C harness or it will not compile at all.
+    C_SUFFIXES = frozenset({".c", ".h"})
+
+    @property
+    def language_suffix(self) -> str:
+        source = self.source
+        if source is not None and source.suffix.lower() in self.C_SUFFIXES:
+            # A .h may hold either language; C++ constructs decide it.
+            if source.suffix.lower() == ".h" and _looks_like_cxx(self.code):
+                return ".cpp"
+            return ".c"
+        return ".cpp"
+
     def write(self, directory: Path, tag: str = "") -> Path:
         directory.mkdir(parents=True, exist_ok=True)
         suffix = f".{tag}" if tag else ""
-        out = directory / f"veripp_harness_{self.signature.name}{suffix}.cpp"
+        out = directory / f"veripp_harness_{self.signature.name}{suffix}{self.language_suffix}"
         out.write_text(self.code)
         return out
 

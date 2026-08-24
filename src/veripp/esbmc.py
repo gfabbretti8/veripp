@@ -57,8 +57,16 @@ class VerifyConfig:
     link_sources: list[Path] = field(default_factory=list)
     cpp_std: str = "c++17"
 
-    def to_args(self) -> list[str]:
-        args: list[str] = ["--std", self.cpp_std]
+    #: Standard used when the harness is C. The C++ standard in `cpp_std`
+    #: cannot be passed to a .c file -- ESBMC rejects it outright.
+    c_std: str = "c11"
+
+    def std_for(self, source: Path) -> str:
+        return self.c_std if source.suffix.lower() == ".c" else self.cpp_std
+
+    def to_args(self, source: Path | None = None) -> list[str]:
+        std = self.std_for(source) if source is not None else self.cpp_std
+        args: list[str] = ["--std", std]
         if self.k_induction:
             args.append("--k-induction")
         elif self.incremental_bmc:
@@ -310,7 +318,8 @@ def run(source: Path, config: VerifyConfig, esbmc_bin: str | None = None) -> Ver
             "esbmc not found on PATH. Install from "
             "https://github.com/esbmc/esbmc/releases, or `brew install esbmc`"
         )
-    cmd = [binary, str(source), *(str(s) for s in config.link_sources), *config.to_args()]
+    cmd = [binary, str(source), *(str(s) for s in config.link_sources),
+           *config.to_args(source)]
     started = time.monotonic()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=config.timeout_s)
