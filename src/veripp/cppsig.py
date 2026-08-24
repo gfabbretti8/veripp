@@ -62,6 +62,19 @@ _TYPEDEF_RE = re.compile(
 _USING_RE = re.compile(r"\busing\s+([A-Za-z_]\w*)\s*=\s*([^;<>{}]+);")
 
 
+_EMPTY_MACRO_RE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]*$", re.M)
+
+
+def empty_macros(source: str) -> set[str]:
+    """Macros defined as nothing, which appear inside type expressions.
+
+    zlib writes `typedef Byte FAR Bytef;` where FAR is `#define FAR` -- the
+    token vanishes at compile time but sits in the middle of the type as far
+    as a scanner is concerned, and the alias fails to resolve.
+    """
+    return set(_EMPTY_MACRO_RE.findall(source))
+
+
 def collect_scalar_typedefs(source: str) -> dict[str, str]:
     """Project-local aliases of scalar types: `typedef unsigned long mz_ulong;`.
 
@@ -70,9 +83,15 @@ def collect_scalar_typedefs(source: str) -> dict[str, str]:
     so resolving it would only produce a better-looking wrong answer.
     """
     scrubbed = scrub(source)
+    vanishing = empty_macros(source)
+
+    def strip_macros(type_: str) -> str:
+        kept = [w for w in type_.split() if w not in vanishing]
+        return " ".join(kept)
+
     raw: dict[str, str] = {}
     for m in _TYPEDEF_RE.finditer(scrubbed):
-        raw[m.group(2)] = m.group(1).strip()
+        raw[m.group(2)] = strip_macros(m.group(1).strip())
     for m in _USING_RE.finditer(scrubbed):
         raw[m.group(1)] = m.group(2).strip()
 

@@ -293,3 +293,54 @@ class TestCIdioms:
             "static int peek(item_t * const it) { return it->n; }\n"
         )
         assert "it_obj" in generate(p, "peek").code
+
+
+class TestRealWorldCPreprocessor:
+    """Shapes found in zlib, the most deployed C library there is."""
+
+    def test_a_main_behind_an_ifdef_does_not_disqualify_the_file(self, tmp_path):
+        """zlib's crc32.c carries a table generator under `#ifdef MAKECRCH`.
+        The harness never defines that macro, so the main is not compiled --
+        but refusing on sight cost every function in the file."""
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "static int useful(int x) { return x + 1; }\n"
+            "#ifdef MAKECRCH\n"
+            "int main(void) { return 0; }\n"
+            "#endif\n"
+        )
+        assert "useful(x)" in generate(p, "useful").code
+
+    def test_an_unguarded_main_is_still_refused(self, tmp_path):
+        p = tmp_path / "s.c"
+        p.write_text("int f(int x) { return x; }\nint main(void) { return f(1); }\n")
+        with pytest.raises(HarnessError, match="defines main"):
+            generate(p, "f")
+
+    def test_a_macro_that_expands_to_nothing_is_stripped_from_a_typedef(self):
+        """zlib writes `typedef Byte FAR Bytef;` where FAR is `#define FAR`."""
+        from veripp.cppsig import collect_scalar_typedefs
+
+        src = (
+            "#define FAR\n"
+            "typedef unsigned char Byte;\n"
+            "typedef Byte FAR Bytef;\n"
+            "typedef unsigned long uLong;\n"
+        )
+        types = collect_scalar_typedefs(src)
+        assert types["Bytef"] == "unsigned char"
+        assert types["uLong"] == "unsigned long"
+
+    def test_includes_are_followed_deep_enough_for_real_headers(self, tmp_path):
+        """zlib reaches its typedefs through zutil.h -> zlib.h -> zconf.h."""
+        from veripp.cppsig import collect_scalar_typedefs
+        from veripp.harness import _with_local_includes
+
+        (tmp_path / "level3.h").write_text("typedef unsigned long deep_t;\n")
+        (tmp_path / "level2.h").write_text('#include "level3.h"\n')
+        (tmp_path / "level1.h").write_text('#include "level2.h"\n')
+        src = tmp_path / "a.c"
+        src.write_text('#include "level1.h"\nint f(deep_t x) { return (int)x; }\n')
+        expanded = _with_local_includes(src, src.read_text(), [tmp_path])
+        assert collect_scalar_typedefs(expanded).get("deep_t") == "unsigned long"

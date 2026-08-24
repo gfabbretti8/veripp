@@ -284,8 +284,18 @@ def _linked_text(options: HarnessOptions) -> list[str]:
     return parts
 
 
+#: How many levels of #include to follow. Type definitions sit deeper than
+#: they look: zlib's crc32.c reaches its typedefs through zutil.h -> zlib.h ->
+#: zconf.h, and stopping at two levels lost every one of them. Headers are
+#: only scanned as text, so the extra depth is cheap.
+DEFAULT_INCLUDE_DEPTH = 5
+
+
 def _with_local_includes(
-    source: Path, text: str, include_dirs: list[Path] | None = None, depth: int = 2
+    source: Path,
+    text: str,
+    include_dirs: list[Path] | None = None,
+    depth: int = DEFAULT_INCLUDE_DEPTH,
 ) -> str:
     """`text` plus the contents of the headers it `#include`s, transitively.
 
@@ -336,16 +346,38 @@ def _with_local_includes(
 def _reject_conflicting_main(text: str, source: Path) -> None:
     """A source with an unguarded main() cannot be #included by a harness."""
     scrubbed = scrub(text)
-    if not re.search(r"\bmain\s*\(", scrubbed):
+    match = re.search(r"\bmain\s*\(", scrubbed)
+    if match is None:
         return
     if "VERIPP_HAS_OWN_MAIN" in scrubbed or "VERIPP_GENERATED_HARNESS" in scrubbed:
         return  # the file guards its own main against harness builds
+    if _inside_conditional(scrubbed, match.start()):
+        # zlib's crc32.c carries a table-generator main under `#ifdef
+        # MAKECRCH`. The harness does not define that macro, so the main is
+        # not compiled -- and refusing on sight cost every function in the
+        # file.
+        return
     raise HarnessError(
         f"{source} defines main() unguarded, so a generated harness cannot "
         "include it. Wrap that main in `#if defined(VERIPP_HAS_OWN_MAIN)` "
         "(see veripp/contracts.hpp), or verify the file directly without "
         "--function."
     )
+
+
+_COND_OPEN = re.compile(r"^[ \t]*#[ \t]*if(?:def|ndef)?\b", re.M)
+_COND_CLOSE = re.compile(r"^[ \t]*#[ \t]*endif\b", re.M)
+
+
+def _inside_conditional(scrubbed: str, offset: int) -> bool:
+    """Whether `offset` sits inside an #if/#endif block.
+
+    Not a preprocessor -- it cannot know whether the branch is taken -- but
+    enough to tell a real main from one behind a macro the harness never
+    defines.
+    """
+    head = scrubbed[:offset]
+    return len(_COND_OPEN.findall(head)) > len(_COND_CLOSE.findall(head))
 
 
 def _pair_buffers_with_lengths(
