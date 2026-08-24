@@ -101,7 +101,14 @@ def main(argv: list[str] | None = None) -> int:
 
 def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False) -> None:
     p.add_argument("source", type=Path)
-    target = p.add_mutually_exclusive_group(required=require_function)
+    what = p.add_argument_group("what to verify")
+    bounds = p.add_argument_group(
+        "bounds", "every result states the bounds it was obtained under"
+    )
+    build = p.add_argument_group(
+        "build configuration", "usually taken from compile_commands.json"
+    )
+    target = what.add_mutually_exclusive_group(required=require_function)
     target.add_argument(
         "--function",
         help="target function; veripp generates a harness for it. Overloads "
@@ -114,13 +121,13 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         help="target class; veripp drives a nondeterministic sequence of its "
         "public methods, so states built up across calls are explored",
     )
-    p.add_argument(
+    what.add_argument(
         "--max-calls",
         type=int,
         default=HarnessOptions.max_calls,
         help="length of the generated call sequence for --class",
     )
-    p.add_argument(
+    what.add_argument(
         "--assert",
         dest="assertions",
         action="append",
@@ -129,16 +136,16 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         help="property checked after every call in a --class sequence; the "
         "object under test is named `veripp_obj`. Repeatable.",
     )
-    p.add_argument("--unwind", type=int, default=8)
-    p.add_argument("--timeout", type=int, default=120, help="per-attempt timeout (s)")
-    p.add_argument("--std", default=_DEFAULT_STD)
-    p.add_argument(
+    bounds.add_argument("--unwind", type=int, default=8)
+    bounds.add_argument("--timeout", type=int, default=120, help="per-attempt timeout (s)")
+    build.add_argument("--std", default=_DEFAULT_STD)
+    bounds.add_argument(
         "--max-array-len",
         type=int,
         default=HarnessOptions.max_array_len,
         help="harness bound on generated buffer lengths",
     )
-    p.add_argument(
+    build.add_argument(
         "--compile-commands",
         type=Path,
         metavar="PATH",
@@ -147,12 +154,12 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         "are taken from it. Auto-discovered near the source if not given; "
         "--no-compile-commands disables that.",
     )
-    p.add_argument(
+    build.add_argument(
         "--no-compile-commands",
         action="store_true",
         help="do not look for a compilation database",
     )
-    p.add_argument(
+    build.add_argument(
         "--link",
         action="append",
         type=Path,
@@ -162,9 +169,9 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         "calls a function defined elsewhere: an unlinked callee is assumed to "
         "have no side effects, which is unsound. Repeatable.",
     )
-    p.add_argument("-I", "--include", action="append", type=Path, default=[])
-    p.add_argument("-D", "--define", action="append", default=[], help="preprocessor macro")
-    p.add_argument(
+    build.add_argument("-I", "--include", action="append", type=Path, default=[])
+    build.add_argument("-D", "--define", action="append", default=[], help="preprocessor macro")
+    build.add_argument(
         "--include-file",
         action="append",
         default=[],
@@ -172,12 +179,12 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         help="force-include a header before the source (e.g. a libc/typedef shim "
         "for a symbol esbmclibc lacks); repeatable",
     )
-    p.add_argument(
+    bounds.add_argument(
         "--no-overflow-check",
         action="store_true",
         help="disable arithmetic overflow checking (isolate other properties)",
     )
-    p.add_argument(
+    bounds.add_argument(
         "--assume",
         action="append",
         default=[],
@@ -211,6 +218,29 @@ def _build_harness(args) -> Harness:
         _harness_options(args),
         extra_preconditions=list(getattr(args, "assume", []) or []),
     )
+
+
+def _suggest_targets(args, wanted: str) -> None:
+    """Point at the names that do exist, rather than only refusing."""
+    import difflib
+
+    from .cppsig import function_definitions
+
+    try:
+        names = [n for n in function_definitions(args.source.read_text(errors="replace"))
+                 if n != "main"]
+    except OSError:
+        return
+    if not names:
+        return
+    base = wanted.split("(")[0]
+    close = difflib.get_close_matches(base, names, n=3, cutoff=0.6)
+    if close:
+        print(f"  did you mean: {', '.join(close)}?", file=sys.stderr)
+    else:
+        shown = ", ".join(names[:6]) + ("..." if len(names) > 6 else "")
+        print(f"  this file defines: {shown}", file=sys.stderr)
+    print(f"  or scan them all:  veripp scan {args.source}", file=sys.stderr)
 
 
 def _scan(args) -> int:
@@ -288,6 +318,7 @@ def _verify(args) -> int:
         except (HarnessError, SignatureError) as exc:
             what = args.function or args.cls
             print(f"error: cannot harness `{what}`: {exc}", file=sys.stderr)
+            _suggest_targets(args, what)
             return EXIT_USAGE
         target = harness.write(scratch_dir())
 

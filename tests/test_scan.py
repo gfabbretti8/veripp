@@ -104,3 +104,25 @@ class TestScanEndToEnd:
         p = tmp_path / "m.c"
         p.write_text("int main(void) { return 0; }\nstatic int f(int x) { return x; }\n")
         assert "main" not in {r.name for r in self._scan(p).results}
+
+
+class TestErrorGuidance:
+    """A refusal should point at what the file does offer."""
+
+    def _run(self, capsys, src, function):
+        from veripp.cli import main
+
+        main(["verify", str(src), "--function", function, "--no-llm"])
+        return capsys.readouterr().err
+
+    def test_a_typo_suggests_the_right_name(self, capsys, src):
+        err = self._run(capsys, src, "safe_ad")
+        assert "did you mean" in err and "safe_add" in err
+
+    def test_an_unrelated_name_lists_what_exists(self, capsys, src):
+        err = self._run(capsys, src, "zzzzzz")
+        assert "this file defines" in err
+        assert "safe_add" in err
+
+    def test_it_points_at_scan(self, capsys, src):
+        assert "veripp scan" in self._run(capsys, src, "zzzzzz")
