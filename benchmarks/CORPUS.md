@@ -17,12 +17,14 @@ them is bounded by the assumptions each result states.
 | [tinyexpr](https://github.com/codeplea/tinyexpr) | expression evaluator | 47 | 17 | 5 | 96% |
 | [zlib](https://github.com/madler/zlib) (6 modules) | the most deployed C library | 46 | 17 | 0 | 63% |
 | [giflib](https://github.com/mirrorer/giflib) `dgif_lib.c` | GIF decoding | 23 | 2 | 12 | 78% |
+| [jansson](https://github.com/akheron/jansson) `value.c` | C JSON, widely embedded | 88 | 20 | 31 | 90% |
 | [libyaml](https://github.com/yaml/libyaml) `api.c` | YAML, behind PyYAML | 53 | — | — | 74% |
 
 ```bash
 veripp scan path/to/libpng/png.c -I path/to/libpng --timeout 10 -j 4
 ```
 
+jansson needs `-D HAVE_STDINT_H` and its generated `jansson_config.h`.
 libyaml needs its build run once first: it generates `config.h`, and veripp
 says so rather than surfacing the compiler's complaint about an undefined
 macro.
@@ -43,6 +45,21 @@ the solver then checks.
 **Not harnessable is not failure.** lz4's 43% is mostly `void*`, which cannot
 be constructed without knowing the intended type. Refusing is correct there;
 guessing would produce a confident wrong answer.
+
+## One idea that measured worse
+
+Objects are built with the library's own initialiser where one exists
+(`T_init(T*)`). The obvious extension is the *factory* shape many C APIs use
+instead — jansson's `json_object()`, returning a fresh `json_t*`. Implemented
+and measured, it took jansson from 20 proved to 11 and from 31 leads to 40,
+so it was removed.
+
+Two reasons, both instructive. A factory is chosen by shape, and a type
+usually has several (`json_object`, `json_array`, `json_null`) that produce
+genuinely different objects — picking one narrows the question in a way the
+caller never asked for. And calling a real constructor drags allocation into
+every harness, which costs solver time that was buying proofs elsewhere.
+An initialiser filling a caller-owned object has neither problem.
 
 ## What these libraries taught the tool
 
