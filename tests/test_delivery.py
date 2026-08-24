@@ -308,3 +308,38 @@ class TestActionCommandsFromAForeignWorkspace:
             workspace, "verify", "off_by_one.cpp", "--function", "sum_array"
         )
         assert result.returncode == 1, result.stdout + result.stderr
+
+
+class TestContainerHint:
+    """`docker run IMAGE scan foo.c` without -v is the most likely first
+    mistake anyone makes with the image, and "not found" does not explain it."""
+
+    def test_silent_outside_the_container(self, monkeypatch) -> None:
+        from veripp.cli import _missing_source_hint
+
+        monkeypatch.delenv("VERIPP_IN_CONTAINER", raising=False)
+        assert _missing_source_hint() is None
+
+    def test_silent_when_something_is_mounted(self, monkeypatch, tmp_path) -> None:
+        """A mistyped filename must not be blamed on a missing mount."""
+        from veripp import cli
+
+        monkeypatch.setenv("VERIPP_IN_CONTAINER", "1")
+        populated = tmp_path / "src"
+        populated.mkdir()
+        (populated / "something.c").touch()
+        monkeypatch.setattr(cli, "Path", lambda _: populated)
+        assert cli._missing_source_hint() is None
+
+    def test_fires_on_an_empty_mount_point(self, monkeypatch, tmp_path) -> None:
+        from veripp import cli
+
+        monkeypatch.setenv("VERIPP_IN_CONTAINER", "1")
+        empty = tmp_path / "src"
+        empty.mkdir()
+        monkeypatch.setattr(cli, "Path", lambda _: empty)
+        hint = cli._missing_source_hint()
+        assert hint and "-v" in hint and "/src" in hint
+
+    def test_the_image_sets_the_marker(self) -> None:
+        assert "VERIPP_IN_CONTAINER=1" in read("Dockerfile")

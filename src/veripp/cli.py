@@ -91,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor(allow_unsound=args.allow_unsound)
     if not args.source.exists():
         print(f"error: {args.source} not found", file=sys.stderr)
+        hint = _missing_source_hint()
+        if hint:
+            print(hint, file=sys.stderr)
         return EXIT_USAGE
 
     if args.command == "scan":
@@ -585,6 +588,32 @@ def _make_llm(args) -> tuple[object, str | None]:
 DOCKER_HINT = (
     'docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan FILE.c'
 )
+
+
+def _missing_source_hint() -> str | None:
+    """The single most likely reason a path is missing inside the image.
+
+    Running the container without -v leaves the working directory empty, and
+    "error: foo.c not found" is a true but useless thing to tell someone whose
+    file is sitting right there on their host. Only fires when we are actually
+    in the image and the working directory really is empty, so it cannot
+    misdirect someone who simply mistyped a filename.
+    """
+    import os
+
+    if os.environ.get("VERIPP_IN_CONTAINER") != "1":
+        return None
+    workdir = Path("/src")
+    try:
+        if any(workdir.iterdir()):
+            return None
+    except OSError:
+        return None
+    return (
+        "hint: /src is empty, so nothing was mounted into the container.\n"
+        '      Mount your project there:  docker run --rm -v "$PWD:/src" '
+        "IMAGE " + " ".join(sys.argv[1:2] or ["scan"]) + " FILE"
+    )
 
 
 def _esbmc_install_hint() -> str:

@@ -169,6 +169,9 @@ RUN python3 -m venv /opt/veripp \
 RUN veripp doctor
 
 # The user's code is mounted here; nothing in the image writes outside /tmp.
+# The marker lets the CLI tell someone who forgot -v why their file is
+# "not found", which is otherwise a true and completely unhelpful message.
+ENV VERIPP_IN_CONTAINER=1
 WORKDIR /src
 USER 65534:65534
 
