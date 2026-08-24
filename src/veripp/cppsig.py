@@ -1112,3 +1112,24 @@ def function_definitions(source: str) -> list[str]:
             seen.add(name)
             names.append(name)
     return names
+
+
+# ------------------------------------------------------------- includes ---
+
+_QUOTED_INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"', re.M)
+_ANGLE_INCLUDE_RE = re.compile(r"^[ \t]*#[ \t]*include[ \t]*<([^>]+)>", re.M)
+
+
+def included_names(text: str, angle: bool = False) -> list[str]:
+    """Header names `text` includes, in order, without duplicates.
+
+    Deliberately reads the RAW text: `scrub` blanks string literals, which
+    erases the filename in `#include "config.h"`. That mistake has been made
+    twice in this codebase, which is why there is now one function for it.
+    Following a commented-out include is harmless -- it only widens the set of
+    headers considered.
+    """
+    names = list(_QUOTED_INCLUDE_RE.findall(text))
+    if angle:
+        names += _ANGLE_INCLUDE_RE.findall(text)
+    return list(dict.fromkeys(names))

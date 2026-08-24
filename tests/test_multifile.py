@@ -186,3 +186,14 @@ class TestUnconfiguredBuild:
         source = tmp_path / "a.c"
         source.write_text('#include "nowhere.h"\nint f(void) { return 0; }\n')
         assert _unconfigured_build_hint(source, []) is None
+
+
+def test_include_scanning_reads_raw_text():
+    """One function knows how to read an #include, because scanning scrubbed
+    text -- which blanks string literals and erases the filename -- was
+    written twice and wrong both times."""
+    from veripp.cppsig import included_names
+
+    text = '#include "config.h"\n#include <yaml.h>\n#include "config.h"\n'
+    assert included_names(text) == ["config.h"]
+    assert included_names(text, angle=True) == ["config.h", "yaml.h"]

@@ -253,15 +253,13 @@ def _unconfigured_build_hint(source: Path, include_dirs: list[Path]) -> str | No
     configured, and the compiler says so as `use of undeclared identifier
     YAML_VERSION_STRING` -- true, and no help at all.
     """
-    # Matched on the raw text: scrub() blanks string literals, which erases
-    # the filename in `#include "config.h"`. (Second time that has bitten --
-    # the same mistake is commented in harness._with_local_includes.)
-    pattern = r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"'
+    from .cppsig import included_names
+
     search = [source.parent, *include_dirs]
 
     def includes_of(path: Path) -> list[str]:
         try:
-            return re.findall(pattern, path.read_text(errors="replace"), re.M)
+            return included_names(path.read_text(errors="replace"))
         except OSError:
             return []
 
