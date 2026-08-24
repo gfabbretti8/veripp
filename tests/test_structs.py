@@ -149,3 +149,26 @@ class TestFieldTypeHygiene:
         code = generate(p, "use").code
         assert "c_obj.mode = (Mode)VERIPP_NONDET_INT();" in code
         assert "left uninitialised" not in code
+
+
+def test_struct_pointer_next_to_a_size_is_one_object_not_an_array(tmp_path):
+    """`ucvector_reserve(ucvector* p, size_t size)` grows p's capacity; `size`
+    does not describe p's length. Pairing them built an array of structs and
+    refused the function. Buffers are arrays of scalars; struct pointers are
+    objects."""
+    p = tmp_path / "s.c"
+    p.write_text(
+        '#include "veripp/contracts.hpp"\n'
+        "typedef struct { unsigned char* data; size_t size; } vec_t;\n"
+        "static int reserve(vec_t* v, size_t size) { return v->size < size; }\n"
+        "static int total(const int* items, size_t size) {\n"
+        "    int s = 0; for (size_t i = 0; i < size; ++i) s += items[i]; return s; }\n"
+    )
+    struct_harness = generate(p, "reserve")
+    assert "vec_t v_obj;" in struct_harness.code
+    assert "v_buf" not in struct_harness.code          # not treated as an array
+
+    # A scalar pointee next to a length is still a buffer.
+    buffer_harness = generate(p, "total")
+    assert "items_buf" in buffer_harness.code
+    assert any("harness bound on array length" in a for a in buffer_harness.assumptions)

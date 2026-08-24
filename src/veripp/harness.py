@@ -320,6 +320,12 @@ def _pair_buffers_with_lengths(
     for idx, param in enumerate(params):
         if not param.is_pointer:
             continue
+        if nondet_for(param.pointee(), typedefs) is None:
+            # A pointer to a struct is one object, not an array of them, even
+            # when a `size`-ish parameter sits next to it: `ucvector_reserve(
+            # ucvector* p, size_t size)` grows p's capacity, it does not
+            # describe p's length.
+            continue
         candidates = [
             f"{param.name}_len", f"{param.name}_size", f"{param.name}_count",
             f"n_{param.name}", f"{param.name}n",
