@@ -1,5 +1,9 @@
 # Benchmark corpus: real libraries veripp runs against
 
+**See [CORPUS.md](CORPUS.md) for measured results across nine popular
+libraries** — what was proved, what needs triage, and the veripp bugs each
+library exposed.
+
 Found by probing popular single-TU libraries through the ESBMC 8.4 frontend
 (`--goto-functions-only`) and then through the full veripp pipeline.
 `./benchmarks/run.sh` reproduces everything below from a clean checkout.

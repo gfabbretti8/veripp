@@ -57,10 +57,11 @@ Working and used on real libraries. veripp harnesses a function, a whole class
 triages counterexamples with any LLM; and refuses to call a vacuous or
 unsoundly-obtained result a proof.
 
-Measured on [lodepng](https://github.com/lvandeve/lodepng) (260 functions):
-82% harnessable, **99 proved** free of overflow, out-of-bounds, null deref and
-division by zero within the stated bounds, against 61 counterexamples to
-triage. See `ROADMAP.md` for what is not done, and
+Measured across nine popular C libraries — **40 of libpng's 70 functions
+proved**, 99 of lodepng's 260, 32 of cJSON's 117 — free of overflow,
+out-of-bounds, null dereference and division by zero for any input within the
+stated bounds. Full table, and the veripp bugs each library exposed, in
+[benchmarks/CORPUS.md](benchmarks/CORPUS.md). See `ROADMAP.md` for what is not done, and
 **Known limits** below for what to expect before you point it at your code.
 
 ## Requirements
