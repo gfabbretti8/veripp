@@ -160,8 +160,11 @@ class PromptedLLM:
         reply = self._ask(
             system=(
                 "The counterexample uses inputs real callers never pass.\n"
-                "Propose ONE C++ boolean expression that rules it out while "
-                "admitting every shown call site.\n"
+                "Propose ONE C++ boolean expression that is FALSE for the "
+                "counterexample inputs shown above -- so those inputs are "
+                "excluded -- and TRUE at every call site shown.\n"
+                "Do not restate the counterexample values: pinning a field to "
+                "the value that broke it excludes nothing.\n"
                 "Prefer the WEAKEST such condition the call sites support: an "
                 "over-tight condition produces a proof that means nothing.\n"
                 "You may use ONLY these parameter names:\n"

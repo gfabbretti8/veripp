@@ -192,3 +192,15 @@ class TestClassificationParsing:
     def test_no_label_at_all_is_an_error(self, context):
         with pytest.raises(LLMError, match="unusable classification"):
             self._classify("I am not sure about this one.", context)
+
+
+class TestPreconditionPrompt:
+    def test_it_says_the_expression_must_exclude_the_counterexample(self, context):
+        """A local model answered by pinning the field to the value that broke
+        it -- which excludes nothing. The prompt now states the requirement."""
+        with _Server("count > 0") as server:
+            OpenAICompatibleLLM(model="m", base_url=server.url).propose_precondition(context)
+            system = server.requests[0]["payload"]["messages"][0]["content"]
+        assert "FALSE for the counterexample inputs" in system
+        assert "TRUE at every call site" in system
+        assert "pinning a field to the value that broke it" in system

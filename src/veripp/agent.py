@@ -192,7 +192,7 @@ def verify_with_agent(
             diagnosis = triage_counterexample(target, source, result, llm)
             last_diagnosis = diagnosis
             if (
-                diagnosis.kind == "missing_assumption"
+                diagnosis.kind in ("missing_assumption", "harness_issue")
                 and diagnosis.proposed_precondition
                 and target is not None
                 and len(preconditions) < budget.max_precondition_rounds

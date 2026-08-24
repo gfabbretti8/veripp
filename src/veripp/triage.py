@@ -198,7 +198,11 @@ def triage_counterexample(
         kind = llm.classify(context)
         explanation = llm.explain(context)
         proposed = None
-        if kind == "missing_assumption" and context.parameters:
+        # `harness_issue` gets a proposal too. When a harness fills a struct
+        # with every possible field value, a model may reasonably call that a
+        # wrongly-modelled input rather than a missing precondition -- and the
+        # remedy is identical: constrain the input and let the solver rule.
+        if kind in ("missing_assumption", "harness_issue") and context.parameters:
             proposed = llm.propose_precondition(context)
         return Diagnosis(kind=kind, explanation=explanation,
                          proposed_precondition=proposed)
