@@ -53,10 +53,18 @@ gh workflow run image.yml -f push=false
 ```
 
 Rehearsed and green: amd64 on `ubuntu-24.04` (446 MB) and arm64 on
-`ubuntu-24.04-arm` (528 MB), 13/13 smoke tests each, the in-build `veripp
+`ubuntu-24.04-arm` (543 MB), 15/15 smoke tests each, the in-build `veripp
 doctor` passing both soundness probes on both, and the login/push/digest
 steps correctly skipped. Note that the arm64 runner was available on a
 private repository, which is not something to take for granted.
+
+A green run here is necessary and not sufficient. An earlier one passed
+13/13 on an arm64 image that could not parse a single line of real code,
+because every smoke fixture was self-contained. Two of the fifteen checks
+now include real system headers, which is what catches that class of
+failure — but before a release, still scan one real library through the
+built image and confirm it produces proofs and counterexamples rather than
+`parse_error`.
 
 Two things about this build are worth remembering before changing it:
 
