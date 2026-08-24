@@ -36,25 +36,30 @@ LLM can be that operator, and the solver keeps it honest.
 │                  cache keyed on function-body hash       │
 ├─────────────────────────────────────────────────────────┤
 │ 3. Agent loop    attempt → triage → escalate (budgeted)  │
-│                  LLM proposes harnesses / invariants /   │
-│                  assumptions; ESBMC checks every one     │
+│                  any LLM proposes preconditions; ESBMC   │
+│                  checks every one, and vacuous proofs    │
+│                  are rejected                            │
 ├─────────────────────────────────────────────────────────┤
 │ 2. Specification implicit properties (overflow, bounds,  │
 │                  UB, null deref — free) + explicit       │
 │                  contracts via veripp/contracts.hpp      │
 ├─────────────────────────────────────────────────────────┤
-│ 1. Ingestion     compile_commands.json + libclang slice  │
-│                  of the target function and its deps;    │
-│                  external calls get sound havoc stubs    │
+│ 1. Ingestion     compile_commands.json for include paths │
+│                  and defines; harnesses built from the   │
+│                  signature; unlinked callees disclosed   │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ## Status
 
-M1 (single-file MVP) works: the ESBMC runner and output parser are calibrated
-against real ESBMC 8.4 output, and `--function` generates the verification
-harness for you. The libclang slicer (multi-file projects) and LLM triage are
-next. See `ROADMAP.md`.
+Working and used on real libraries. veripp harnesses a function, a whole class
+(as a call sequence), or every function in a file; reads `compile_commands.json`;
+triages counterexamples with any LLM; and refuses to call a vacuous or
+unsoundly-obtained result a proof.
+
+Measured on [lodepng](https://github.com/lvandeve/lodepng) (260 functions):
+82% harnessable, 55 proved. See `ROADMAP.md` for what is not done, and
+**Known limits** below for what to expect before you point it at your code.
 
 ## Requirements
 
@@ -304,6 +309,32 @@ Two places this bites in practice, both handled explicitly:
   is recorded and printed with the result. When the generator cannot model a
   parameter soundly it refuses to emit a harness rather than emit a
   plausible-looking wrong one.
+
+## Known limits
+
+Read this before judging the output.
+
+- **Counterexamples need triage, and many are not bugs.** A generated harness
+  gives a struct every possible field value, including combinations no caller
+  can construct, so it will report failures that cannot happen in your program.
+  On lodepng most counterexamples were artifacts of exactly this. The proofs
+  are the trustworthy half; treat findings as leads, and use `--assume` (or an
+  LLM) to state what real callers guarantee.
+- **The released ESBMC is unsound for a common pattern.** v8.4 misses
+  out-of-bounds writes to a member array indexed by another member of the same
+  object ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508), fixed
+  upstream, unreleased). `veripp doctor` detects it and every affected result
+  says so. Use a master or `weekly` build.
+- **C and C-like C++ only.** ESBMC's C++ frontend does not digest STL-heavy
+  code; tinyxml2 crashes it and jsoncpp will not parse. Codecs, parsers and
+  embedded-style code work well.
+- **Bounded by default.** A proof covers executions within the unwind bound,
+  which is stated with every result.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: the LLM proposes,
+the solver disposes, and every result states what it assumed.
 
 ## License
 

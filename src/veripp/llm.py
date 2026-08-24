@@ -391,6 +391,22 @@ def _is_local(base_url: str) -> bool:
     return any(h in base_url for h in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]"))
 
 
+def detect_provider() -> str | None:
+    """The first provider this machine actually has credentials for.
+
+    Guessing a vendor the user never mentioned produces a confusing first run
+    ("no API key for api.openai.com" when they never said OpenAI), so the
+    default is whatever is configured -- and nothing, if nothing is.
+    """
+    if os.environ.get("VERIPP_LLM_BASE_URL"):
+        return "custom"
+    for name, entry in PROVIDERS.items():
+        env = entry.get("api_key_env", "ANTHROPIC_API_KEY")
+        if os.environ.get(env):
+            return name
+    return None
+
+
 def make_llm(spec: str | None = None, base_url: str | None = None) -> LLMClient:
     """Build a client from a `provider:model` string.
 
@@ -406,14 +422,25 @@ def make_llm(spec: str | None = None, base_url: str | None = None) -> LLMClient:
     offline mode with a note.
     """
     spec = spec or os.environ.get("VERIPP_LLM_MODEL") or ""
+    if not spec and base_url is None:
+        detected = detect_provider()
+        if detected is None:
+            raise RuntimeError(
+                "no LLM configured, so counterexamples will not be triaged. "
+                "Set one with --model (e.g. ollama:llama3.1 for a local model, "
+                "needing no account), or pass --no-llm to say so explicitly"
+            )
+        spec = detected
     provider, _, model = spec.partition(":")
-    if not model:  # bare model name, or nothing at all
-        provider, model = os.environ.get("VERIPP_LLM_PROVIDER", "openai"), provider
+    if not model:  # bare provider or bare model name
+        if provider.lower() in PROVIDERS:
+            provider, model = provider, ""
+        else:
+            provider, model = os.environ.get("VERIPP_LLM_PROVIDER", "openai"), provider
     provider = provider.lower()
 
-    if provider == "anthropic" or (not model and not spec):
-        if provider in ("", "anthropic"):
-            return AnthropicLLM(model or None)
+    if provider == "anthropic":
+        return AnthropicLLM(model or None)
 
     entry = PROVIDERS.get(provider)
     if entry is None and base_url is None:

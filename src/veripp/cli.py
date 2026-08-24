@@ -448,7 +448,7 @@ def _make_llm(args):
     try:
         llm = make_llm(getattr(args, "model", None), getattr(args, "llm_base_url", None))
     except RuntimeError as exc:
-        print(f"note: {exc}; falling back to offline mode", file=sys.stderr)
+        print(f"note: {exc}", file=sys.stderr)
         return NullLLM()
     print(f"note: triage via {llm.PROVIDER}", file=sys.stderr)
     return llm
