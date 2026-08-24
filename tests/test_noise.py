@@ -123,3 +123,50 @@ class TestMechanicalArtifacts:
         assert isinstance(diagnosis, Diagnosis)
         assert diagnosis.kind == "harness_issue"
         assert "harness artifact" in diagnosis.explanation
+
+
+class TestNullSourceNote:
+    """A null the harness introduced should be labelled as possibly ours.
+
+    Pointer fields become null when the type cannot be constructed or the
+    struct depth bound is reached. Seven of giflib's twelve leads were NULL
+    dereferences of exactly such a field. Calling them artifacts would be
+    wrong -- an unchecked pointer is a real bug class -- but the reader has
+    to know which nulls veripp put there.
+    """
+
+    def _report(self, assumptions, description="dereference failure: NULL pointer"):
+        from veripp.agent import AgentReport
+
+        return AgentReport(
+            final=VerifyResult(
+                Outcome.COUNTEREXAMPLE, VerifyConfig(),
+                properties=[ViolatedProperty(
+                    loc=SourceLoc(file="lib.c", line=1), description=description
+                )],
+            ),
+            assumptions=assumptions,
+        )
+
+    def test_a_null_from_an_unconstructible_type_is_flagged(self):
+        text = self._report(
+            ["pointer field `g.UserData` is null: `void` is not a type veripp can construct here"]
+        ).summary()
+        assert "NOTE" in text and "g.UserData" in text
+        assert "--assume" in text
+
+    def test_a_null_from_the_depth_bound_suggests_raising_it(self):
+        text = self._report(
+            ["pointer field `n.next` is null (struct depth bound 2 reached); deeper..."]
+        ).summary()
+        assert "--max-struct-depth" in text
+
+    def test_no_note_when_nothing_was_nulled(self):
+        assert "NOTE" not in self._report(["`x` points to one valid `int`"]).summary()
+
+    def test_no_note_for_an_unrelated_property(self):
+        text = self._report(
+            ["pointer field `g.UserData` is null: `void` is not a type..."],
+            description="division by zero",
+        ).summary()
+        assert "NOTE" not in text

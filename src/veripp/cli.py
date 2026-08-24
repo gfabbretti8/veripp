@@ -187,6 +187,13 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         "for a symbol esbmclibc lacks); repeatable",
     )
     bounds.add_argument(
+        "--max-struct-depth",
+        type=int,
+        default=HarnessOptions.max_struct_depth,
+        help="how far to follow pointer fields when building an object; "
+        "beyond it they are null, which is reported as an assumption",
+    )
+    bounds.add_argument(
         "--no-initializers",
         action="store_true",
         help="fill object parameters field by field instead of calling the "
@@ -213,6 +220,9 @@ def _harness_options(args) -> HarnessOptions:
     return HarnessOptions(
         max_array_len=args.max_array_len,
         max_calls=getattr(args, "max_calls", HarnessOptions.max_calls),
+        max_struct_depth=getattr(
+            args, "max_struct_depth", HarnessOptions.max_struct_depth
+        ),
         include_dirs=_include_dirs(args),
         link_sources=[s.resolve() for s in getattr(args, "link", [])],
         use_initializers=not getattr(args, "no_initializers", False),

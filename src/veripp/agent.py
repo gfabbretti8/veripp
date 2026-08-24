@@ -49,6 +49,34 @@ class AgentReport:
     def verified(self) -> bool:
         return self.final.outcome is Outcome.VERIFIED and not self.vacuous
 
+    def _depth_bound_hint(self) -> str | None:
+        """Flag a null the harness itself introduced.
+
+        Pointer fields are cut to null at --max-struct-depth, so a NULL
+        dereference may be that cut rather than a missing check in the code.
+        It is not safe to call it an artifact -- an unchecked pointer is a
+        real bug class -- but the reader should know which nulls are ours.
+        """
+        prop = self.final.violated_property
+        if prop is None or "NULL pointer" not in prop.description:
+            return None
+        nulled = [a for a in self.assumptions if "is null" in a]
+        if not nulled:
+            return None
+        deeper = any("depth bound" in a for a in nulled)
+        advice = (
+            "re-run with a larger --max-struct-depth to tell the two apart"
+            if deeper
+            else "a caller would have set it; constrain it with --assume, or "
+            "target a function that does not take it"
+        )
+        return (
+            "  NOTE: the harness left a pointer field null "
+            f"({nulled[0].split('`')[1] if '`' in nulled[0] else 'see assumptions'}"
+            f"), so this null may be the harness's rather than something a "
+            f"caller can produce. {advice.capitalize()}."
+        )
+
     def summary(self) -> str:
         headline = "VACUOUS (nothing was actually checked)" if self.vacuous \
             else self.final.outcome.value
@@ -112,6 +140,9 @@ class AgentReport:
                 lines.append(f"  guard: {prop.expression}")
             if prop.cwes:
                 lines.append(f"  CWE: {', '.join(prop.cwes)}")
+            hint = self._depth_bound_hint()
+            if hint:
+                lines.append(hint)
             inputs = self.final.input_summary()
             if inputs:
                 lines.append("Counterexample inputs:")
