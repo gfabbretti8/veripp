@@ -172,3 +172,96 @@ def test_struct_pointer_next_to_a_size_is_one_object_not_an_array(tmp_path):
     buffer_harness = generate(p, "total")
     assert "items_buf" in buffer_harness.code
     assert any("harness bound on array length" in a for a in buffer_harness.assumptions)
+
+
+class TestCountedPointerFields:
+    """`size_t itext_num` beside `char** itext_keys`, read one by the other.
+
+    Filling them independently -- one element, and a count up to 2**64 --
+    guarantees an out-of-bounds read no caller could cause. This was the
+    largest single source of false findings on lodepng.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "typedef struct {\n"
+        "  size_t itext_num; char** itext_keys;\n"
+        "  unsigned* data;   size_t data_size;\n"
+        "} Info;\n"
+        "static void walk(Info* i) {\n"
+        "  for (size_t k = 0; k != i->itext_num; ++k) (void)i->itext_keys[k];\n"
+        "  for (size_t k = 0; k != i->data_size; ++k) (void)i->data[k];\n"
+        "}\n"
+    )
+
+    def _code(self, tmp_path):
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC)
+        return generate(p, "walk").code
+
+    def test_the_buffer_gets_real_elements(self, tmp_path):
+        code = self._code(tmp_path)
+        assert "info_obj" not in code  # parameter is named `i` here
+        assert "_itext_keys_items[4]" in code
+        assert "_data_items[4]" in code
+
+    def test_the_count_is_bounded_to_match(self, tmp_path):
+        code = self._code(tmp_path)
+        assert "VERIPP_ASSUME(i_obj.itext_num <= 4);" in code
+        assert "VERIPP_ASSUME(i_obj.data_size <= 4);" in code
+
+    def test_the_bound_comes_after_the_count_is_assigned(self, tmp_path):
+        """A bound written before the nondet assignment is silently lost."""
+        lines = self._code(tmp_path).splitlines()
+        assigned = max(i for i, l in enumerate(lines) if "data_size = VERIPP_NONDET" in l)
+        bounded = min(i for i, l in enumerate(lines) if "VERIPP_ASSUME" in l)
+        assert bounded > assigned
+
+    def test_pointer_elements_are_null_so_freeing_them_is_safe(self, tmp_path):
+        assert "_itext_keys_items[veripp_k] = 0;" in self._code(tmp_path)
+
+    def test_a_self_referential_pointer_is_not_a_counted_buffer(self, tmp_path):
+        """`Widget* next` beside a `count` field is a chain, not an array."""
+        p = tmp_path / "n.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct Node { int count; struct Node* next; } Node;\n"
+            "static int walk(Node* n) { return n->next ? n->next->count : 0; }\n"
+        )
+        code = generate(p, "walk").code
+        assert "_target" in code          # the chain is followed
+        assert "_next_items" not in code  # not turned into an array
+
+
+class TestElaboratedTypeFields:
+    """C spells types `struct Node* next;`, and that is a field.
+
+    The scanner skipped any statement beginning with `struct`, treating it as
+    a nested type definition -- so C code that spells its types the C way lost
+    those fields silently, and the harness left them uninitialised.
+    """
+
+    SRC = (
+        "typedef struct Node {\n"
+        "  int count;\n"
+        "  struct Node* next;\n"
+        "  struct Inner { int z; } nested;\n"
+        "  union U { int a; float b; } choice;\n"
+        "} Node;\n"
+    )
+
+    def test_a_field_with_an_elaborated_type_is_kept(self):
+        names = [f.name for f in find_struct(self.SRC, "Node").fields]
+        assert "next" in names
+        assert names[:2] == ["count", "next"]
+
+    def test_a_nested_type_definition_is_still_skipped(self):
+        # `struct Inner { int z; } nested;` defines a type and a member; the
+        # definition must not be mistaken for a field of its own.
+        names = [f.name for f in find_struct(self.SRC, "Node").fields]
+        assert "Inner" not in names and "U" not in names
+
+    def test_elaborated_and_plain_spellings_are_the_same_type(self):
+        from veripp.harness import normalize_type
+
+        assert normalize_type("struct Node") == normalize_type("Node") == "Node"

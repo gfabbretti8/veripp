@@ -34,12 +34,15 @@ _TYPE_ALIASES = {
 
 
 def normalize_type(type_: str, typedefs: dict[str, str] | None = None) -> str:
-    """Canonical spelling of a scalar type: no cv-qualifiers, no namespaces.
+    """Canonical spelling of a type: no cv-qualifiers, keywords or namespaces.
+
+    `struct Node` and `Node` name the same type, and C code mixes the two
+    freely, so they have to compare equal.
 
     `typedefs` maps project-local aliases (`mz_ulong`) to their underlying
     types; chains are resolved by `collect_scalar_typedefs`.
     """
-    t = re.sub(r"\b(const|volatile|constexpr)\b", " ", type_)
+    t = re.sub(r"\b(const|volatile|constexpr|struct|union|enum|class)\b", " ", type_)
     t = t.replace("std::", "").replace("::", " ")
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"\s*([*&])", r"\1", t)  # `int *` == `int*`
@@ -782,9 +785,13 @@ def _signature_at(source: str, scrubbed: str, offset: int, name: str) -> Signatu
 
 # -------------------------------------------------------------- fields ----
 
-_FIELD_SKIP = re.compile(
-    r"^\s*(typedef|using|friend|static_assert|template|enum|class|struct|union)\b"
-)
+# `typedef`/`using`/`friend`/... never declare a data member. `struct`,
+# `union`, `enum` and `class` do when they are elaborated type specifiers --
+# `struct Node* next;` is a field, while `struct Inner { ... };` is a nested
+# definition. Only the definition (which carries a brace) is skipped, or C
+# code that spells its types the C way loses those fields silently.
+_FIELD_SKIP = re.compile(r"^\s*(typedef|using|friend|static_assert|template)\b")
+_NESTED_TYPE = re.compile(r"^\s*(enum|class|struct|union)\b[^;]*\{")
 _ARRAY_FIELD_RE = re.compile(r"^(.*?)\s*\[\s*([^\]]*)\s*\]\s*$")
 _BITFIELD_RE = re.compile(r":\s*\d+\s*$")
 
@@ -822,8 +829,10 @@ def find_struct(source: str, name: str) -> StructInfo:
         if acc:
             access = acc.group(1)
             continue
-        if _FIELD_SKIP.match(statement) or "(" in statement:
-            continue  # a method, a nested type, an alias
+        if _FIELD_SKIP.match(statement) or _NESTED_TYPE.match(statement):
+            continue  # an alias, or a nested type definition
+        if "(" in statement:
+            continue  # a method or a function-pointer member
         raw = statement.strip()
         if not raw or raw.startswith("static"):
             continue

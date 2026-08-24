@@ -933,6 +933,43 @@ def _emit_object(
     return lines
 
 
+def _pair_struct_fields(
+    info: StructInfo, typedefs: dict[str, str]
+) -> dict[str, str]:
+    """Pointer fields paired with the sibling field holding their count.
+
+    `LodePNGInfo` has `size_t itext_num` beside `char** itext_keys`, and
+    `LodePNGIText_cleanup` walks `itext_num` entries of `itext_keys`. Filling
+    both independently -- one element, and a count up to 2**64 -- guarantees an
+    out-of-bounds read that no caller could ever cause, and lodepng gets
+    blamed for it. This was the single largest source of false findings.
+    """
+    integers = {
+        f.name for f in info.fields
+        if not f.is_pointer and f.array_len is None and _is_integral(f.type, typedefs)
+    }
+    pointers = [
+        f for f in info.fields
+        if f.is_pointer and f.array_len is None
+        # A self-referential pointer is a link in a structure, not a counted
+        # buffer: `Widget* next` beside `int count` must stay a chain to
+        # follow, not become an array.
+        and normalize_type(f.pointee(), typedefs) != normalize_type(info.name, typedefs)
+    ]
+    pairs: dict[str, str] = {}
+    for f in pointers:
+        stem = f.name.rsplit("_", 1)[0] if "_" in f.name else f.name
+        candidates = [f"{stem}_{s}" for s in ("num", "count", "size", "len", "n")]
+        candidates += [f"{f.name}_{s}" for s in ("num", "count", "size", "len")]
+        match = next((c for c in candidates if c in integers), None)
+        if match is None and len(pointers) == 1:
+            # An unambiguous struct: one buffer, one plausible count.
+            match = next((c for c in integers if _is_length_name(c)), None)
+        if match is not None:
+            pairs[f.name] = match
+    return pairs
+
+
 def _fill_fields(
     info: StructInfo,
     prefix: str,
@@ -944,8 +981,19 @@ def _fill_fields(
     seen: set[str],
 ) -> list[str]:
     lines: list[str] = []
+    # Constraints are emitted after every field is assigned: a bound written
+    # before its count field is filled would be overwritten by the nondet
+    # assignment that follows, silently losing the constraint.
+    constraints: list[str] = []
+    pairs = _pair_struct_fields(info, typedefs)
     for f in info.fields:
         target = f"{prefix}.{f.name}"
+        if f.name in pairs:
+            lines += _fill_counted_pointer_field(
+                f, pairs[f.name], prefix, target, options, typedefs,
+                assumptions, constraints,
+            )
+            continue
         if f.array_len is not None:
             lines += _fill_array_field(f, target, typedefs, assumptions)
             continue
@@ -972,7 +1020,55 @@ def _fill_fields(
             )
     for raw, why in info.unsupported.items():
         assumptions.append(f"member `{raw}` was not initialised: {why}")
-    return lines
+    return lines + constraints
+
+
+def _fill_counted_pointer_field(
+    f: Field,
+    count_field: str,
+    prefix: str,
+    target: str,
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+    assumptions: list[str],
+    constraints: list[str],
+) -> list[str]:
+    """Give a counted pointer field a real array, and bound its count to it."""
+    cap = options.max_array_len
+    pointee = f.pointee()
+    storage = f"{target.replace('.', '_')}_items"
+    counter = f"{prefix}.{count_field}"
+
+    nondet = nondet_for(pointee, typedefs)
+    if nondet is not None:
+        fill = [
+            f"for (unsigned long veripp_k = 0; veripp_k < {cap}; ++veripp_k)",
+            f"    {storage}[veripp_k] = {nondet};",
+        ]
+        note = f"{cap} nondeterministic `{pointee}` elements"
+    elif pointee.rstrip().endswith("*"):
+        # An array of pointers (char** and friends). Null is the one value
+        # that is safe to free and safe to leave unread.
+        fill = [
+            f"for (unsigned long veripp_k = 0; veripp_k < {cap}; ++veripp_k)",
+            f"    {storage}[veripp_k] = 0;",
+        ]
+        note = f"{cap} null `{pointee}` elements"
+    else:
+        constraints.append(f"VERIPP_ASSUME({counter} == 0);")
+        return [f"{target} = 0;"]
+
+    assumptions.append(
+        f"`{target}` points to {note}, and `{counter}` is bounded to {cap} to "
+        "match; the two are filled together because the code reads one "
+        "according to the other"
+    )
+    constraints.append(f"VERIPP_ASSUME({counter} <= {cap});")
+    return [
+        f"static {pointee} {storage}[{cap}];",
+        *fill,
+        f"{target} = {storage};",
+    ]
 
 
 def _fill_array_field(
