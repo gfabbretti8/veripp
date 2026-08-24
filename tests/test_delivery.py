@@ -343,3 +343,59 @@ class TestContainerHint:
 
     def test_the_image_sets_the_marker(self) -> None:
         assert "VERIPP_IN_CONTAINER=1" in read("Dockerfile")
+
+
+class TestCveDemo:
+    """The demo the README leads with, and a RELEASING pre-tag gate.
+
+    It broke silently: the shim was C++-only (`#include <cstdlib>`, a bare
+    `extern "C"`), which stopped compiling once the harness started following
+    the source's language -- and stb_vorbis.c is C. Nothing in the suite ran
+    the demo, so nothing noticed.
+    """
+
+    SHIM = "demo/cve-2019-13223/shim.hpp"
+
+    def test_the_shim_compiles_as_c(self) -> None:
+        # Judge the code, not the comments explaining it. Three tests in this
+        # file have now been fooled by a comment quoting the thing they check.
+        code = "\n".join(
+            "" if line.lstrip().startswith(("//", "*", "/*")) else line
+            for line in read(self.SHIM).splitlines()
+        )
+
+        assert "<cstdlib>" not in code, (
+            "the harness for a .c translation unit is C; <cstdlib> does not "
+            "exist there"
+        )
+        assert "<stdlib.h>" in code
+
+        # A bare `extern "C"` is a syntax error in C, so it must be guarded.
+        lines = code.splitlines()
+        for line_no, line in enumerate(lines, 1):
+            if 'extern "C"' in line:
+                guard = "\n".join(lines[: line_no - 1])
+                assert "__cplusplus" in guard, (
+                    f'{self.SHIM}:{line_no} has an unguarded extern "C"'
+                )
+
+    @pytest.mark.esbmc
+    def test_the_demo_still_finds_and_fixes_the_cve(self, tmp_path) -> None:
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not on PATH")
+        script = ROOT / "demo/cve-2019-13223/run.sh"
+        result = subprocess.run(
+            ["bash", str(script), str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        if "git clone" in result.stderr and "fatal" in result.stderr:
+            pytest.skip("demo needs to clone stb")
+        output = result.stdout
+        assert "Result: counterexample" in output, output[-2000:]
+        assert "division by zero" in output, output[-2000:]
+        assert "Result: verified" in output, output[-2000:]
