@@ -129,10 +129,19 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # A manual dispatch with push:true is not on a tag, so every
+            # semver rule above yields nothing -- leaving `imagetools create`
+            # with no -t argument and a null tag to inspect. Give that case a
+            # tag of its own.
+            type=raw,value=dev-{{sha}},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Create the multi-arch manifest
         working-directory: /tmp/digests
         run: |
+          set -euo pipefail
+          test -n "$(ls -A .)" || { echo "::error::no digests were uploaded"; exit 1; }
+          jq -e '.tags | length > 0' <<< "$DOCKER_METADATA_OUTPUT_JSON" >/dev/null \
+            || { echo "::error::metadata-action produced no tags for ${{ github.ref }}"; exit 1; }
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
