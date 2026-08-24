@@ -143,6 +143,37 @@ class TestSkill:
     def test_warns_about_the_unsound_release(self) -> None:
         assert "6508" in read(self.PATH)
 
+    def test_every_flag_it_recommends_exists(self) -> None:
+        """A skill that suggests a flag the CLI does not have wastes a whole
+        agent turn on an unparseable command and teaches it to distrust the
+        tool. Cheap to check, so check it."""
+        import subprocess
+        import sys
+
+        text = read(self.PATH)
+        # `docker run --rm` and friends are not veripp flags.
+        docker_flags = {"--rm", "--platform", "--entrypoint", "--user"}
+        referenced = {
+            flag
+            for flag in re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", text)
+            if flag not in docker_flags
+        }
+
+        advertised: set[str] = set()
+        for sub in ([], ["verify"], ["scan"], ["harness"], ["doctor"]):
+            result = subprocess.run(
+                [sys.executable, "-m", "veripp.cli", *sub, "--help"],
+                capture_output=True,
+                text=True,
+                cwd=ROOT,
+            )
+            advertised |= set(
+                re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", result.stdout)
+            )
+
+        missing = sorted(referenced - advertised)
+        assert not missing, f"SKILL.md recommends flags the CLI lacks: {missing}"
+
     def test_exit_codes_match_the_cli(self) -> None:
         from veripp.cli import (
             EXIT_COUNTEREXAMPLE,
