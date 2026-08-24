@@ -363,7 +363,7 @@ def _verify(args) -> int:
         overflow_check=not args.no_overflow_check,
         extra_args=extra_args,
     )
-    llm = NullLLM() if args.no_llm else _make_llm(args)
+    llm, deferred_note = (NullLLM(), None) if args.no_llm else _make_llm(args)
     target_info = (
         TargetInfo(
             source=args.source,
@@ -384,6 +384,9 @@ def _verify(args) -> int:
     )
     if harness and getattr(args, "assume", None):
         report.accepted_preconditions = list(args.assume) + report.accepted_preconditions
+
+    if deferred_note and report.final.outcome is Outcome.COUNTEREXAMPLE:
+        print(f"note: {deferred_note}", file=sys.stderr)
 
     if report.final.outcome is Outcome.VERIFIED:
         try:
@@ -497,14 +500,19 @@ def _exit_code(report: AgentReport) -> int:
     return EXIT_INCONCLUSIVE
 
 
-def _make_llm(args):
+def _make_llm(args) -> tuple[object, str | None]:
+    """The triage client, plus a note to show only if it turns out to matter.
+
+    Telling someone their counterexamples will not be triaged is useless when
+    the answer is "verified" -- it is advice about a problem they do not have.
+    The note is held back and printed only when a counterexample appears.
+    """
     try:
         llm = make_llm(getattr(args, "model", None), getattr(args, "llm_base_url", None))
     except RuntimeError as exc:
-        print(f"note: {exc}", file=sys.stderr)
-        return NullLLM()
+        return NullLLM(), str(exc)
     print(f"note: triage via {llm.PROVIDER}", file=sys.stderr)
-    return llm
+    return llm, None
 
 
 def _esbmc_install_hint() -> str:

@@ -137,11 +137,12 @@ class TestScanEscalation:
     inconclusive results were a bound `verify` would have widened.
     """
 
+    # unwind 2 exhausts the bound; one escalation to 8 clears a loop of 6.
     SRC = (
         '#include "veripp/contracts.hpp"\n'
         "static int walk(unsigned n) {\n"
         "    int s = 0;\n"
-        "    for (unsigned i = 0; i < n && i < 20; ++i) s += 1;\n"
+        "    for (unsigned i = 0; i < n && i < 6; ++i) s += 1;\n"
         "    return s;\n"
         "}\n"
     )
@@ -164,3 +165,27 @@ class TestScanEscalation:
     def test_with_escalation_it_settles(self, tmp_path):
         outcomes = {r.name: r.outcome for r in self._scan(tmp_path, 1).results}
         assert outcomes["walk"] != "unwind_limit"
+
+
+class TestAdviceIsTimely:
+    def test_no_llm_hint_on_a_proof(self, capsys, src, monkeypatch):
+        """Telling someone their counterexamples will not be triaged is advice
+        about a problem they do not have when the answer is 'verified'."""
+        from veripp.cli import main
+
+        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VERIPP_LLM_MODEL",
+                    "VERIPP_LLM_BASE_URL"):
+            monkeypatch.delenv(var, raising=False)
+        main(["verify", str(src), "--function", "safe_add", "--timeout", "90"])
+        assert "no LLM configured" not in capsys.readouterr().err
+
+    def test_the_hint_appears_when_there_is_something_to_triage(
+        self, capsys, src, monkeypatch
+    ):
+        from veripp.cli import main
+
+        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VERIPP_LLM_MODEL",
+                    "VERIPP_LLM_BASE_URL"):
+            monkeypatch.delenv(var, raising=False)
+        main(["verify", str(src), "--function", "unsafe_div", "--timeout", "90"])
+        assert "no LLM configured" in capsys.readouterr().err
