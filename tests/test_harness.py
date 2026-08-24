@@ -344,3 +344,37 @@ class TestRealWorldCPreprocessor:
         src.write_text('#include "level1.h"\nint f(deep_t x) { return (int)x; }\n')
         expanded = _with_local_includes(src, src.read_text(), [tmp_path])
         assert collect_scalar_typedefs(expanded).get("deep_t") == "unsigned long"
+
+
+class TestTypeAliasChains:
+    """zlib writes its whole public API through aliases veripp could not follow."""
+
+    def test_a_pointer_typedef_makes_the_parameter_a_pointer(self, tmp_path):
+        """`typedef z_stream FAR *z_streamp;` -- without following it, a
+        `z_streamp` parameter is not seen as a pointer at all."""
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "#define FAR\n"
+            "typedef struct z_stream_s { int avail; } z_stream;\n"
+            "typedef z_stream FAR *z_streamp;\n"
+            "static int avail(z_streamp s) { return s->avail; }\n"
+        )
+        code = generate(p, "avail").code
+        assert "z_stream s_obj;" in code
+        assert "s_obj.avail = VERIPP_NONDET_INT();" in code
+
+    def test_a_typedef_through_a_type_macro_resolves(self):
+        """zlib reaches `unsigned long long` as z_word_t -> Z_U8 -> the type."""
+        from veripp.cppsig import collect_scalar_typedefs
+
+        src = "#define Z_U8 unsigned long long\ntypedef Z_U8 z_word_t;\n"
+        assert collect_scalar_typedefs(src)["z_word_t"] == "unsigned long long"
+
+    def test_a_function_like_macro_is_not_mistaken_for_a_type(self):
+        from veripp.cppsig import collect_scalar_typedefs
+
+        src = "#define MAX(a,b) ((a)>(b)?(a):(b))\ntypedef unsigned long uLong;\n"
+        types = collect_scalar_typedefs(src)
+        assert "MAX" not in types
+        assert types["uLong"] == "unsigned long"

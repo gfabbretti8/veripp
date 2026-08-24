@@ -30,6 +30,7 @@ from .cppsig import (
     Signature,
     SignatureError,
     collect_enum_types,
+    collect_pointer_typedefs,
     collect_scalar_typedefs,
     included_names,
     find_class,
@@ -214,6 +215,9 @@ def generate(
     typedefs = collect_scalar_typedefs(expanded)
     _ENUMS.clear()
     _ENUMS.update(collect_enum_types(expanded))
+    # Rewrite `z_streamp p` to `z_stream* p` once, so everything downstream
+    # sees an ordinary pointer.
+    _expand_pointer_aliases(signature, collect_pointer_typedefs(expanded))
     _reject_conflicting_main(text, source)
 
     body: list[str] = []
@@ -341,6 +345,21 @@ def _with_local_includes(
 
     absorb(source, text, depth)
     return "\n".join(parts)
+
+
+def _expand_pointer_aliases(signature: Signature, aliases: dict[str, str]) -> None:
+    """Rewrite `z_streamp p` to `z_stream* p` in place.
+
+    Doing it once here means everything downstream -- is_pointer, pointee,
+    object construction -- sees an ordinary pointer and needs no special case.
+    """
+    if not aliases:
+        return
+    for param in signature.params:
+        base = re.sub(r"\b(const|volatile)\b", " ", param.type).strip()
+        expansion = aliases.get(base)
+        if expansion is not None:
+            param.type = expansion
 
 
 def _reject_conflicting_main(text: str, source: Path) -> None:
@@ -796,6 +815,9 @@ def generate_sequence(
     typedefs = collect_scalar_typedefs(expanded)
     _ENUMS.clear()
     _ENUMS.update(collect_enum_types(expanded))
+    pointer_aliases = collect_pointer_typedefs(expanded)
+    for method in info.methods:
+        _expand_pointer_aliases(method, pointer_aliases)
     _reject_conflicting_main(text, source)
 
     callable_methods: list[Signature] = []

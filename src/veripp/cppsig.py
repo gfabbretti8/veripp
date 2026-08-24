@@ -59,6 +59,35 @@ def normalize_type(type_: str, typedefs: dict[str, str] | None = None) -> str:
 _TYPEDEF_RE = re.compile(
     r"\btypedef\s+((?:[A-Za-z_]\w*\s+)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*;"
 )
+#: `typedef z_stream FAR *z_streamp;` -- an alias for a pointer, and zlib's
+#: entire public API is written in terms of one.
+_POINTER_TYPEDEF_RE = re.compile(
+    r"\btypedef\s+((?:[A-Za-z_]\w*\s+)*[A-Za-z_]\w*)\s+(\*+)\s*([A-Za-z_]\w*)\s*;"
+)
+#: `#define Z_U8 unsigned long long` -- an object-like macro standing in for a
+#: type, which a typedef then aliases.
+_TYPE_MACRO_RE = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+"
+    r"((?:(?:unsigned|signed|const|long|short|int|char|float|double|_Bool)\b[ \t]*)+"
+    r"|[A-Za-z_]\w*)[ \t]*$",
+    re.M,
+)
+
+
+def collect_pointer_typedefs(source: str) -> dict[str, str]:
+    """Aliases that name a pointer: `typedef z_stream *z_streamp;`.
+
+    Without these, a parameter of type `z_streamp` is not seen as a pointer at
+    all, and every function in zlib's public API is refused.
+    """
+    scrubbed = scrub(source)
+    vanishing = empty_macros(source)
+    aliases: dict[str, str] = {}
+    for m in _POINTER_TYPEDEF_RE.finditer(scrubbed):
+        base = " ".join(w for w in m.group(1).split() if w not in vanishing)
+        if base:
+            aliases[m.group(3)] = f"{base}{m.group(2)}"
+    return aliases
 _USING_RE = re.compile(r"\busing\s+([A-Za-z_]\w*)\s*=\s*([^;<>{}]+);")
 
 
@@ -90,6 +119,10 @@ def collect_scalar_typedefs(source: str) -> dict[str, str]:
         return " ".join(kept)
 
     raw: dict[str, str] = {}
+    # An object-like macro standing in for a type is one more link in the
+    # chain: zlib reaches `unsigned long long` as z_word_t -> Z_U8 -> the type.
+    for m in _TYPE_MACRO_RE.finditer(source):
+        raw[m.group(1)] = strip_macros(m.group(2).strip())
     for m in _TYPEDEF_RE.finditer(scrubbed):
         raw[m.group(2)] = strip_macros(m.group(1).strip())
     for m in _USING_RE.finditer(scrubbed):
