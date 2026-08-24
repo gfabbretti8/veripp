@@ -361,3 +361,37 @@ class TestStructAliases:
                      "static int kind(JSON_Value* v) { return v->type; }\n")
         code = generate(p, "kind").code
         assert "v_obj.type = VERIPP_NONDET_INT();" in code
+
+
+class TestUnions:
+    """C libraries hand out unions as handle types.
+
+    `LZ4_stream_t` is `union LZ4_stream_u`, and a scanner that knows only
+    class and struct refuses every function taking one -- 10 of lz4's.
+    """
+
+    SRC = (
+        "union LZ4_stream_u { long long table[4]; void* p; };\n"
+        "typedef union LZ4_stream_u LZ4_stream_t;\n"
+    )
+
+    def test_a_union_is_found(self):
+        info = find_struct(self.SRC, "LZ4_stream_u")
+        assert info.is_union
+        assert [f.name for f in info.fields] == ["table", "p"]
+
+    def test_a_union_alias_resolves(self):
+        assert find_struct(self.SRC, "LZ4_stream_t").is_union
+
+    def test_members_are_not_filled_one_by_one(self, tmp_path):
+        """They share storage, so assigning each in turn would model only the
+        last. Left alone, the object is nondeterministic bytes -- every member
+        at once."""
+        p = tmp_path / "s.c"
+        p.write_text('#include "veripp/contracts.hpp"\n' + self.SRC +
+                     "static int use(LZ4_stream_t* s) { return s->p ? 1 : 0; }\n")
+        harness = generate(p, "use")
+        assert "s_obj.table" not in harness.code
+        assert "s_obj.p =" not in harness.code
+        assert any("union, left nondeterministic" in a for a in harness.assumptions)
+        assert "LZ4_stream_t s_obj;" in harness.code

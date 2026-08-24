@@ -285,7 +285,10 @@ class _ClassRange:
     templated: bool = False
 
 
-_CLASS_RE = re.compile(r"\b(class|struct)\s+([A-Za-z_]\w*)\s*(?::[^;{]*)?\{")
+# `union` belongs here: C libraries routinely hand out a union as a handle
+# type (LZ4_stream_t is `union LZ4_stream_u`), and a scanner that only knows
+# class and struct refuses every function taking one.
+_CLASS_RE = re.compile(r"\b(class|struct|union)\s+([A-Za-z_]\w*)\s*(?::[^;{]*)?\{")
 
 
 def find_class_ranges(scrubbed: str) -> list[_ClassRange]:
@@ -922,8 +925,8 @@ def _matching_open(scrubbed: str, close: int) -> int | None:
 
 
 def _is_union(scrubbed: str, rng: "_ClassRange") -> bool:
-    head = scrubbed[max(0, rng.start - 200) : rng.start]
-    return bool(re.search(r"\bunion\s+\w*\s*$", head))
+    head = scrubbed[max(0, rng.start - 400) : rng.start]
+    return bool(re.search(r"\bunion\b[^;{}]*$", head))
 
 
 def _field_statements(scrubbed: str, rng: "_ClassRange"):

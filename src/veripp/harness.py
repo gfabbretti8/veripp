@@ -1030,6 +1030,16 @@ def _fill_fields(
     assumptions: list[str],
     seen: set[str],
 ) -> list[str]:
+    if info.is_union:
+        # A union's members share storage, so assigning them in turn would
+        # leave only the last one set and quietly narrow the input. Left
+        # alone, ESBMC treats the object as nondeterministic bytes, which
+        # covers every member at once.
+        assumptions.append(
+            f"`{prefix}` is a union, left nondeterministic: its members share "
+            "storage, so filling them one by one would model only the last"
+        )
+        return []
     lines: list[str] = []
     # Constraints are emitted after every field is assigned: a bound written
     # before its count field is filled would be overwritten by the nondet
