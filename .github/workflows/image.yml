@@ -149,6 +149,9 @@ jobs:
           test -n "$(ls -A .)" || { echo "::error::no digests were uploaded"; exit 1; }
           jq -e '.tags | length > 0' <<< "$DOCKER_METADATA_OUTPUT_JSON" >/dev/null \
             || { echo "::error::metadata-action produced no tags for ${{ github.ref }}"; exit 1; }
+          # Word splitting is the point here: both expansions produce
+          # multiple arguments (-t tag -t tag ... and one ref per digest).
+          # shellcheck disable=SC2046
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
