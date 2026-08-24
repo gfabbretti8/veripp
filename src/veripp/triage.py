@@ -20,6 +20,47 @@ from .llm import LLMClient, LLMError, TriageContext
 
 MAX_CALL_SITES = 20
 
+#: Failures that are the harness's doing by construction, whatever the code
+#: under test does. Recognising them needs no model, and reporting them as
+#: findings is how a verifier teaches people to ignore it.
+_MECHANICAL_ARTIFACTS: tuple[tuple[str, str], ...] = (
+    (
+        "free() of non-dynamic memory",
+        "the harness supplies this pointer from stack or static storage, so "
+        "any free() of it fails by construction. Nothing is said about the "
+        "code under test; verify a caller that allocates, or pre-fill the "
+        "field with heap memory",
+    ),
+    (
+        "Operand of free must have zero pointer offset",
+        "the harness supplies this pointer, so the offset it is freed at is "
+        "the harness's doing, not the library's",
+    ),
+)
+
+
+def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
+    """Why this counterexample is an artifact, when that is decidable offline.
+
+    A generated harness makes simplifications, and some failures follow from
+    those simplifications alone. Those are not findings, and a tool whose
+    loudest output is its own artifacts trains people to stop reading it.
+    """
+    prop = result.violated_property
+    if prop is None:
+        return None
+    for needle, why in _MECHANICAL_ARTIFACTS:
+        if needle in prop.description:
+            return why
+    # A property that fails inside the generated file, rather than in the code
+    # under test, is by definition about the harness.
+    if prop.loc.file and Path(prop.loc.file).name == harness_path.name:
+        return (
+            "the failing property is in the generated harness itself, not in "
+            "the code under test"
+        )
+    return None
+
 
 @dataclass
 class TargetInfo:
@@ -140,6 +181,19 @@ def triage_counterexample(
 ) -> Diagnosis:
     """Classify one counterexample; degrade to offline defaults on LLM failure."""
     context = build_context(target, harness_path, result)
+
+    artifact = mechanical_artifact(result, harness_path)
+    if artifact is not None:
+        # Decidable without a model, so do not spend a call -- or risk one
+        # disagreeing.
+        return Diagnosis(
+            kind="harness_issue",
+            explanation=(
+                f"{context.violated_property or 'Property violated'}. This is a "
+                f"harness artifact: {artifact}."
+            ),
+        )
+
     try:
         kind = llm.classify(context)
         explanation = llm.explain(context)

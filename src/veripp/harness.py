@@ -399,7 +399,7 @@ def _emit_scalar(
             obj = _try_object(param, signature, assumptions, options, typedefs, source_text)
             if obj is not None:
                 return obj
-        return _emit_lone_pointer(param, assumptions, options, typedefs)
+        return _emit_lone_pointer(param, assumptions, options, typedefs, signature.body)
     if param.is_reference:
         if source_text and nondet_for(param.pointee(), typedefs) is None:
             obj = _try_object(param, signature, assumptions, options, typedefs, source_text)
@@ -435,6 +435,7 @@ def _emit_lone_pointer(
     assumptions: list[str],
     options: HarnessOptions,
     typedefs: dict[str, str],
+    body: str = "",
 ) -> list[str]:
     pointee = param.pointee()
     if param.is_const and normalize_type(pointee, typedefs) == "char":
@@ -461,15 +462,79 @@ def _emit_lone_pointer(
             f"parameter `{param.type} {param.name}` points to `{pointee}`, which "
             "the generator cannot construct; write the harness by hand."
         )
-    storage = f"{param.name}_obj"
+
+    # A pointer with no length parameter is not necessarily a pointer to one
+    # element -- output parameters like `Adam7_getpassvalues(unsigned* passw,
+    # ...)` write several. Giving it a single element made the function
+    # overrun a buffer the harness made too small, and reported the library
+    # for it. Size it from how the function actually indexes the pointer.
+    extent = _indexed_extent(param, body, options)
+    if extent <= 1:
+        storage = f"{param.name}_obj"
+        assumptions.append(
+            f"`{param.name}` is non-null and points to one valid, "
+            f"nondeterministic `{pointee}` (no length parameter was found, and "
+            "the body indexes it only at 0)"
+        )
+        return [
+            f"{pointee} {storage} = {nondet};",
+            f"{_decl_type(param.type)} {param.name} = &{storage};",
+        ]
+
+    storage = f"{param.name}_buf"
     assumptions.append(
-        f"`{param.name}` is non-null and points to one valid, "
-        f"nondeterministic `{pointee}` (no length parameter was found)"
+        f"`{param.name}` is non-null and points to at least {extent} valid "
+        f"`{pointee}` elements (no length parameter; {extent} is the highest "
+        "index the body uses)"
     )
+    var = f"veripp_i_{param.name}"
     return [
-        f"{pointee} {storage} = {nondet};",
-        f"{_decl_type(param.type)} {param.name} = &{storage};",
+        f"{pointee} {storage}[{extent}];",
+        f"for (unsigned long {var} = 0; {var} < {extent}; ++{var})",
+        f"    {storage}[{var}] = {nondet};",
+        f"{_decl_type(param.type)} {param.name} = {storage};",
     ]
+
+
+_MAX_INFERRED_EXTENT = 64
+
+
+def _indexed_extent(param: Param, body: str, options: HarnessOptions) -> int:
+    """How many elements of `param` the body touches, as far as we can tell.
+
+    Reads literal indices (`p[3]`) and loop bounds over the pointer
+    (`for (i = 0; i < 7; ++i) p[i]`). When the body indexes with something we
+    cannot evaluate, fall back to the harness array bound rather than to one
+    element: too small a buffer manufactures out-of-bounds reports against
+    code that is fine.
+    """
+    if not body:
+        return 1
+    scrubbed = scrub(body)
+    name = re.escape(param.name)
+    highest = 0
+    unknown = False
+
+    for m in re.finditer(rf"\b{name}\s*\[\s*([^\]]+?)\s*\]", scrubbed):
+        index = m.group(1).strip()
+        if index.isdigit():
+            highest = max(highest, int(index) + 1)
+        else:
+            unknown = True
+            # `p[i]` where a nearby loop bounds i by a literal. `i < 7`
+            # reaches index 6, `i <= 7` reaches 7 -- being generous here would
+            # hand the function more memory than a caller has and hide a real
+            # overflow, so the operator matters.
+            for bound in re.finditer(
+                rf"\b{re.escape(index)}\s*(<=?)\s*(\d+)", scrubbed
+            ):
+                limit = int(bound.group(2))
+                highest = max(highest, limit + 1 if bound.group(1) == "<=" else limit)
+    if not highest and not unknown:
+        return 1
+    if unknown and highest == 0:
+        highest = options.max_array_len
+    return min(highest, _MAX_INFERRED_EXTENT)
 
 
 def _emit_reference(

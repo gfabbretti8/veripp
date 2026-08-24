@@ -223,6 +223,8 @@ def _scan(args) -> int:
             return
         mark = {"verified": "PROVED", "counterexample": "COUNTEREX",
                 "refused": "skip"}.get(result.outcome, result.outcome)
+        if result.artifact:
+            mark = "artifact"
         print(f"[{done:4d}/{total}] {mark:>10}  {result.name}", file=sys.stderr)
         seen.append(result.name)
 
@@ -237,6 +239,10 @@ def _scan(args) -> int:
                 {"function": r.name, "signature": r.signature, "property": r.detail,
                  "assumptions": r.assumptions, "stubbed_calls": r.stubbed_calls}
                 for r in report.counterexamples
+            ],
+            "artifacts": [
+                {"function": r.name, "property": r.detail, "why": r.artifact}
+                for r in report.artifacts
             ],
             "inconclusive": [{"function": r.name, "outcome": r.outcome} for r in report.inconclusive],
             "not_harnessable": report.refusal_reasons(),

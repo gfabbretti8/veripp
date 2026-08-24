@@ -15,6 +15,7 @@ from .cppsig import SignatureError, function_definitions
 from .esbmc import Outcome, VerifyConfig, run
 from .harness import HarnessError, HarnessOptions, generate
 from .paths import scratch_dir
+from .triage import mechanical_artifact
 
 
 @dataclass
@@ -26,6 +27,8 @@ class FunctionResult:
     assumptions: list[str] = field(default_factory=list)
     stubbed_calls: list[str] = field(default_factory=list)
     duration_s: float | None = None
+    #: Set when the failure follows from the harness's own simplifications.
+    artifact: str | None = None
 
     @property
     def proved(self) -> bool:
@@ -44,7 +47,15 @@ class ScanReport:
 
     @property
     def counterexamples(self) -> list[FunctionResult]:
-        return [r for r in self.results if r.outcome == Outcome.COUNTEREXAMPLE.value]
+        """Failures worth a human's attention: artifacts are excluded."""
+        return [
+            r for r in self.results
+            if r.outcome == Outcome.COUNTEREXAMPLE.value and not r.artifact
+        ]
+
+    @property
+    def artifacts(self) -> list[FunctionResult]:
+        return [r for r in self.results if r.artifact]
 
     @property
     def refused(self) -> list[FunctionResult]:
@@ -74,6 +85,8 @@ class ScanReport:
             "within the stated bounds and assumptions",
             f"  COUNTEREXAMPLE   {len(self.counterexamples):4d}  "
             "a property fails for some input -- triage each one",
+            f"  HARNESS ARTIFACT {len(self.artifacts):4d}  "
+            "failed because of how the harness was built, not the code",
             f"  INCONCLUSIVE     {len(self.inconclusive):4d}  "
             "timed out, hit the unwind bound, or the frontend refused it",
             f"  NOT HARNESSABLE  {len(self.refused):4d}  "
@@ -154,6 +167,7 @@ def scan(
             assumptions=harness.assumptions,
             stubbed_calls=result.stubbed_calls,
             duration_s=result.duration_s,
+            artifact=mechanical_artifact(result, path),
         )
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
