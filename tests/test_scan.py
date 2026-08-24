@@ -278,3 +278,42 @@ class TestGeneratedCIsValidC:
         )
         code = generate(p, "len").code
         assert "i_obj.label = &" in code
+
+
+class TestEmptyScan:
+    """"0 functions" is a useless answer when the fix is one flag away."""
+
+    def test_an_empty_scan_does_not_crash(self, tmp_path):
+        """summary() divided by the candidate count, so a file with no
+        functions produced a traceback rather than a sentence."""
+        from veripp.esbmc import VerifyConfig
+        from veripp.harness import HarnessOptions
+        from veripp.scan import scan
+
+        p = tmp_path / "decls.h"
+        p.write_text("int f(int);\nint g(void);\n")
+        report = scan(p, VerifyConfig(), HarnessOptions(), jobs=1)
+        assert report.candidates == 0
+        assert "no function definitions found" in report.summary()
+
+    def test_a_single_header_wrapper_is_pointed_at_its_header(self, tmp_path):
+        from veripp.esbmc import VerifyConfig
+        from veripp.harness import HarnessOptions
+        from veripp.scan import scan
+
+        (tmp_path / "xxhash.h").write_text("int hash(int x) { return x; }\n")
+        wrapper = tmp_path / "xxhash.c"
+        wrapper.write_text("#define XXH_IMPLEMENTATION\n#include \"xxhash.h\"\n")
+        summary = scan(wrapper, VerifyConfig(), HarnessOptions(), jobs=1).summary()
+        assert "The code is in the header" in summary
+        assert "xxhash.h" in summary
+        assert "-D XXH_IMPLEMENTATION" in summary
+
+    def test_a_plain_header_gets_the_generic_advice(self, tmp_path):
+        from veripp.esbmc import VerifyConfig
+        from veripp.harness import HarnessOptions
+        from veripp.scan import scan
+
+        p = tmp_path / "api.h"
+        p.write_text("int f(int);\n")
+        assert "scan the .c/.cpp" in scan(p, VerifyConfig(), HarnessOptions(), jobs=1).summary()

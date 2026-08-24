@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 from dataclasses import dataclass, field
+import re
 from pathlib import Path
 
 from .cppsig import SignatureError, function_definitions
@@ -74,8 +75,23 @@ class ScanReport:
             counts[_reason(r.detail)] = counts.get(_reason(r.detail), 0) + 1
         return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
 
+    #: A wrapper whose only job is to define a macro and include the real
+    #: header. Very common for single-header libraries, and scanning it finds
+    #: nothing at all.
+    implementation_hint: str | None = None
+
     def summary(self) -> str:
         total = self.candidates or len(self.results)
+        if not total:
+            lines = [f"Scanned {self.source}", "  no function definitions found."]
+            if self.implementation_hint:
+                lines.append(f"  {self.implementation_hint}")
+            else:
+                lines.append(
+                    "  Nothing here defines a function -- if this is a header of "
+                    "declarations, scan the .c/.cpp that implements them."
+                )
+            return "\n".join(lines)
         attempted = len(self.results) - len(self.refused)
         lines = [
             f"Scanned {self.source}",
@@ -105,6 +121,31 @@ class ScanReport:
             if len(self.counterexamples) > 20:
                 lines.append(f"    ... and {len(self.counterexamples) - 20} more")
         return "\n".join(lines)
+
+
+_IMPL_DEFINE_RE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+(\w*IMPL\w*)", re.M | re.I)
+_LOCAL_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"', re.M)
+
+
+def _implementation_hint(source: Path, text: str) -> str | None:
+    """Advice for a file that only switches on an implementation header.
+
+    Single-header libraries ship a .c whose whole content is a #define and an
+    #include. Scanning it finds nothing, and "0 functions" is a useless answer
+    when the fix is one flag away.
+    """
+    includes = _LOCAL_INCLUDE.findall(text)
+    if not includes:
+        return None
+    header = includes[0]
+    defines = _IMPL_DEFINE_RE.findall(text)
+    flags = " ".join(f"-D {d}" for d in defines)
+    target = source.parent / header
+    where = target if target.is_file() else header
+    return (
+        f"This file only switches on `{header}`. The code is in the header: "
+        f"veripp scan {where}" + (f" {flags}" if flags else "")
+    )
 
 
 def _reason(detail: str) -> str:
@@ -142,6 +183,9 @@ def scan(
     # the program's own main in another one.
     names = only or [n for n in function_definitions(text) if n != "main"]
     report = ScanReport(source=source, candidates=len(names))
+    if not names:
+        report.implementation_hint = _implementation_hint(source, text)
+        return report
     workdir = scratch_dir("veripp-scan-")
 
     def one(name: str) -> FunctionResult:
