@@ -65,8 +65,8 @@ next. See `ROADMAP.md`.
   [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
   out-of-bounds writes in ordinary container code. `veripp doctor` checks this
   for you. On macOS: `brew install --HEAD esbmc`.
-- An Anthropic API key in `ANTHROPIC_API_KEY` (only needed for agent mode;
-  `--no-llm` runs the plain verifier pipeline)
+- An LLM, only for triage — see below. `--no-llm` runs the plain verifier
+  pipeline with no model at all.
 
 ESBMC is a C++ binary, not a Python package, so uv cannot install it — that
 one is on you:
@@ -144,6 +144,31 @@ veripp verify examples/ring_buffer.cpp --class RingBuffer --max-calls 6 \
 
 Without `--function` or `--class`, veripp verifies the file's own `main()` —
 useful when you have written the harness yourself.
+
+## Bring your own model
+
+Triage works with any provider, and veripp needs no extra packages for most of
+them — everything except Anthropic speaks the OpenAI-compatible HTTP API,
+which veripp calls with the standard library.
+
+```bash
+veripp verify src/parser.cpp --function parse   --model openai:gpt-4o-mini
+veripp verify src/parser.cpp --function parse   --model gemini:gemini-2.0-flash
+veripp verify src/parser.cpp --function parse   --model groq:llama-3.3-70b-versatile
+veripp verify src/parser.cpp --function parse   --model ollama:llama3.1   # local, no account
+veripp verify src/parser.cpp --function parse   --model anthropic:claude-opus-5
+```
+
+Built-in: `anthropic`, `openai`, `gemini`, `groq`, `together`, `deepseek`,
+`mistral`, `openrouter`, `ollama`, `lmstudio`. Anything else that speaks the
+same API — a self-hosted gateway, vLLM, Azure — works with
+`--llm-base-url https://…`. Defaults come from `$VERIPP_LLM_MODEL` and
+`$VERIPP_LLM_BASE_URL`; `veripp doctor` lists which providers have credentials.
+
+**A small model is a reasonable choice here.** Every proposal is re-checked by
+ESBMC, so a wrong guess costs a retry, not a wrong answer.
+`benchmarks/eval_triage.py --models a,b,c` scores providers against known
+answers so you can pick on evidence.
 
 ## Scan a whole file
 

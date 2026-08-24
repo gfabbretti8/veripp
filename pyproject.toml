@@ -23,7 +23,10 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-llm = ["anthropic>=0.40"]
+# Only the Anthropic provider needs a package: every other provider speaks the
+# OpenAI-compatible HTTP API, which veripp calls with the standard library.
+anthropic = ["anthropic>=0.40"]
+llm = ["anthropic>=0.40"]  # kept as an alias
 
 [project.scripts]
 veripp = "veripp.cli:main"

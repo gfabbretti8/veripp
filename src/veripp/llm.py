@@ -1,20 +1,27 @@
-"""LLM client abstraction.
+"""LLM clients. Any provider, or none at all.
 
-The rest of the codebase depends only on this interface, so the tool runs
-fully offline with NullLLM (plain verifier pipeline) and can swap providers.
+The rest of the codebase depends only on `LLMClient`, so veripp runs fully
+offline with `NullLLM` and is not tied to a vendor.
 
 Design rule: the LLM only ever *proposes* -- a classification, an explanation,
-a precondition expression, a rewritten file. Every proposal that affects a
-verification verdict is re-checked by ESBMC before anything is reported.
+a precondition, a rewritten file. Every proposal that could change a verdict is
+re-checked by ESBMC. A wrong proposal costs a retry, never soundness, which is
+why a small cheap model is a reasonable choice here.
 
-The prompts here encode what the triage pilot measured: classification is
-decided by the function's REAL CALL SITES, not by the trace alone. Without
-call sites, all three pilot counterexamples were misread as real bugs; with
-them, all three were correctly triaged.
+The prompts live in `PromptedLLM` and are identical for every provider; a
+provider supplies only `_ask`. They encode what the triage pilot measured:
+classification is decided by a function's REAL CALL SITES, not by the trace.
+Without call sites all three pilot counterexamples were misread as real bugs;
+with them, all three were triaged correctly.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -55,8 +62,8 @@ class TriageContext:
 class LLMError(Exception):
     """The LLM could not be reached or answered unusably.
 
-    Triage catches this and degrades to the conservative offline behaviour;
-    it must never abort a verification run.
+    Triage catches this and degrades to conservative offline behaviour; it must
+    never abort a verification run.
     """
 
 
@@ -75,6 +82,8 @@ class LLMClient(Protocol):
 class NullLLM:
     """Offline mode: no proposals, conservative classifications."""
 
+    PROVIDER = "none"
+
     def classify(self, context: TriageContext) -> str:
         return "real_bug"  # conservative default: surface it to the user
 
@@ -82,7 +91,7 @@ class NullLLM:
         return (
             f"{context.violated_property or 'Property violated'}. "
             "Offline mode: the counterexample was not analysed against the "
-            "function's call sites; run with an LLM enabled for triage."
+            "function's call sites; enable an LLM for triage."
         )
 
     def propose_precondition(self, context: TriageContext) -> str | None:
@@ -95,78 +104,21 @@ class NullLLM:
         return None
 
 
-class AnthropicLLM:
-    """Claude-backed client.
+# ------------------------------------------------------- shared prompting ---
 
-    Credentials resolve through the SDK's normal chain (ANTHROPIC_API_KEY,
-    ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile) -- an unset env var
-    alone does not mean offline.
+
+class PromptedLLM:
+    """Everything veripp asks an LLM, expressed through one primitive.
+
+    Subclasses implement `_ask` and nothing else, so adding a provider cannot
+    accidentally change what is asked.
     """
 
-    MODEL = "claude-opus-5"
+    MODEL = ""
+    PROVIDER = "llm"
 
-    def __init__(self, model: str | None = None):
-        try:
-            import anthropic
-        except ImportError as exc:
-            raise RuntimeError(
-                "the `anthropic` package is not installed "
-                "(pip install 'veripp[llm]'), or use --no-llm"
-            ) from exc
-        self._anthropic = anthropic
-        # Construction resolves ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or an
-        # `ant auth login` profile; an unset env var alone does not mean there
-        # are no credentials. It succeeds even with none, and only fails when a
-        # request is sent -- so check here to fall back to offline mode with a
-        # note, rather than dying mid-run.
-        self._client = anthropic.Anthropic()
-        if not (getattr(self._client, "api_key", None)
-                or getattr(self._client, "auth_token", None)):
-            raise RuntimeError(
-                "no Anthropic credentials found (set ANTHROPIC_API_KEY, or run "
-                "`ant auth login`); use --no-llm to silence this"
-            )
-        self._model = model or self.MODEL
-
-    # -- prompt plumbing -------------------------------------------------
-
-    def _ask(self, system: str, user: str, max_tokens: int = 16000,
-             effort: str = "high") -> str:
-        anthropic = self._anthropic
-        try:
-            msg = self._client.messages.create(
-                model=self._model,
-                max_tokens=max_tokens,
-                system=system,
-                output_config={"effort": effort},
-                messages=[{"role": "user", "content": user}],
-            )
-        except anthropic.AuthenticationError as exc:
-            raise LLMError(
-                "no usable Anthropic credentials (set ANTHROPIC_API_KEY or "
-                "run `ant auth login`), or use --no-llm"
-            ) from exc
-        except anthropic.RateLimitError as exc:
-            raise LLMError("Anthropic API rate limit hit") from exc
-        except anthropic.APIStatusError as exc:
-            raise LLMError(f"Anthropic API error {exc.status_code}") from exc
-        except anthropic.APIConnectionError as exc:
-            raise LLMError("could not reach the Anthropic API") from exc
-        except TypeError as exc:  # SDK raises this when auth resolves to nothing
-            raise LLMError(f"Anthropic client is not usable: {exc}") from exc
-        return "".join(b.text for b in msg.content if b.type == "text")
-
-    @staticmethod
-    def _extract_code(reply: str) -> str | None:
-        import re
-
-        m = re.search(r"```(?:cpp|c\+\+|c)?\n(.*?)```", reply, re.S)
-        return m.group(1) if m else None
-
-    def _write_variant(self, source: Path, code: str, tag: str) -> Path:
-        out = source.with_name(f"{source.stem}.{tag}{source.suffix}")
-        out.write_text(code)
-        return out
+    def _ask(self, system: str, user: str, max_tokens: int = 16000) -> str:
+        raise NotImplementedError
 
     # -- triage ----------------------------------------------------------
 
@@ -187,9 +139,8 @@ class AnthropicLLM:
                 "the function's documented or obvious contract"
             ),
             user=context.render(),
-            effort="high",
         )
-        word = reply.strip().split()[0].strip(".:,") if reply.strip() else ""
+        word = reply.strip().split()[0].strip(".:,`*") if reply.strip() else ""
         if word not in KINDS:
             raise LLMError(f"unusable classification reply: {reply[:80]!r}")
         return word
@@ -204,39 +155,39 @@ class AnthropicLLM:
                 "No speculation beyond the trace and the shown code."
             ),
             user=context.render(),
-            effort="high",
         )
 
     def propose_precondition(self, context: TriageContext) -> str | None:
         reply = self._ask(
             system=(
-                "The counterexample uses inputs real callers never pass. "
-                "Propose ONE C++ boolean expression, over ONLY these parameter "
-                f"names: {', '.join(context.parameters)}, that rules the "
-                "counterexample out while admitting every shown call site. "
-                "Prefer the weakest such condition the call sites support. "
+                "The counterexample uses inputs real callers never pass.\n"
+                "Propose ONE C++ boolean expression that rules it out while "
+                "admitting every shown call site.\n"
+                "Prefer the WEAKEST such condition the call sites support: an "
+                "over-tight condition produces a proof that means nothing.\n"
+                "You may use ONLY these parameter names:\n"
+                f"{chr(10).join('  ' + n for n in context.parameters)}\n"
                 "Reply with the bare expression on one line and nothing else, "
                 "or NONE if no such precondition exists."
             ),
             user=context.render(),
-            effort="high",
         )
         line = reply.strip().splitlines()[0].strip().strip("`") if reply.strip() else ""
         if not line or line.upper() == "NONE" or len(line) > 200:
             return None
         return line
 
-    # -- file-level proposals (unchanged interface) ----------------------
+    # -- file-level proposals --------------------------------------------
 
     def propose_invariants(self, source: Path, result: VerifyResult) -> Path | None:
         reply = self._ask(
             system=(
-                "You are a verification engineer operating the ESBMC model checker "
-                "on C++ code. Given a program the checker could not conclude on, add "
-                "loop invariants as __ESBMC_assert/__ESBMC_assume annotations, or "
-                "strengthening assertions, that could make k-induction succeed. "
-                "Return the complete modified file in one code block. Do not change "
-                "program semantics."
+                "You are a verification engineer operating the ESBMC model "
+                "checker on C++ code. Given a program the checker could not "
+                "conclude on, add loop invariants as __ESBMC_assert/"
+                "__ESBMC_assume annotations, or strengthening assertions, that "
+                "could make k-induction succeed. Return the complete modified "
+                "file in one code block. Do not change program semantics."
             ),
             user=f"Verifier output (truncated):\n{result.raw_output[-4000:]}\n\n"
             f"Source:\n```cpp\n{source.read_text()}\n```",
@@ -247,12 +198,219 @@ class AnthropicLLM:
     def propose_frontend_fix(self, source: Path, result: VerifyResult) -> Path | None:
         reply = self._ask(
             system=(
-                "The ESBMC C++ frontend rejected this file. Produce a semantically "
-                "equivalent version using constructs the frontend accepts (reduce "
-                "template/STL usage, simplify). Return the full file in one code block."
+                "The ESBMC C++ frontend rejected this file. Produce a "
+                "semantically equivalent version using constructs the frontend "
+                "accepts (reduce template/STL usage, simplify). Return the full "
+                "file in one code block."
             ),
             user=f"Frontend errors:\n{result.raw_output[-4000:]}\n\n"
             f"Source:\n```cpp\n{source.read_text()}\n```",
         )
         code = self._extract_code(reply)
         return self._write_variant(source, code, "fix") if code else None
+
+    # -- helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _extract_code(reply: str) -> str | None:
+        m = re.search(r"```(?:cpp|c\+\+|c)?\n(.*?)```", reply, re.S)
+        return m.group(1) if m else None
+
+    def _write_variant(self, source: Path, code: str, tag: str) -> Path:
+        out = source.with_name(f"{source.stem}.{tag}{source.suffix}")
+        out.write_text(code)
+        return out
+
+
+# ------------------------------------------------------------- providers ---
+
+
+class AnthropicLLM(PromptedLLM):
+    """Claude, through the official SDK (`pip install 'veripp[anthropic]'`)."""
+
+    MODEL = "claude-opus-5"
+    PROVIDER = "anthropic"
+
+    def __init__(self, model: str | None = None):
+        try:
+            import anthropic
+        except ImportError as exc:
+            raise RuntimeError(
+                "the `anthropic` package is not installed "
+                "(pip install 'veripp[anthropic]'), or use --no-llm"
+            ) from exc
+        self._anthropic = anthropic
+        # The SDK resolves ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or an
+        # `ant auth login` profile. It constructs happily with none and only
+        # fails when a request is sent, so check now and let the caller fall
+        # back to offline mode rather than dying mid-run.
+        self._client = anthropic.Anthropic()
+        if not (getattr(self._client, "api_key", None)
+                or getattr(self._client, "auth_token", None)):
+            raise RuntimeError(
+                "no Anthropic credentials found (set ANTHROPIC_API_KEY, or run "
+                "`ant auth login`); use --no-llm to silence this"
+            )
+        self._model = model or self.MODEL
+
+    def _ask(self, system: str, user: str, max_tokens: int = 16000) -> str:
+        anthropic = self._anthropic
+        try:
+            msg = self._client.messages.create(
+                model=self._model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+        except anthropic.AuthenticationError as exc:
+            raise LLMError("Anthropic rejected the credentials") from exc
+        except anthropic.RateLimitError as exc:
+            raise LLMError("Anthropic API rate limit hit") from exc
+        except anthropic.APIStatusError as exc:
+            raise LLMError(f"Anthropic API error {exc.status_code}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise LLMError("could not reach the Anthropic API") from exc
+        except TypeError as exc:  # SDK raises this when auth resolves to nothing
+            raise LLMError(f"Anthropic client is not usable: {exc}") from exc
+        return "".join(b.text for b in msg.content if b.type == "text")
+
+
+class OpenAICompatibleLLM(PromptedLLM):
+    """Any provider speaking the OpenAI chat-completions API.
+
+    That is most of them: OpenAI itself, and -- by pointing `base_url` at their
+    endpoint -- Google Gemini, Groq, Together, Fireworks, DeepSeek, Mistral,
+    OpenRouter, Azure OpenAI, and local runtimes like Ollama, vLLM and
+    LM Studio. Deliberately implemented over the standard library so veripp
+    stays dependency-free and works against a local model with no account at
+    all.
+    """
+
+    MODEL = "gpt-4o-mini"
+    PROVIDER = "openai"
+    BASE_URL = "https://api.openai.com/v1"
+    API_KEY_ENV = "OPENAI_API_KEY"
+
+    def __init__(
+        self,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_key_env: str | None = None,
+        provider: str | None = None,
+        timeout: int = 120,
+    ):
+        self._model = model or self.MODEL
+        self._base_url = (base_url or os.environ.get("VERIPP_LLM_BASE_URL")
+                          or self.BASE_URL).rstrip("/")
+        env = api_key_env or self.API_KEY_ENV
+        self._api_key = api_key or os.environ.get(env) or os.environ.get("VERIPP_LLM_API_KEY")
+        self._timeout = timeout
+        if provider:
+            self.PROVIDER = provider
+        # A local runtime needs no key; a hosted one does. Only complain when
+        # the endpoint looks remote.
+        if not self._api_key and not _is_local(self._base_url):
+            raise RuntimeError(
+                f"no API key for {self._base_url} (set {env} or "
+                "VERIPP_LLM_API_KEY); use --no-llm to run without an LLM"
+            )
+
+    def _ask(self, system: str, user: str, max_tokens: int = 16000) -> str:
+        payload = json.dumps({
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }).encode()
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        request = urllib.request.Request(
+            f"{self._base_url}/chat/completions", data=payload, headers=headers
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                body = json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")[:200]
+            raise LLMError(f"{self.PROVIDER} API error {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise LLMError(f"could not reach {self._base_url}: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"{self.PROVIDER} returned a non-JSON body") from exc
+
+        try:
+            return body["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMError(f"unexpected response shape from {self.PROVIDER}: "
+                           f"{str(body)[:200]}") from exc
+
+
+#: Ready-made endpoints, so `--model groq:llama-3.3-70b-versatile` just works.
+#: Anything absent is still reachable with --llm-base-url.
+PROVIDERS: dict[str, dict] = {
+    "anthropic": {"class": AnthropicLLM},
+    "openai": {"base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY"},
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "api_key_env": "GEMINI_API_KEY",
+    },
+    "groq": {"base_url": "https://api.groq.com/openai/v1", "api_key_env": "GROQ_API_KEY"},
+    "together": {"base_url": "https://api.together.xyz/v1", "api_key_env": "TOGETHER_API_KEY"},
+    "deepseek": {"base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY"},
+    "mistral": {"base_url": "https://api.mistral.ai/v1", "api_key_env": "MISTRAL_API_KEY"},
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY"
+    },
+    "ollama": {"base_url": "http://localhost:11434/v1", "api_key_env": "OLLAMA_API_KEY"},
+    "lmstudio": {"base_url": "http://localhost:1234/v1", "api_key_env": "LMSTUDIO_API_KEY"},
+}
+
+
+def _is_local(base_url: str) -> bool:
+    return any(h in base_url for h in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]"))
+
+
+def make_llm(spec: str | None = None, base_url: str | None = None) -> LLMClient:
+    """Build a client from a `provider:model` string.
+
+    Examples:
+        anthropic:claude-opus-5
+        openai:gpt-4o-mini
+        ollama:llama3.1            (no account needed)
+        groq:llama-3.3-70b-versatile
+        my-gateway:some-model      with --llm-base-url https://...
+
+    A bare model name uses VERIPP_LLM_PROVIDER, else openai. Raises
+    RuntimeError when the provider cannot be used, so callers can fall back to
+    offline mode with a note.
+    """
+    spec = spec or os.environ.get("VERIPP_LLM_MODEL") or ""
+    provider, _, model = spec.partition(":")
+    if not model:  # bare model name, or nothing at all
+        provider, model = os.environ.get("VERIPP_LLM_PROVIDER", "openai"), provider
+    provider = provider.lower()
+
+    if provider == "anthropic" or (not model and not spec):
+        if provider in ("", "anthropic"):
+            return AnthropicLLM(model or None)
+
+    entry = PROVIDERS.get(provider)
+    if entry is None and base_url is None:
+        known = ", ".join(sorted(PROVIDERS))
+        raise RuntimeError(
+            f"unknown LLM provider {provider!r}. Known: {known}. Any other "
+            "OpenAI-compatible endpoint works with --llm-base-url."
+        )
+    entry = entry or {}
+    if entry.get("class") is AnthropicLLM:
+        return AnthropicLLM(model or None)
+    return OpenAICompatibleLLM(
+        model=model or None,
+        base_url=base_url or entry.get("base_url"),
+        api_key_env=entry.get("api_key_env"),
+        provider=provider,
+    )

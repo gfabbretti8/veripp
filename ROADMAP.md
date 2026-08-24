@@ -66,6 +66,14 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [ ] Call-site validation of a proposed precondition (mechanical for literal
       arguments), to catch over-tight but satisfiable invariants.
 
+## M1.8 — provider independence (done)
+- [x] Any OpenAI-compatible endpoint (OpenAI, Gemini, Groq, Together,
+      DeepSeek, Mistral, OpenRouter, Ollama, vLLM, LM Studio, self-hosted),
+      implemented over the standard library so there is no new dependency and
+      a local model needs no account.
+- [x] Prompts live in one place shared by every provider, so adding a vendor
+      cannot change what is asked.
+
 ## M3 — sell it
 - GitHub Action.
 - Benchmarks: grown from `benchmarks/` (lodepng, stb_image_write today;

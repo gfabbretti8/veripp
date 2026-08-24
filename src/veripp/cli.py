@@ -19,7 +19,7 @@ from .harness import (
     generate,
     generate_sequence,
 )
-from .llm import AnthropicLLM, NullLLM
+from .llm import NullLLM, make_llm
 from .paths import contracts_include_dir, scratch_dir
 from .scan import scan
 from .triage import TargetInfo
@@ -41,6 +41,19 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("verify", help="verify a self-contained C++ file")
     _add_common_args(v)
     v.add_argument("--no-llm", action="store_true", help="run the plain verifier pipeline offline")
+    v.add_argument(
+        "--model",
+        metavar="PROVIDER:MODEL",
+        help="LLM used for triage, e.g. anthropic:claude-opus-5, "
+        "openai:gpt-4o-mini, gemini:gemini-2.0-flash, groq:llama-3.3-70b-versatile, "
+        "ollama:llama3.1 (local, no account). Defaults to $VERIPP_LLM_MODEL.",
+    )
+    v.add_argument(
+        "--llm-base-url",
+        metavar="URL",
+        help="OpenAI-compatible endpoint for any provider not listed above "
+        "(self-hosted gateways, vLLM, Azure). Defaults to $VERIPP_LLM_BASE_URL.",
+    )
     v.add_argument("--json", action="store_true", help="machine-readable output")
     v.add_argument("--keep-harness", action="store_true", help="print where the harness was written")
 
@@ -297,7 +310,7 @@ def _verify(args) -> int:
         overflow_check=not args.no_overflow_check,
         extra_args=extra_args,
     )
-    llm = NullLLM() if args.no_llm else _make_llm()
+    llm = NullLLM() if args.no_llm else _make_llm(args)
     target_info = (
         TargetInfo(
             source=args.source,
@@ -431,12 +444,14 @@ def _exit_code(report: AgentReport) -> int:
     return EXIT_INCONCLUSIVE
 
 
-def _make_llm():
+def _make_llm(args):
     try:
-        return AnthropicLLM()
+        llm = make_llm(getattr(args, "model", None), getattr(args, "llm_base_url", None))
     except RuntimeError as exc:
         print(f"note: {exc}; falling back to offline mode", file=sys.stderr)
         return NullLLM()
+    print(f"note: triage via {llm.PROVIDER}", file=sys.stderr)
+    return llm
 
 
 def _doctor(allow_unsound: bool = False) -> int:
@@ -459,15 +474,20 @@ def _doctor(allow_unsound: bool = False) -> int:
             print(f"  could not run: {exc}")
     include = contracts_include_dir()
     print(f"contracts header: {include / 'veripp/contracts.hpp' if include else 'NOT FOUND'}")
-    try:
-        import anthropic  # noqa: F401
-
-        print("anthropic sdk: ok")
-    except ImportError:
-        print("anthropic sdk: not installed (offline mode only)")
     import os
 
-    print(f"ANTHROPIC_API_KEY: {'set' if os.environ.get('ANTHROPIC_API_KEY') else 'not set'}")
+    from .llm import PROVIDERS
+
+    configured = []
+    for name, entry in sorted(PROVIDERS.items()):
+        env = entry.get("api_key_env", "ANTHROPIC_API_KEY")
+        if os.environ.get(env):
+            configured.append(f"{name} (${env})")
+    if os.environ.get("VERIPP_LLM_BASE_URL"):
+        configured.append("custom ($VERIPP_LLM_BASE_URL)")
+    print("llm providers with credentials: " + (", ".join(configured) or "none"))
+    print("  any OpenAI-compatible endpoint works: --model provider:model "
+          "[--llm-base-url URL]")
     if unsound and not allow_unsound:
         print(
             "\nWARNING: this esbmc silently misses "
