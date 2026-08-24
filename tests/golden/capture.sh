@@ -17,4 +17,11 @@ esbmc examples/off_by_one.cpp  --std c++17 --unwind 8                     > "$G/
 esbmc "$G/syntax_error.cpp"    --std c++17 --unwind 8                     > "$G/parse_error.txt" 2>&1 || true
 esbmc "$G/unknown.cpp"         --std c++17 --k-induction --max-k-step 3   > "$G/unknown.txt" 2>&1 || true
 
-esbmc --version > "$G/esbmc-version.txt" 2>&1
+{
+  esbmc --version
+  echo "binary: $(command -v esbmc)"
+  echo "resolved: $(readlink "$(command -v esbmc)" 2>/dev/null || echo n/a)"
+  echo "captured: $(date -u +%Y-%m-%d)"
+  echo "note: the version string does not distinguish a release from a master"
+  echo "      build -- veripp relies on the doctor soundness probes instead."
+} > "$G/esbmc-version.txt" 2>&1

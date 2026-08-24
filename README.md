@@ -59,7 +59,12 @@ next. See `ROADMAP.md`.
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) (it installs Python for you)
-- [ESBMC](https://github.com/esbmc/esbmc/releases) ≥ 8.x on `PATH`
+- [ESBMC](https://github.com/esbmc/esbmc/releases) built from master, or the
+  rolling [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build.
+  **Not the v8.4 release** — it carries
+  [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
+  out-of-bounds writes in ordinary container code. `veripp doctor` checks this
+  for you. On macOS: `brew install --HEAD esbmc`.
 - An Anthropic API key in `ANTHROPIC_API_KEY` (only needed for agent mode;
   `--no-llm` runs the plain verifier pipeline)
 
@@ -71,7 +76,8 @@ brew install esbmc          # macOS
 # or download esbmc-linux.zip from the releases page above and put it on PATH
 ```
 
-`veripp doctor` checks all of the above and tells you what is missing.
+`veripp doctor` checks all of the above, tells you what is missing, and probes
+your checker for known soundness holes.
 
 ## Quick start
 

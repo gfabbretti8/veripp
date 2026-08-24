@@ -28,7 +28,13 @@ def test_off_by_one_is_caught(capsys, examples):
 
 
 def test_generated_harness_finds_the_same_bug(capsys, examples):
-    code, out = run_cli(capsys, str(examples / "off_by_one.cpp"), "--function", "sum_array")
+    # `s += a[i]` violates two properties at once: the out-of-bounds read and
+    # the signed overflow it feeds. Which one a given ESBMC reports first is
+    # its business, so isolate the one this test is about.
+    code, out = run_cli(
+        capsys, str(examples / "off_by_one.cpp"), "--function", "sum_array",
+        "--no-overflow-check",
+    )
     assert code == EXIT_COUNTEREXAMPLE
     assert "array bounds violated" in out
     assert "harness bound on array length" in out

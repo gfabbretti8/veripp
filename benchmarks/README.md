@@ -14,7 +14,7 @@ Found by probing popular single-TU libraries through the ESBMC 8.4 frontend
 | [miniz](https://github.com/richgel999/miniz) | ~2k stars | OK (needs stub `miniz_export.h`) | 8/24 | project typedefs (`mz_ulong`) now resolve via local includes |
 | [uthash](https://github.com/troydhanson/uthash) | ~4k stars | OK | n/a | macro library; no functions to target |
 
-## Reference results (ESBMC 8.4, defaults)
+## Reference results (ESBMC master, defaults)
 
 These are observations, not assertions. With Anthropic credentials set,
 `./benchmarks/eval_triage.py` grades the live LLM triage against the
@@ -24,6 +24,7 @@ counterexample rows below (ground truth from the 2026-08-23 pilot):
 |---|---|---|
 | `lodepng.cpp --function lodepng_addofl` | **verified** | overflow-check helper proven (bounded) |
 | `lodepng.cpp --function reverseBits` | counterexample: UB shift when `num > 32` | missing precondition — internal callers pass small `num` |
+| `ring_buffer.cpp --class RingBuffer` | **verified** over all 4-call sequences | states built up across calls, not just the first |
 | `lodepng.cpp --function lodepng_strlen` | **verified** | was a harness-artifact counterexample until `const char*` params got a NUL-terminated string model |
 | `stb_image_write.h --function stbiw__zlib_bitrev` | counterexample: `shl` overflow | missing precondition on `codebits`; with LLM triage, becomes a solver-checked conditional proof |
 | `miniz.c --function mz_adler32` | **verified** | the Adler-32 checksum core, via typedef resolution + `buf_len` pairing |

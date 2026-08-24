@@ -2,7 +2,7 @@ Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
 Parsing examples/off_by_one.cpp
 Converting
 Generating GOTO Program
-GOTO program creation time: 0.161s
+GOTO program creation time: 0.087s
 GOTO program processing time: 0.000s
 Starting Bounded Model Checking
 Unwinding loop 3 iteration 1   file examples/off_by_one.cpp line 16 column 5 function main
@@ -25,7 +25,7 @@ No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
 Encoding to solver time: 0.001s
 Solving with solver Bitwuzla 0.9.1
-Runtime decision procedure: 0.008s
+Runtime decision procedure: 0.006s
 Building error trace
 
 [Counterexample]
@@ -79,6 +79,19 @@ Violated property:
   CWE: CWE-121, CWE-125, CWE-129, CWE-131, CWE-193, CWE-787
   !overflow("+", s, a::0[(signed long int)i])
 
+
+** Results:
+examples/off_by_one.cpp, function main
+  PASSED       [main.array-bounds-violated.1]       line 16  array bounds violated: array `a' lower bound
+  PASSED       [main.array-bounds-violated.2]       line 16  array bounds violated: array `a' upper bound
+examples/off_by_one.cpp, function sum_array
+  NOT CHECKED  [sum_array.assertion.1]              line  6  unwinding assertion loop 4
+  FAILED       [sum_array.arithmetic-overflow.1]    line  7  arithmetic overflow on add
+  PASSED       [sum_array.assertion.2]              line  7  dereference failure: Incorrect alignment when accessing data object
+  FAILED       [sum_array.array-bounds-violated.1]  line  7  dereference failure: array bounds violated
+
+** 2 of 6 properties failed, 3 passed, 1 not checked
+   (this mode stops at the first violation; use --multi-property for a verdict on every property)
 
 VERIFICATION FAILED
 ESBMC version 8.4.0 64-bit aarch64 macos

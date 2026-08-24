@@ -2,8 +2,14 @@ name: ci
 on: [push, pull_request]
 
 env:
-  # Pinned: the golden transcripts in tests/golden/ are this version's output.
-  ESBMC_VERSION: v8.4
+  # `weekly` is a rolling tag rebuilt from master. We track it rather than the
+  # v8.4 release because 8.4 carries esbmc#6508 -- it silently misses
+  # out-of-bounds writes to a member array indexed by another member of the
+  # same object, which is the ordinary container idiom and exactly the code
+  # veripp is pointed at. `veripp doctor` below re-checks that behaviourally on
+  # every run, so a regression in the rolling build fails the job rather than
+  # quietly weakening every "verified".
+  ESBMC_VERSION: weekly
 
 jobs:
   test:
@@ -21,7 +27,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-linux
+          # The weekly tag is rolling, so the cache key carries the week.
+          key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml') }}
 
       - name: Install ESBMC
         if: steps.cache-esbmc.outputs.cache-hit != 'true'
@@ -40,10 +47,8 @@ jobs:
       # --locked fails if uv.lock is out of date with pyproject.toml, so a
       # dependency change cannot land without its lockfile update.
       - run: uv sync --locked
-      # v8.4 is pinned for the golden transcripts, and it carries the known
-      # esbmc#6508 member-array hole (fixed upstream, unreleased). Surface it
-      # in the log without failing the build.
-      - run: uv run veripp doctor --allow-unsound
+      # No --allow-unsound: the tracked build must pass the soundness probes.
+      - run: uv run veripp doctor
       - run: uv run pytest -q
 
   # The tests run from a source checkout; this proves the published artifact

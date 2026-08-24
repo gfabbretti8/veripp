@@ -1,1 +1,6 @@
 ESBMC version 8.4.0 64-bit aarch64 macos
+binary: /opt/homebrew/bin/esbmc
+resolved: ../Cellar/esbmc/HEAD-352d8bf_4/bin/esbmc
+captured: 2026-08-24
+note: the version string does not distinguish a release from a master
+      build -- veripp relies on the doctor soundness probes instead.

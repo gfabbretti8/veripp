@@ -136,7 +136,13 @@ class TestSequenceFindsStatefulBugs:
                      "--max-calls", "5", "--unwind", "8", "--no-llm", "--timeout", "300"])
         out = capsys.readouterr().out
         assert code == EXIT_COUNTEREXAMPLE
-        assert "size_ <= cap" in out  # the postcondition a sequence can break
+        # Overflowing the buffer breaks two things at once: the bounds of
+        # data_ and the postcondition. A checker that has esbmc#6508 fixed
+        # reports the bounds violation; one that does not still catches the
+        # postcondition. Either proves the sequence reached a state a single
+        # call cannot.
+        assert "array bounds violated" in out or "size_ <= cap" in out
+        assert "in push" in out
 
     def test_correct_class_verifies_over_all_sequences(self, capsys, src):
         code = main(["verify", str(src), "--class", "Stack", "--max-calls", "5",

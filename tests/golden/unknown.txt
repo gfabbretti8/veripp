@@ -2,13 +2,13 @@ Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
 Parsing tests/golden/unknown.cpp
 Converting
 Generating GOTO Program
-GOTO program creation time: 0.161s
+GOTO program creation time: 0.087s
 GOTO program processing time: 0.000s
 Checking base case, k = 1
 Starting Bounded Model Checking
 Not unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
-Symex completed in: 0.001s (37 assignments)
-Slicing time: 0.000s (removed 31 assignments)
+Symex completed in: 0.000s (37 assignments)
+Slicing time: 0.001s (removed 31 assignments)
 Generated 1 VCC(s), 1 remaining after simplification (6 assignments)
 No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
@@ -25,7 +25,7 @@ Slicing time: 0.000s (removed 31 assignments)
 Generated 1 VCC(s), 1 remaining after simplification (5 assignments)
 No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
-Encoding to solver time: 0.000s
+Encoding to solver time: 0.001s
 Solving with solver Bitwuzla 0.9.1
 Runtime decision procedure: 0.000s
 The forward condition is unable to prove the property
@@ -54,14 +54,14 @@ No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
 Encoding to solver time: 0.000s
 Solving with solver Bitwuzla 0.9.1
-Runtime decision procedure: 0.001s
+Runtime decision procedure: 0.000s
 The forward condition is unable to prove the property
 Checking inductive step, k = 2
 Starting Bounded Model Checking
 Unwinding loop 3 iteration 1   file tests/golden/unknown.cpp line 11 column 5 function main
 Not unwinding loop 3 iteration 2   file tests/golden/unknown.cpp line 11 column 5 function main
 Symex completed in: 0.000s (44 assignments)
-Slicing time: 0.000s (removed 30 assignments)
+Slicing time: 0.001s (removed 30 assignments)
 Generated 1 VCC(s), 1 remaining after simplification (14 assignments)
 No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
@@ -79,7 +79,7 @@ Slicing time: 0.000s (removed 37 assignments)
 Generated 1 VCC(s), 1 remaining after simplification (10 assignments)
 No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
-Encoding to solver time: 0.000s
+Encoding to solver time: 0.001s
 Solving with solver Bitwuzla 0.9.1
 Runtime decision procedure: 0.000s
 BMC program time: 0.001s
@@ -94,7 +94,7 @@ Slicing time: 0.000s (removed 39 assignments)
 Generated 1 VCC(s), 1 remaining after simplification (7 assignments)
 No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
-Encoding to solver time: 0.000s
+Encoding to solver time: 0.001s
 Solving with solver Bitwuzla 0.9.1
 Runtime decision procedure: 0.000s
 The forward condition is unable to prove the property

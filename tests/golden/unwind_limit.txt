@@ -2,21 +2,21 @@ Target: 64-bit little-endian aarch64-unknown-macos with esbmclibc
 Parsing examples/ring_buffer.cpp
 Converting
 Generating GOTO Program
-GOTO program creation time: 0.163s
+GOTO program creation time: 0.092s
 GOTO program processing time: 0.000s
 Starting Bounded Model Checking
 Unwinding loop 3 iteration 1   file examples/ring_buffer.cpp line 35 column 5 function main
 Unwinding loop 3 iteration 2   file examples/ring_buffer.cpp line 35 column 5 function main
 Not unwinding loop 3 iteration 3   file examples/ring_buffer.cpp line 35 column 5 function main
-Symex completed in: 0.008s (167 assignments)
+Symex completed in: 0.007s (163 assignments)
 Caching time: 0.000s (removed 0 assertions)
-Slicing time: 0.001s (removed 70 assignments)
-Generated 169 VCC(s), 24 remaining after simplification (97 assignments)
+Slicing time: 0.001s (removed 72 assignments)
+Generated 204 VCC(s), 28 remaining after simplification (91 assignments)
 No solver specified; defaulting to bitwuzla
 Encoding remaining VCC(s) using bit-vector/floating-point arithmetic
-Encoding to solver time: 0.002s
+Encoding to solver time: 0.001s
 Solving with solver Bitwuzla 0.9.1
-Runtime decision procedure: 0.003s
+Runtime decision procedure: 0.004s
 Building error trace
 
 [Counterexample]
@@ -28,6 +28,51 @@ Violated property:
   file examples/ring_buffer.cpp line 35 column 5 function main
   unwinding assertion loop 3
 
+
+** Results:
+examples/ring_buffer.cpp, function RingBuffer
+  PASSED       [RingBuffer.object-out-of-bounds.1]  line  4  dereference failure: Access to object out of bounds
+  PASSED       [RingBuffer.assertion.1]             line  4  dereference failure: Incorrect alignment when accessing data object
+examples/ring_buffer.cpp, function main
+  FAILED       [main.assertion.1]                   line 35  unwinding assertion loop 3
+  NOT CHECKED  [main.arithmetic-overflow.1]         line 35  arithmetic overflow on add
+  NOT CHECKED  [main.assertion.2]                   line 42  assertion: rb.size() <= RingBuffer::capacity
+examples/ring_buffer.cpp, function pop
+  PASSED       [pop.object-out-of-bounds.1]         line 21  dereference failure: Access to object out of bounds
+  PASSED       [pop.assertion.1]                    line 21  dereference failure: Incorrect alignment when accessing data object
+  NOT CHECKED  [pop.array-bounds-violated.1]        line 22  array bounds violated: array lower bound
+  NOT CHECKED  [pop.array-bounds-violated.2]        line 22  array bounds violated: array upper bound
+  PASSED       [pop.object-out-of-bounds.2]         line 22  dereference failure: Access to object out of bounds
+  PASSED       [pop.assertion.2]                    line 22  dereference failure: Incorrect alignment when accessing data object
+  PASSED       [pop.object-out-of-bounds.3]         line 23  dereference failure: Access to object out of bounds
+  PASSED       [pop.assertion.3]                    line 23  dereference failure: Incorrect alignment when accessing data object
+  PASSED       [pop.division-by-zero.1]             line 23  division by zero
+  PASSED       [pop.object-out-of-bounds.4]         line 24  dereference failure: Access to object out of bounds
+  PASSED       [pop.assertion.4]                    line 24  dereference failure: Incorrect alignment when accessing data object
+  PASSED       [pop.object-out-of-bounds.5]         line 25  dereference failure: Access to object out of bounds
+  PASSED       [pop.assertion.5]                    line 25  dereference failure: Incorrect alignment when accessing data object
+  NOT CHECKED  [pop.assertion.6]                    line 25  postcondition: size_ < capacity
+examples/ring_buffer.cpp, function push
+  PASSED       [push.object-out-of-bounds.1]        line 12  dereference failure: Access to object out of bounds
+  PASSED       [push.assertion.1]                   line 12  dereference failure: Incorrect alignment when accessing data object
+  PASSED       [push.array-bounds-violated.1]       line 13  array bounds violated: array lower bound
+  PASSED       [push.array-bounds-violated.2]       line 13  array bounds violated: array upper bound
+  PASSED       [push.object-out-of-bounds.2]        line 13  dereference failure: Access to object out of bounds
+  PASSED       [push.assertion.2]                   line 13  dereference failure: Incorrect alignment when accessing data object
+  PASSED       [push.object-out-of-bounds.3]        line 14  dereference failure: Access to object out of bounds
+  PASSED       [push.assertion.3]                   line 14  dereference failure: Incorrect alignment when accessing data object
+  PASSED       [push.division-by-zero.1]            line 14  division by zero
+  PASSED       [push.object-out-of-bounds.4]        line 15  dereference failure: Access to object out of bounds
+  PASSED       [push.assertion.4]                   line 15  dereference failure: Incorrect alignment when accessing data object
+  PASSED       [push.object-out-of-bounds.5]        line 16  dereference failure: Access to object out of bounds
+  PASSED       [push.assertion.5]                   line 16  dereference failure: Incorrect alignment when accessing data object
+  NOT CHECKED  [push.assertion.6]                   line 16  postcondition: size_ <= capacity
+examples/ring_buffer.cpp, function size
+  PASSED       [size.object-out-of-bounds.1]        line 29  dereference failure: Access to object out of bounds
+  PASSED       [size.assertion.1]                   line 29  dereference failure: Incorrect alignment when accessing data object
+
+** 1 of 35 properties failed, 28 passed, 6 not checked
+   (this mode stops at the first violation; use --multi-property for a verdict on every property)
 
 VERIFICATION FAILED
 ESBMC version 8.4.0 64-bit aarch64 macos
