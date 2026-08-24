@@ -204,3 +204,49 @@ class TestPreconditionPrompt:
         assert "FALSE for the counterexample inputs" in system
         assert "TRUE at every call site" in system
         assert "pinning a field to the value that broke it" in system
+
+
+class TestPrecondItionExtraction:
+    """Models wrap the answer however they like; veripp has to cope.
+
+    Measured: a 7B model replied with a ```cpp fence, first-line parsing
+    handed the solver the literal string "cpp", and the solver rejected it --
+    a wasted round that looked like the model's fault.
+    """
+
+    def _propose(self, reply, context):
+        with _Server(reply) as server:
+            return OpenAICompatibleLLM(model="m", base_url=server.url).propose_precondition(context)
+
+    def test_bare_expression(self, context):
+        assert self._propose("count != 0", context) == "count != 0"
+
+    def test_fenced_expression(self, context):
+        assert self._propose("```cpp\ncount != 0\n```", context) == "count != 0"
+
+    def test_a_sentence_before_a_fence(self, context):
+        reply = "The divisor must be non-zero:\n```cpp\ncount > 0\n```"
+        assert self._propose(reply, context) == "count > 0"
+
+    def test_reasoning_then_the_expression(self, context):
+        reply = "All call sites pass positive values, so:\ncount > 0"
+        assert self._propose(reply, context) == "count > 0"
+
+    def test_none_is_respected(self, context):
+        assert self._propose("NONE", context) is None
+
+    def test_prose_alone_is_not_an_expression(self, context):
+        assert self._propose("I think this is a genuine library bug.", context) is None
+
+    def test_a_trailing_semicolon_is_dropped(self, context):
+        assert self._propose("count != 0;", context) == "count != 0"
+
+
+def test_classify_prompt_names_the_over_permissive_object_case(context):
+    """The dominant real case: a struct whose fields are independently
+    nondeterministic and so hold a combination its invariants forbid."""
+    with _Server("harness_issue") as server:
+        OpenAICompatibleLLM(model="m", base_url=server.url).classify(context)
+        system = server.requests[0]["payload"]["messages"][0]["content"]
+    assert "independently" in system and "invariants forbid" in system
+    assert "merely looks extreme is not a real_bug" in system

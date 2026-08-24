@@ -134,9 +134,14 @@ class PromptedLLM:
                 "misbehaves\n"
                 "missing_assumption - every shown call site respects a "
                 "precondition the counterexample violates\n"
-                "harness_issue - the harness models an input wrongly (e.g. an "
-                "unterminated string, a buffer of the wrong shape), violating "
-                "the function's documented or obvious contract\n\n"
+                "harness_issue - the harness models an input wrongly, so the "
+                "counterexample is about the harness and not the code. This "
+                "covers an object whose fields were all made independently "
+                "nondeterministic and so hold a combination the type's own "
+                "invariants forbid, an unterminated string, or a buffer of the "
+                "wrong shape.\n\n"
+                "Note: an input that merely looks extreme is not a real_bug "
+                "unless a caller can actually produce it.\n\n"
                 "Think it through if you need to, then end your reply with the "
                 "chosen word on a line by itself."
             ),
@@ -174,10 +179,7 @@ class PromptedLLM:
             ),
             user=context.render(),
         )
-        line = reply.strip().splitlines()[0].strip().strip("`") if reply.strip() else ""
-        if not line or line.upper() == "NONE" or len(line) > 200:
-            return None
-        return line
+        return _expression_from(reply)
 
     # -- file-level proposals --------------------------------------------
 
@@ -370,6 +372,37 @@ PROVIDERS: dict[str, dict] = {
     "ollama": {"base_url": "http://localhost:11434/v1", "api_key_env": "OLLAMA_API_KEY"},
     "lmstudio": {"base_url": "http://localhost:1234/v1", "api_key_env": "LMSTUDIO_API_KEY"},
 }
+
+
+_FENCE_RE = re.compile(r"```[A-Za-z+]*\n(.*?)```", re.S)
+_PROSE = re.compile(r"\b(the|this|because|since|should|would|note|here|we|I)\b", re.I)
+
+
+def _expression_from(reply: str) -> str | None:
+    """The C++ expression a model settled on, however it chose to wrap it.
+
+    Models fence code, prefix it with a sentence, or do both. Taking the first
+    line yielded the literal string "cpp" from a ```cpp fence -- a proposal the
+    solver then dutifully rejected.
+    """
+    if not reply or not reply.strip():
+        return None
+    fenced = _FENCE_RE.search(reply)
+    body = fenced.group(1) if fenced else reply
+    candidates = [
+        line.strip().strip("`").rstrip(";")
+        for line in body.strip().splitlines()
+        if line.strip().strip("`")
+    ]
+    for line in reversed(candidates):          # the conclusion comes last
+        if line.upper() == "NONE":
+            return None
+        if len(line) > 200 or not re.search(r"[<>=!&|+\-*/]", line):
+            continue                            # prose, or a bare word
+        if _PROSE.search(line) and not fenced:
+            continue
+        return line
+    return None
 
 
 _LABEL_RE = re.compile(r"\b(" + "|".join(KINDS) + r")\b")
