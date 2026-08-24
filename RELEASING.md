@@ -69,6 +69,22 @@ The Dockerfile runs `veripp doctor` as a build step, so an image whose ESBMC
 cannot detect a planted bug fails the build rather than shipping. That check is
 the reason to trust the image at all; do not move it behind a flag.
 
+The manifest job is the one part of the release that building an image cannot
+test: it only exists once two per-architecture digests have been pushed and
+stitched. Getting it wrong yields a tag that silently serves one architecture
+to everyone, which is worse than no tag. Rehearse it against a throwaway local
+registry — nothing leaves the machine:
+
+```bash
+./tests/manifest_rehearsal.sh
+```
+
+That builds both architectures, pushes them by digest, stitches the manifest,
+asserts both are in it, checks the tag resolves per host architecture, and
+runs the smoke test against the image pulled back through the manifest.
+Verified passing: an OCI image index carrying `linux/amd64` and `linux/arm64`,
+resolving correctly both ways, 13/13 on the pulled image.
+
 To build and check one architecture locally:
 
 ```bash

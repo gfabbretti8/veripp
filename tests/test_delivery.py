@@ -239,6 +239,32 @@ class TestPluginPackaging:
         )
 
 
+class TestManifestRehearsal:
+    """The release's manifest step cannot be tested by building an image, so
+    there is a script that rehearses it against a local registry. Keep it
+    runnable and keep it checking the thing that matters."""
+
+    PATH = "tests/manifest_rehearsal.sh"
+
+    def test_is_executable_and_valid_bash(self) -> None:
+        import subprocess
+
+        assert (ROOT / self.PATH).stat().st_mode & stat.S_IXUSR
+        result = subprocess.run(
+            ["bash", "-n", str(ROOT / self.PATH)], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_asserts_both_architectures(self) -> None:
+        text = read(self.PATH)
+        assert "linux/amd64" in text and "linux/arm64" in text
+        assert "push-by-digest" in text, (
+            "the rehearsal must use push-by-digest, which is what the release "
+            "does and what the plain docker driver cannot do"
+        )
+        assert "imagetools create" in text
+
+
 class TestSmokeTest:
     PATH = "tests/image_smoketest.sh"
 
