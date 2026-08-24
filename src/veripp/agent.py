@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
-from .harness import HarnessError, generate
+from .harness import HarnessError, generate, reachability_variant
 from .llm import LLMClient, NullLLM
 from .triage import Diagnosis, TargetInfo, triage_counterexample
 
@@ -41,13 +41,24 @@ class AgentReport:
     #: Bug classes the checker that produced this result is known to miss.
     #: A "verified" is only as sound as the checker behind it.
     unsound_probes: list[str] = field(default_factory=list)
+    #: True when the harness could not actually be reached under its own
+    #: assumptions, which makes any "verified" meaningless.
+    vacuous: bool = False
 
     @property
     def verified(self) -> bool:
-        return self.final.outcome is Outcome.VERIFIED
+        return self.final.outcome is Outcome.VERIFIED and not self.vacuous
 
     def summary(self) -> str:
-        lines = [f"Result: {self.final.outcome.value}", f"  {self.final.config.describe()}"]
+        headline = "VACUOUS (nothing was actually checked)" if self.vacuous \
+            else self.final.outcome.value
+        lines = [f"Result: {headline}", f"  {self.final.config.describe()}"]
+        if self.vacuous:
+            lines.append(
+                "  The assumptions made the call unreachable, so every property "
+                "held trivially. This is NOT a proof. Weaken the precondition(s) "
+                "below until the harness can run."
+            )
         if self.harness:
             lines.append(f"  harness: {self.harness}")
         if self.assumptions:
@@ -173,6 +184,7 @@ def verify_with_agent(
                 attempts=attempts,
                 diagnosis=last_diagnosis,
                 accepted_preconditions=preconditions,
+                vacuous=_is_vacuous(source, config),
                 **context,
             )
 
@@ -254,6 +266,31 @@ def verify_with_agent(
                 f"ESBMC frontend rejected the input: {result.error or 'see raw output'}",
                 **context,
             )
+
+
+def _is_vacuous(harness: Path, config: VerifyConfig) -> bool:
+    """Did the harness's own assumptions make the call unreachable?
+
+    An unreachable program satisfies everything, so a "verified" from one is
+    worthless -- and neither ESBMC nor the LLM that proposed the precondition
+    can notice. Only a harness carrying assumptions can be vacuous, so the
+    extra run is skipped when there are none.
+    """
+    try:
+        code = harness.read_text()
+    except OSError:
+        return False
+    if "VERIPP_ASSUME" not in code and "VERIPP_REQUIRES" not in code:
+        return False
+    probe = harness.with_name(f"{harness.stem}.reachable{harness.suffix}")
+    try:
+        probe.write_text(reachability_variant(code))
+        result = run(probe, config)
+    except (OSError, RuntimeError):
+        return False
+    # The probe's trailing assertion is always false, so a reachable harness
+    # must fail it. Verifying means nothing could reach it.
+    return result.outcome is Outcome.VERIFIED
 
 
 def _inconclusive(

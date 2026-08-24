@@ -1,42 +1,88 @@
 #!/usr/bin/env python3
-"""Evaluate live LLM triage against the benchmark findings' known answers.
+"""Grade live LLM triage against known answers -- and compare models.
 
 The triage pilot (2026-08-23) established ground truth for these targets by
-reading call sites and validating every proposal with ESBMC. This script asks
-the production AnthropicLLM the same questions and grades it.
+reading call sites and validating every proposal with ESBMC. This asks the
+production AnthropicLLM the same questions and scores it.
 
-Needs Anthropic credentials (ANTHROPIC_API_KEY or `ant auth login`) and the
-benchmark corpus:  ./benchmarks/eval_triage.py [corpus_dir]
-A corpus dir given without lodepng/stb checkouts gets them cloned into it.
+Because the solver checks every proposal, a wrong answer costs a retry rather
+than soundness -- so the question is not "is this model reliable" but "how
+often is it right, and is that worth its price". Run several models to find
+out for your codebase:
+
+    ./benchmarks/eval_triage.py --models claude-haiku-4-5,claude-sonnet-5,claude-opus-5
+
+Needs Anthropic credentials (ANTHROPIC_API_KEY, or `ant auth login`).
 """
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import tempfile
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from veripp.agent import Budget, verify_with_agent  # noqa: E402
-from veripp.esbmc import Outcome, VerifyConfig  # noqa: E402
+from veripp.esbmc import VerifyConfig  # noqa: E402
 from veripp.harness import HarnessOptions, generate  # noqa: E402
 from veripp.llm import AnthropicLLM  # noqa: E402
 from veripp.paths import contracts_include_dir, scratch_dir  # noqa: E402
 from veripp.triage import TargetInfo  # noqa: E402
 
-# target -> (expected classification, precondition expected to be accepted)
-EXPECTATIONS = {
-    ("lodepng/lodepng.cpp", "reverseBits"): ("missing_assumption", True),
-    ("stb/stb_image_write.h", "stbiw__zlib_bitrev"): ("missing_assumption", True),
-}
-DEFINES = {"stb/stb_image_write.h": ["STB_IMAGE_WRITE_IMPLEMENTATION"]}
+DEFAULT_MODELS = ["claude-opus-5"]
+
+
+@dataclass
+class Case:
+    repo: str
+    rel: str
+    function: str
+    expected_kind: str
+    expect_accepted: bool
+    defines: list[str] = field(default_factory=list)
+    note: str = ""
+
+
+CASES = [
+    Case(
+        repo="lvandeve/lodepng", rel="lodepng/lodepng.cpp", function="reverseBits",
+        expected_kind="missing_assumption", expect_accepted=True,
+        note="callers pass FIRSTBITS=9 or a code length bounded by maxbitlen<=15",
+    ),
+    Case(
+        repo="nothings/stb", rel="stb/stb_image_write.h", function="stbiw__zlib_bitrev",
+        expected_kind="missing_assumption", expect_accepted=True,
+        defines=["STB_IMAGE_WRITE_IMPLEMENTATION"],
+        note="only ever called with the constants 5, 7, 8 and 9",
+    ),
+]
+
+
+@dataclass
+class Score:
+    model: str
+    correct_kind: int = 0
+    correct_loop: int = 0
+    total: int = 0
+    seconds: float = 0.0
+    detail: list[str] = field(default_factory=list)
+
+    def line(self) -> str:
+        return (
+            f"{self.model:22} classification {self.correct_kind}/{self.total}   "
+            f"solver accepted {self.correct_loop}/{self.total}   "
+            f"{self.seconds:5.1f}s"
+        )
 
 
 def ensure_corpus(root: Path) -> None:
-    for repo in ("lvandeve/lodepng", "nothings/stb"):
+    for repo in {c.repo for c in CASES}:
         dest = root / repo.split("/")[1]
         if not dest.is_dir():
             subprocess.run(
@@ -46,47 +92,81 @@ def ensure_corpus(root: Path) -> None:
             )
 
 
-def main() -> int:
-    corpus = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(tempfile.mkdtemp())
-    ensure_corpus(corpus)
-    try:
-        llm = AnthropicLLM()
-    except RuntimeError as exc:
-        print(f"cannot run: {exc}")
-        return 2
-
-    failures = 0
-    for (rel, function), (expected_kind, expect_accepted) in EXPECTATIONS.items():
-        source = corpus / rel
-        print(f"\n=== {rel} --function {function} ===")
-        target = TargetInfo(source=source, function=function)
-        harness = generate(source, function, target.options)
+def evaluate(model: str, corpus: Path, timeout: int) -> Score:
+    score = Score(model=model)
+    llm = AnthropicLLM(model=model)
+    for case in CASES:
+        source = corpus / case.rel
+        if not source.is_file():
+            score.detail.append(f"  {case.function}: SKIPPED (missing {source})")
+            continue
+        score.total += 1
+        started = time.monotonic()
+        target = TargetInfo(source=source, function=case.function)
+        harness = generate(source, case.function, target.options)
         path = harness.write(scratch_dir())
         config = VerifyConfig(
-            timeout_s=120,
+            timeout_s=timeout,
             include_dirs=[contracts_include_dir(), source.parent],
-            defines=DEFINES.get(rel, []),
+            defines=case.defines,
         )
         report = verify_with_agent(
             path, config, llm=llm, budget=Budget(),
             assumptions=harness.assumptions, harness=path, target=target,
         )
+        score.seconds += time.monotonic() - started
+
         kind = report.diagnosis.kind if report.diagnosis else "(none)"
         accepted = bool(report.accepted_preconditions)
-        ok_kind = kind == expected_kind
-        ok_loop = accepted == expect_accepted
-        print(f"  classification: {kind}  (expected {expected_kind})"
-              f"  {'OK' if ok_kind else 'WRONG'}")
-        print(f"  solver accepted a proposal: {accepted}"
-              f"  (expected {expect_accepted})  {'OK' if ok_loop else 'WRONG'}")
-        if report.accepted_preconditions:
-            print(f"  accepted precondition(s): {report.accepted_preconditions}")
-        if report.diagnosis:
-            print(f"  explanation: {report.diagnosis.explanation[:300]}")
-        failures += (not ok_kind) + (not ok_loop)
+        score.correct_kind += kind == case.expected_kind
+        score.correct_loop += accepted == case.expect_accepted
+        score.detail.append(
+            f"  {case.function}: kind={kind} (want {case.expected_kind})"
+            f"  accepted={accepted} (want {case.expect_accepted})"
+            + (f"  -> {report.accepted_preconditions}" if accepted else "")
+        )
+        if report.vacuous:
+            score.detail.append("    WARNING: the accepted precondition was vacuous")
+    return score
 
-    print(f"\n{'PASS' if failures == 0 else f'FAIL ({failures} mismatches)'}")
-    return 0 if failures == 0 else 1
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("corpus", nargs="?", type=Path, help="where to clone the libraries")
+    ap.add_argument("--models", default=",".join(DEFAULT_MODELS),
+                    help="comma-separated model ids to compare")
+    ap.add_argument("--timeout", type=int, default=120)
+    args = ap.parse_args()
+
+    corpus = args.corpus or Path(tempfile.mkdtemp())
+    ensure_corpus(corpus)
+
+    scores: list[Score] = []
+    for model in [m.strip() for m in args.models.split(",") if m.strip()]:
+        print(f"\n=== {model} ===", flush=True)
+        try:
+            score = evaluate(model, corpus, args.timeout)
+        except RuntimeError as exc:  # no credentials, bad model id
+            print(f"  cannot run: {exc}")
+            continue
+        for line in score.detail:
+            print(line)
+        scores.append(score)
+
+    if not scores:
+        print("\nNo model ran. Set ANTHROPIC_API_KEY or run `ant auth login`.")
+        return 2
+
+    print("\n" + "=" * 72)
+    for score in scores:
+        print(score.line())
+    print(
+        "\nA wrong proposal costs a retry, not soundness -- the solver rejects it.\n"
+        "So compare hit rate against price, not correctness against perfection."
+    )
+    perfect = [s for s in scores if s.correct_kind == s.total == s.correct_loop]
+    return 0 if perfect else 1
 
 
 if __name__ == "__main__":

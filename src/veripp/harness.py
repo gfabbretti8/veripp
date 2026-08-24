@@ -984,3 +984,28 @@ def _try_struct(source_text: str, type_name: str) -> StructInfo | None:
         return find_struct(source_text, name)
     except SignatureError:
         return None
+
+
+# --------------------------------------------------------- vacuity check ---
+
+_REACHABILITY_MESSAGE = "veripp: harness is reachable under its assumptions"
+
+
+def reachability_variant(code: str) -> str:
+    """The same harness with a deliberately failing assertion at the end.
+
+    A precondition that contradicts itself, or is merely too strong to be
+    satisfiable, makes the call unreachable -- and an unreachable program
+    satisfies every property. ESBMC reports VERIFICATION SUCCESSFUL and the
+    "proof" means nothing.
+
+    Running this variant inverts the question: the trailing assertion is
+    always false, so a *reachable* harness must produce a counterexample.
+    If this variant verifies, the original proof was vacuous.
+    """
+    marker = "    return 0;"
+    index = code.rfind(marker)
+    if index < 0:
+        return code + f'\nstatic_assert(true, "{_REACHABILITY_MESSAGE}");\n'
+    probe = f'    VERIPP_ASSERT(0 && "{_REACHABILITY_MESSAGE}");\n'
+    return code[:index] + probe + code[index:]

@@ -114,7 +114,18 @@ class AnthropicLLM:
                 "(pip install 'veripp[llm]'), or use --no-llm"
             ) from exc
         self._anthropic = anthropic
+        # Construction resolves ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or an
+        # `ant auth login` profile; an unset env var alone does not mean there
+        # are no credentials. It succeeds even with none, and only fails when a
+        # request is sent -- so check here to fall back to offline mode with a
+        # note, rather than dying mid-run.
         self._client = anthropic.Anthropic()
+        if not (getattr(self._client, "api_key", None)
+                or getattr(self._client, "auth_token", None)):
+            raise RuntimeError(
+                "no Anthropic credentials found (set ANTHROPIC_API_KEY, or run "
+                "`ant auth login`); use --no-llm to silence this"
+            )
         self._model = model or self.MODEL
 
     # -- prompt plumbing -------------------------------------------------
@@ -141,6 +152,8 @@ class AnthropicLLM:
             raise LLMError(f"Anthropic API error {exc.status_code}") from exc
         except anthropic.APIConnectionError as exc:
             raise LLMError("could not reach the Anthropic API") from exc
+        except TypeError as exc:  # SDK raises this when auth resolves to nothing
+            raise LLMError(f"Anthropic client is not usable: {exc}") from exc
         return "".join(b.text for b in msg.content if b.type == "text")
 
     @staticmethod

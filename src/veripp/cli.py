@@ -401,6 +401,7 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
     return {
         "outcome": report.final.outcome.value,
         "bounded": not report.final.config.k_induction,
+        "vacuous": report.vacuous,
         "config": asdict(report.final.config),
         "assumptions": report.assumptions,
         "accepted_preconditions": report.accepted_preconditions,
@@ -421,6 +422,8 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
 
 def _exit_code(report: AgentReport) -> int:
     outcome = report.final.outcome
+    if report.vacuous:
+        return EXIT_INCONCLUSIVE  # a vacuous proof is not a pass
     if outcome is Outcome.VERIFIED:
         return EXIT_VERIFIED
     if outcome is Outcome.COUNTEREXAMPLE:

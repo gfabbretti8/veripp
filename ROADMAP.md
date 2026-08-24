@@ -56,6 +56,16 @@ Known M1 limits, all disclosed at runtime rather than papered over:
   still failed -- it was type visibility and frontend gaps, addressed by
   following the compilation database's include paths instead.
 
+## M1.7 — trusting the proposals (done)
+- [x] Vacuity check: a proof resting on assumptions is re-run with a false
+      assertion, so unsatisfiable preconditions are reported as VACUOUS
+      instead of passing. The solver cannot catch this on its own.
+- [x] `benchmarks/eval_triage.py --models a,b,c` scores triage per model
+      against the pilot's ground truth. Because the solver rejects wrong
+      proposals, the question is hit rate against price, not correctness.
+- [ ] Call-site validation of a proposed precondition (mechanical for literal
+      arguments), to catch over-tight but satisfiable invariants.
+
 ## M3 — sell it
 - GitHub Action.
 - Benchmarks: grown from `benchmarks/` (lodepng, stb_image_write today;

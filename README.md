@@ -196,6 +196,27 @@ Add the defining source with `--link src/helper.cpp` (repeatable) and the run
 accounts for it. In the example above that is the difference between a false
 counterexample and a proof.
 
+## Vacuous proofs
+
+A precondition that cannot be satisfied makes the target unreachable, and an
+unreachable program satisfies every property. ESBMC answers *"does this hold
+under these assumptions"* — it cannot notice the assumptions are impossible,
+and neither can a model that proposed them. Since the whole design lets an LLM
+suggest preconditions, that hole matters: a weak model fails toward
+over-constraining, and the solver applauds.
+
+So whenever a proof rests on assumptions, veripp re-runs the harness with a
+deliberately false assertion at the end. A reachable harness must fail it; if
+it verifies instead, nothing was checked:
+
+```
+Result: VACUOUS (nothing was actually checked)
+  The assumptions made the call unreachable, so every property held trivially.
+  This is NOT a proof. Weaken the precondition(s) below until the harness can run.
+```
+
+It exits non-zero, so a vacuous proof can never pass CI.
+
 ## Check your checker
 
 ```bash
