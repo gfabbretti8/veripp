@@ -48,6 +48,8 @@ runs:
     - name: Install ESBMC
       if: steps.cache-esbmc.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        ESBMC_VERSION: ${{ inputs.esbmc-version }}
       run: |
         set -euo pipefail
         mkdir -p ~/.cache/veripp-esbmc
@@ -57,7 +59,7 @@ runs:
           *) echo "::error::veripp's action supports Linux and macOS runners"; exit 1 ;;
         esac
         curl -fsSL -o /tmp/esbmc.zip \
-          "https://github.com/esbmc/esbmc/releases/download/${{ inputs.esbmc-version }}/$asset"
+          "https://github.com/esbmc/esbmc/releases/download/$ESBMC_VERSION/$asset"
         unzip -q /tmp/esbmc.zip -d ~/.cache/veripp-esbmc
 
     - name: Put ESBMC on PATH
@@ -69,24 +71,47 @@ runs:
 
     - name: Check the checker
       shell: bash
-      run: uv run --directory "${{ github.action_path }}" veripp doctor
+      # --project, never --directory: --directory changes the working
+      # directory, which would resolve the user's `source` relative to this
+      # action's checkout instead of their workspace, breaking every relative
+      # path. --project points uv at the environment without moving us.
+      run: uv run --project "$GITHUB_ACTION_PATH" veripp doctor
 
     - name: Run veripp
       shell: bash
+      # Inputs arrive as environment variables rather than being interpolated
+      # into the script text: a branch name or an args string is attacker-
+      # controllable on pull_request, and ${{ }} substitution would splice it
+      # straight into this shell.
+      env:
+        VERIPP_SOURCE: ${{ inputs.source }}
+        VERIPP_FUNCTION: ${{ inputs.function }}
+        VERIPP_ARGS: ${{ inputs.args }}
+        VERIPP_FAIL_ON: ${{ inputs.fail-on }}
       run: |
         set -uo pipefail
-        if [ -n "${{ inputs.function }}" ]; then
-          uv run --directory "${{ github.action_path }}" \
-            veripp verify "${{ inputs.source }}" --function "${{ inputs.function }}" ${{ inputs.args }}
+        # Word-splitting of VERIPP_ARGS is intended -- it carries flags like
+        # `-I include -D NDEBUG`.
+        # shellcheck disable=SC2086
+        if [ -n "$VERIPP_FUNCTION" ]; then
+          uv run --project "$GITHUB_ACTION_PATH" \
+            veripp verify "$VERIPP_SOURCE" --function "$VERIPP_FUNCTION" $VERIPP_ARGS
         else
-          uv run --directory "${{ github.action_path }}" \
-            veripp scan "${{ inputs.source }}" ${{ inputs.args }}
+          uv run --project "$GITHUB_ACTION_PATH" \
+            veripp scan "$VERIPP_SOURCE" $VERIPP_ARGS
         fi
         status=$?
+
         # 0 verified, 1 counterexample, 2 usage, 3 inconclusive/vacuous.
-        if [ "${{ inputs.fail-on }}" = "never" ]; then exit 0; fi
-        if [ "$status" -eq 3 ]; then
-          echo "::warning::veripp was inconclusive (bounds, timeout, or a vacuous proof)"
-          exit 0
-        fi
+        case "$status" in
+          0) echo "::notice::veripp: verified within the stated bounds" ;;
+          1) echo "::error::veripp: counterexample found" ;;
+          2) echo "::error::veripp: bad invocation (see the log above)" ;;
+          3) echo "::warning::veripp: inconclusive -- a bound, a timeout, or a vacuous proof. This is not a pass." ;;
+        esac
+
+        if [ "$VERIPP_FAIL_ON" = "never" ]; then exit 0; fi
+        # A usage error is always worth failing on: it means the step never
+        # actually checked anything.
+        if [ "$status" -eq 3 ]; then exit 0; fi
         exit "$status"

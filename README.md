@@ -224,6 +224,45 @@ Start with `fail-on: never`. A generated harness produces leads that still need
 triage, and a verifier that reddens the build on its first day gets removed on
 its second.
 
+## In a container
+
+```bash
+docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
+```
+
+Nothing to install, and the checker inside has already been probed: the image
+build runs `veripp doctor` and fails if the bundled ESBMC cannot find a planted
+bug, so an unsound image is never published.
+
+The image is genuinely multi-architecture, and the two halves are not built the
+same way. ESBMC publishes a prebuilt Linux binary for x86_64 only. The one
+prebuilt arm64 Linux ESBMC that exists anywhere is the Homebrew bottle, pinned
+to the 8.4 release that silently misses out-of-bounds writes
+([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)) — shipping that
+would trade a loud failure for a quiet one. So the arm64 image compiles ESBMC
+from source, and arm64 users get the same soundness guarantee as everyone else.
+
+The container runs as a non-root user and never writes to your tree, so the
+mount can be read-only:
+
+```bash
+docker run --rm -v "$PWD:/src:ro" ghcr.io/gfabbretti8/veripp \
+    verify src/img.c --function scale --assume 'w > 0 && h > 0'
+```
+
+## As a skill for coding agents
+
+Copy [`skill/veripp`](skill/veripp) into your agent's skills directory
+(`.claude/skills/veripp` for Claude Code) and the agent will reach for veripp
+when it is asked to verify or prove something about C/C++.
+
+The skill exists to correct one specific instinct. An agent that knows ESBMC
+will try to hand-write a `main()` full of `__ESBMC_nondet_int()`, sprinkle
+`__ESBMC_assume(...)`, and annotate loops with invariants. veripp already
+generates all of that from the signature, and re-checks it. The skill's first
+instruction is that the agent does not write the harness — plus how to read a
+bounded proof, and why a vacuous result is not a pass.
+
 ## Scan a whole file
 
 ```bash
