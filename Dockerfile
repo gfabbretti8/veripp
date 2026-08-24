@@ -59,6 +59,15 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       llvm-22 clang-22 libclang-22-dev libclang-cpp22-dev; \
     rm -rf /var/lib/apt/lists/*
+# esbmc's scripts/build.sh pip-installs its Python dependencies into the system
+# interpreter, which Ubuntu 24.04 refuses under PEP 668. This stage is a
+# throwaway builder whose only output is a single copied binary, so overriding
+# the guard here cannot affect anything that ships.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+# build.sh pip-installs meson as root, which lands in ~/.local/bin -- not on
+# PATH by default, so the build fails at line 417 with `meson: not found`.
+ENV PATH="/root/.local/bin:${PATH}"
+
 RUN set -eux; \
     git clone --depth 1 --branch "${ESBMC_VERSION}" \
       https://github.com/esbmc/esbmc.git /src/esbmc \

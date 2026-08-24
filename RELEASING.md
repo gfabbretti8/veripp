@@ -38,6 +38,47 @@ users will actually do works:
 uvx veripp doctor
 ```
 
+## The container image
+
+The image is what the README, the skill and `veripp doctor` all point people
+at, so it has to exist before those instructions are true.
+
+Tagging `v*` runs `.github/workflows/image.yml`, which builds both
+architectures on native runners, smoke-tests each one, pushes them by digest,
+and stitches a manifest. To rehearse without tagging, run the workflow
+manually with `push: false` — it builds and smoke-tests and pushes nothing.
+
+Two things about this build are worth remembering before changing it:
+
+- **The arm64 leg compiles ESBMC from source and takes on the order of an
+  hour.** That is not an oversight to optimise away. No sound prebuilt arm64
+  Linux ESBMC exists — the only one anywhere is the Homebrew bottle at 8.4,
+  which carries [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and
+  silently misses out-of-bounds writes. `tests/test_delivery.py` fails if that
+  stage ever turns into a download.
+- **It must be built on `ubuntu-24.04-arm`, not under qemu.** Emulating that
+  compile turns a long build into an unusable one.
+
+The Dockerfile runs `veripp doctor` as a build step, so an image whose ESBMC
+cannot detect a planted bug fails the build rather than shipping. That check is
+the reason to trust the image at all; do not move it behind a flag.
+
+To build and check one architecture locally:
+
+```bash
+docker buildx build --platform linux/amd64 --load -t veripp:test .
+./tests/image_smoketest.sh veripp:test
+```
+
+On a VM-backed runtime (colima, Lima, Docker Desktop), point the smoke test at
+a directory the VM actually shares, or the bind mount comes up empty and every
+case fails with "file not found":
+
+```bash
+mkdir -p ~/tmp
+SMOKE_TMPDIR=$HOME/tmp PLATFORM=linux/amd64 ./tests/image_smoketest.sh veripp:test
+```
+
 ## Version
 
 `pyproject.toml` is the only place the version lives. Bump it before building;
