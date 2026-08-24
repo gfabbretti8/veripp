@@ -74,9 +74,30 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [x] Prompts live in one place shared by every provider, so adding a vendor
       cannot change what is asked.
 
-## M3 — sell it
-- GitHub Action.
-- Benchmarks: grown from `benchmarks/` (lodepng, stb_image_write today;
-  tinyxml2/jsoncpp once the upstream ESBMC defects there are fixed),
-  plus one reproduced CVE.
-- CppCon lightning talk / Show HN.
+## M3 — delivery (done, except publishing)
+- [x] GitHub Action (`action.yml`), with a self-test workflow that runs it
+      three ways. It previously used `uv run --directory`, which resolves the
+      caller's source against the action's own checkout and so broke every
+      relative path; nothing caught that because nothing ran the action.
+- [x] Multi-architecture container image. amd64 uses the published binary;
+      arm64 compiles ESBMC from source, because the only prebuilt arm64 Linux
+      ESBMC is the Homebrew 8.4 bottle and 8.4 carries esbmc#6508. The build
+      runs `veripp doctor`, so an image whose checker misses a planted bug
+      fails to build. 446 MB / 528 MB, 13/13 on `tests/image_smoketest.sh`.
+- [x] Agent skill, installable as a Claude Code plugin from this repo. Its
+      first instruction is the differentiator: the agent does not write the
+      harness.
+- [x] Benchmarks across nine libraries plus a reproduced CVE
+      (`benchmarks/CORPUS.md`, `demo/cve-2019-13223/`).
+- [ ] Actually publish: the image to ghcr.io, the package to PyPI. Both need
+      credentials and a decision to make the repo public.
+- [ ] CppCon lightning talk / Show HN.
+
+Two things worth knowing before touching delivery:
+- The `weekly` ESBMC tag is not rolling. It currently points at 2026-05-27
+  with master ~1900 commits ahead, which is why the arm64 image builds from
+  master: the fix that makes an arm64 build possible at all (esbmc#5252)
+  landed after that tag was cut.
+- ESBMC publishes no arm64 Linux binary, and its `scripts/build.sh` does not
+  work on aarch64 in a clean container. `Dockerfile` configures cmake directly
+  instead; see the comments there for why each flag is set.
