@@ -58,8 +58,8 @@ triages counterexamples with any LLM; and refuses to call a vacuous or
 unsoundly-obtained result a proof.
 
 Measured on [lodepng](https://github.com/lvandeve/lodepng) (260 functions):
-82% harnessable, **92 proved** free of overflow, out-of-bounds, null deref and
-division by zero within the stated bounds, against 51 counterexamples to
+82% harnessable, **99 proved** free of overflow, out-of-bounds, null deref and
+division by zero within the stated bounds, against 61 counterexamples to
 triage. See `ROADMAP.md` for what is not done, and
 **Known limits** below for what to expect before you point it at your code.
 
@@ -157,6 +157,19 @@ veripp verify examples/ring_buffer.cpp --class RingBuffer --max-calls 6 \
 Without `--function` or `--class`, veripp verifies the file's own `main()` —
 useful when you have written the harness yourself.
 
+## See it find a real CVE
+
+```bash
+./demo/cve-2019-13223/run.sh        # ~30 seconds, clones stb for you
+```
+
+veripp rediscovers [CVE-2019-13223](https://nvd.nist.gov/vuln/detail/CVE-2019-13223)
+— a division-by-zero in stb_vorbis's `predict_point()`, reachable from a crafted
+Ogg Vorbis file — on the real, unmodified upstream source, then proves that the
+precondition the official fix enforces (`x1 != x0`) eliminates it. In agent mode
+the triage proposes that precondition itself; the solver confirms it. See
+[demo/cve-2019-13223](demo/cve-2019-13223/README.md).
+
 ## Bring your own model
 
 Triage works with any provider, and veripp needs no extra packages for most of
@@ -211,11 +224,11 @@ proved, what produced counterexamples, and — importantly — what it could not
 reach and why:
 
 ```
-  PROVED             92  no overflow, out-of-bounds, null deref or division by
+  PROVED             99  no overflow, out-of-bounds, null deref or division by
                          zero, within the stated bounds and assumptions
-  COUNTEREXAMPLE     51  a property fails for some input -- triage each one
-  HARNESS ARTIFACT   12  failed because of how the harness was built, not the code
-  INCONCLUSIVE       69  timed out, hit the unwind bound, or the frontend refused it
+  COUNTEREXAMPLE     61  a property fails for some input -- triage each one
+  HARNESS ARTIFACT    3  failed because of how the harness was built, not the code
+  INCONCLUSIVE       52  timed out, hit the unwind bound, or the frontend refused it
   NOT HARNESSABLE    47  veripp could not build inputs for the signature
 ```
 
@@ -289,19 +302,6 @@ fixed upstream but unreleased): an out-of-bounds write to a member array is
 missed when the index is another member of the same object reached through
 `this` or a pointer — the ordinary container idiom. `doctor` fails loudly
 rather than letting you build proofs on it.
-
-## Killer example: a real CVE, found and fixed
-
-```bash
-./demo/cve-2019-13223/run.sh
-```
-
-veripp rediscovers [CVE-2019-13223](https://nvd.nist.gov/vuln/detail/CVE-2019-13223)
-— a division-by-zero in stb_vorbis's `predict_point()`, reachable from a crafted
-Ogg Vorbis file — on the real, unmodified upstream source, then proves that the
-precondition the official fix enforces (`x1 != x0`) eliminates it. In agent mode
-the triage proposes that precondition itself; the solver confirms it. See
-[demo/cve-2019-13223](demo/cve-2019-13223/README.md).
 
 ## What a result looks like
 
