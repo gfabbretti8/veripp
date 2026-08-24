@@ -124,6 +124,15 @@ preconditions hoisted in front of the call. Inspect it before you trust it:
 veripp harness examples/off_by_one.cpp --function sum_array
 ```
 
+Parameters that are structs or objects are built field by field with
+nondeterministic values — nested structs recursively, array fields by loop,
+pointer fields followed to `--max-struct-depth` (default 2) and then
+null-terminated. Every simplification is reported as an assumption, including
+the big one: an object with every field nondeterministic includes states no
+real caller can produce, so a counterexample may be an unreachable object
+state. Constrain it with `--assume 'w->count > 0'` and the solver checks the
+property under that.
+
 For a class, `--class` drives a bounded nondeterministic **sequence** of its
 public methods, so states built up across calls are explored — not just the
 first call on a fresh object:

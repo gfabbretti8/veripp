@@ -121,6 +121,36 @@ class Param:
 
 
 @dataclass
+class Field:
+    """One data member of a struct or class."""
+
+    type: str
+    name: str
+    array_len: str | None = None   # "4" for `int a[4]`, "" for `int a[]`
+    access: str = "public"
+
+    @property
+    def is_pointer(self) -> bool:
+        return self.type.rstrip().endswith("*")
+
+    def pointee(self) -> str:
+        t = self.type.rstrip()
+        if t.endswith("*"):
+            t = t[:-1].rstrip()
+        return re.sub(r"^\s*const\b\s*", "", t).strip()
+
+
+@dataclass
+class StructInfo:
+    """A struct/class viewed as data: what a harness must fill in."""
+
+    name: str
+    fields: list[Field] = field(default_factory=list)
+    is_union: bool = False
+    unsupported: dict[str, str] = field(default_factory=dict)  # field -> why
+
+
+@dataclass
 class ClassInfo:
     """A class and the public surface a sequence harness can drive."""
 
@@ -741,3 +771,138 @@ def _signature_at(source: str, scrubbed: str, offset: int, name: str) -> Signatu
         params=_parse_params(source[lparen + 1 : rparen]),
         class_name=name,
     )
+
+
+# -------------------------------------------------------------- fields ----
+
+_FIELD_SKIP = re.compile(
+    r"^\s*(typedef|using|friend|static_assert|template|enum|class|struct|union)\b"
+)
+_ARRAY_FIELD_RE = re.compile(r"^(.*?)\s*\[\s*([^\]]*)\s*\]\s*$")
+_BITFIELD_RE = re.compile(r":\s*\d+\s*$")
+
+
+def find_struct(source: str, name: str) -> StructInfo:
+    """Data members of `name`, in declaration order.
+
+    Only what a harness has to initialise: methods, nested type definitions,
+    and static members (which are not per-object) are skipped. Members the
+    scanner cannot read are recorded in `unsupported` rather than dropped, so
+    the harness can disclose them instead of silently leaving holes.
+    """
+    scrubbed = scrub(source)
+    ranges = [c for c in find_class_ranges(scrubbed) if c.name == name]
+    if not ranges:
+        raise SignatureError(
+            f"no definition of `{name}` is visible in this translation unit, "
+            "so a harness cannot construct one (an opaque/forward-declared "
+            "type: include the header that defines it, or harness a function "
+            "that does not take one)"
+        )
+    rng = ranges[0]
+    if rng.templated:
+        raise SignatureError(f"`{name}` is a class template; harness a concrete instantiation")
+
+    info = StructInfo(name=name, is_union=_is_union(scrubbed, rng))
+    access = "public" if _is_struct(scrubbed, rng) or info.is_union else "private"
+
+    for statement, start in _field_statements(scrubbed, rng):
+        acc = _ACCESS_RE.match(statement.strip())
+        if acc:
+            access = acc.group(1)
+            continue
+        if _FIELD_SKIP.match(statement) or "(" in statement:
+            continue  # a method, a nested type, an alias
+        raw = statement.strip()
+        if not raw or raw.startswith("static"):
+            continue
+        try:
+            info.fields.extend(_parse_fields(statement, access))
+        except SignatureError as exc:
+            info.unsupported[raw[:40]] = str(exc)
+    return info
+
+
+def _is_union(scrubbed: str, rng: "_ClassRange") -> bool:
+    head = scrubbed[max(0, rng.start - 200) : rng.start]
+    return bool(re.search(r"\bunion\s+\w*\s*$", head))
+
+
+def _field_statements(scrubbed: str, rng: "_ClassRange"):
+    """Yield (text, offset) for each `;`-terminated statement at body depth 0."""
+    i = rng.start + 1
+    depth = 0
+    start = i
+    while i < rng.end:
+        ch = scrubbed[i]
+        if ch in "{([":
+            depth += 1
+        elif ch in "})]":
+            depth -= 1
+        elif depth == 0 and ch == ";":
+            yield scrubbed[start:i], start
+            start = i + 1
+        elif depth == 0 and ch == ":" and scrubbed[i - 1 : i] != ":" and scrubbed[i + 1 : i + 2] != ":":
+            yield scrubbed[start : i + 1], start
+            start = i + 1
+        i += 1
+
+
+def _parse_fields(text: str, access: str) -> list[Field]:
+    """`int a, b[4];` -> two Fields. Declarators share the leading type."""
+    text = re.sub(r"=\s*[^,]+", "", text)  # drop default member initialisers
+    declarators = split_top_level(text)
+    if not declarators:
+        return []
+    first = declarators[0].strip()
+    if _BITFIELD_RE.search(first):
+        raise SignatureError("bitfields are not supported")
+
+    m = re.search(r"([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*$", first)
+    if m is None:
+        raise SignatureError(f"could not read a field name from {first!r}")
+    base_type = first[: m.start()].strip()
+    if not base_type:
+        raise SignatureError(f"could not read a field type from {first!r}")
+
+    fields: list[Field] = []
+    for idx, decl in enumerate(declarators):
+        decl = decl.strip()
+        array = _ARRAY_FIELD_RE.match(decl)
+        extent = None
+        if array:
+            decl, extent = array.group(1).strip(), array.group(2).strip()
+        if idx == 0:
+            name = decl[len(base_type) :].strip()
+            type_ = base_type
+        else:  # subsequent declarators reuse the base type; `*p` adds a star
+            name = decl.lstrip("*& ")
+            type_ = base_type + ("*" if decl.lstrip().startswith("*") else "")
+        # `int *p` puts the star on the declarator, not the type
+        while name.startswith(("*", "&")):
+            type_ += name[0]
+            name = name[1:].strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise SignatureError(f"could not read a field name from {decl!r}")
+        fields.append(Field(type=type_.strip(), name=name, array_len=extent, access=access))
+    return fields
+
+
+_ENUM_RE = re.compile(
+    r"\benum\s+(?:class\s+|struct\s+)?([A-Za-z_]\w*)?[^;{]*\{[^}]*\}\s*([A-Za-z_]\w*)?\s*;"
+)
+
+
+def collect_enum_types(source: str) -> set[str]:
+    """Names of enumerations declared in `source`.
+
+    An enum is an integer as far as a harness is concerned, so recognising one
+    is the difference between filling a field and leaving a hole in the object.
+    """
+    scrubbed = scrub(source)
+    names: set[str] = set()
+    for m in _ENUM_RE.finditer(scrubbed):
+        names.update(n for n in (m.group(1), m.group(2)) if n)
+    for m in re.finditer(r"\benum\s+([A-Za-z_]\w*)\s*;", scrubbed):
+        names.add(m.group(1))
+    return names

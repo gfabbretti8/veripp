@@ -65,7 +65,7 @@ class AgentReport:
                 + ". This 'verified' does NOT cover that class of bug; "
                 "upgrade esbmc and re-run (see `veripp doctor`)."
             )
-        if self.accepted_preconditions:
+        if self.verified and self.accepted_preconditions:
             lines.append(
                 "  CONDITIONAL: verified only under triage-proposed "
                 "precondition(s) the solver confirmed sufficient. Nothing "
@@ -80,10 +80,10 @@ class AgentReport:
                 lines.append(f"  guard: {prop.expression}")
             if prop.cwes:
                 lines.append(f"  CWE: {', '.join(prop.cwes)}")
-            inputs = self.final.input_assignments()
+            inputs = self.final.input_summary()
             if inputs:
                 lines.append("Counterexample inputs:")
-                lines += [f"  {a}" for a in inputs]
+                lines += [f"  {line}" for line in inputs]
         if self.final.error:
             lines.append(f"Error: {self.final.error}")
         if self.diagnosis:

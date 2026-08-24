@@ -24,12 +24,16 @@ from pathlib import Path
 
 from .cppsig import (
     ClassInfo,
+    Field,
     Param,
+    StructInfo,
     Signature,
     SignatureError,
+    collect_enum_types,
     collect_scalar_typedefs,
     find_class,
     find_function,
+    find_struct,
     match_bracket,
     normalize_type,
     scrub,
@@ -43,6 +47,9 @@ DEFAULT_MAX_ARRAY_LEN = 4
 #: space, so this is deliberately small; raise it with --max-calls.
 DEFAULT_MAX_CALLS = 4
 
+#: Default depth for following pointer fields inside a constructed object.
+DEFAULT_MAX_STRUCT_DEPTH = 2
+
 _LOOP_VAR = "veripp_i"
 _RECEIVER = "veripp_obj"
 
@@ -55,6 +62,10 @@ class HarnessError(Exception):
 class HarnessOptions:
     max_array_len: int = DEFAULT_MAX_ARRAY_LEN
     assume_pointers_nonnull: bool = True
+    #: How far to follow pointer fields when building an object. Value fields
+    #: terminate on their own; pointers do not, so the chain is cut here and
+    #: the cut is reported as an assumption.
+    max_struct_depth: int = DEFAULT_MAX_STRUCT_DEPTH
     #: Length of the generated call sequence for a class target. A single call
     #: on a fresh object explores almost nothing about a stateful type; the
     #: interesting states are the ones several calls build up.
@@ -112,8 +123,17 @@ _LENGTH_NAMES = {
 }
 
 
+#: Enum types seen in the translation unit being harnessed. An enum is an
+#: integer, so filling one is a cast; without this the field is a hole.
+_ENUMS: set[str] = set()
+
+
 def nondet_for(type_: str, typedefs: dict[str, str] | None = None) -> str | None:
     canonical = normalize_type(type_, typedefs)
+    if canonical in _ENUMS:
+        # Any representable value, not only the declared enumerators -- which
+        # is what a caller can actually pass through an integer conversion.
+        return f"({canonical})VERIPP_NONDET_INT()"
     nondet = _NONDET_BY_TYPE.get(canonical)
     if nondet is not None and canonical != normalize_type(type_):
         # A project typedef resolved to a scalar; cast so the harness compiles
@@ -141,7 +161,12 @@ def generate(
     options = options or HarnessOptions()
     text = source.read_text()
     signature = find_function(text, function)
-    typedefs = collect_scalar_typedefs(_with_local_includes(source, text))
+    # Struct definitions usually live in the library's own header, not the .cpp
+    # being targeted, so resolve types against both.
+    expanded = _with_local_includes(source, text)
+    typedefs = collect_scalar_typedefs(expanded)
+    _ENUMS.clear()
+    _ENUMS.update(collect_enum_types(expanded))
     _reject_conflicting_main(text, source)
 
     body: list[str] = []
@@ -153,7 +178,7 @@ def generate(
     for param in signature.params:
         if param.name in buffers:
             continue
-        body += _emit_scalar(param, signature, assumptions, options, typedefs)
+        body += _emit_scalar(param, signature, assumptions, options, typedefs, expanded)
 
     for buffer_name, length in lengths.items():
         param = next(p for p in signature.params if p.name == buffer_name)
@@ -278,7 +303,10 @@ def _validate_precondition(expr: str, signature: Signature) -> None:
     wrong thing.
     """
     names = {p.name for p in signature.params}
-    identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", scrub(expr)))
+    # Only the ROOT of each expression has to be a parameter: `w->count` and
+    # `w.inner.x` name fields of `w`, which the type system checks, not us.
+    rooted = re.sub(r"(?:\.|->)\s*[A-Za-z_]\w*", "", scrub(expr))
+    identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", rooted))
     unknown = identifiers - names - _CPP_WORDS
     if unknown:
         raise HarnessError(
@@ -299,11 +327,24 @@ def _emit_scalar(
     assumptions: list[str],
     options: HarnessOptions,
     typedefs: dict[str, str],
+    source_text: str = "",
 ) -> list[str]:
     if param.is_pointer:
+        if source_text and nondet_for(param.pointee(), typedefs) is None:
+            obj = _try_object(param, signature, assumptions, options, typedefs, source_text)
+            if obj is not None:
+                return obj
         return _emit_lone_pointer(param, assumptions, options, typedefs)
     if param.is_reference:
+        if source_text and nondet_for(param.pointee(), typedefs) is None:
+            obj = _try_object(param, signature, assumptions, options, typedefs, source_text)
+            if obj is not None:
+                return obj
         return _emit_reference(param, assumptions, typedefs)
+    if source_text and nondet_for(param.type, typedefs) is None:
+        obj = _try_object(param, signature, assumptions, options, typedefs, source_text)
+        if obj is not None:
+            return obj
 
     nondet = nondet_for(param.type, typedefs)
     if nondet is None:
@@ -314,6 +355,14 @@ def _emit_scalar(
             "the harness by hand and verify it directly (no --function)."
         )
     return [f"{_decl_type(param.type)} {param.name} = {nondet};"]
+
+
+def _try_object(param, signature, assumptions, options, typedefs, source_text):
+    """Build a struct parameter, or return None so the caller reports why not."""
+    try:
+        return _emit_object(param, signature, assumptions, options, typedefs, source_text)
+    except SignatureError:
+        return None
 
 
 def _emit_lone_pointer(
@@ -529,14 +578,17 @@ def generate_sequence(
     options = options or HarnessOptions()
     text = source.read_text()
     info = find_class(text, class_name)
-    typedefs = collect_scalar_typedefs(_with_local_includes(source, text))
+    expanded = _with_local_includes(source, text)
+    typedefs = collect_scalar_typedefs(expanded)
+    _ENUMS.clear()
+    _ENUMS.update(collect_enum_types(expanded))
     _reject_conflicting_main(text, source)
 
     callable_methods: list[Signature] = []
     unsupported: dict[str, str] = dict(info.skipped)
     for method in info.methods:
         try:
-            _method_arguments(method, typedefs, options, [], probe=True)
+            _method_arguments(method, typedefs, options, [], probe=True, source_text=expanded)
         except HarnessError as exc:
             unsupported[method.name] = str(exc).split(";")[0]
             continue
@@ -570,7 +622,9 @@ def generate_sequence(
         keyword = "if" if idx == 0 else "} else if"
         body.append(f"    {keyword} ({_CHOICE_VAR} == {idx}) {{")
         args: list[str] = []
-        for line in _method_arguments(method, typedefs, options, assumptions):
+        for line in _method_arguments(
+            method, typedefs, options, assumptions, source_text=expanded
+        ):
             body.append(f"        {line}")
         args = [p.name for p in method.params]
         call = f"{_RECEIVER}.{method.name}({', '.join(args)})"
@@ -598,6 +652,7 @@ def _method_arguments(
     options: HarnessOptions,
     assumptions: list[str],
     probe: bool = False,
+    source_text: str = "",
 ) -> list[str]:
     """Declarations for one call's arguments, scoped to that branch."""
     lines: list[str] = []
@@ -607,7 +662,7 @@ def _method_arguments(
     for param in method.params:
         if param.name in buffers:
             continue
-        lines += _emit_scalar(param, method, sink, options, typedefs)
+        lines += _emit_scalar(param, method, sink, options, typedefs, source_text)
     for buffer_name, length in lengths.items():
         param = next(p for p in method.params if p.name == buffer_name)
         lines += _emit_buffer(param, length, options, sink, typedefs)
@@ -693,3 +748,163 @@ def _render_sequence(source, info, methods, body, assumptions, options) -> str:
         include=source.resolve(),
         body=indented,
     )
+
+
+# ------------------------------------------------- object construction ---
+
+
+def _emit_object(
+    param: Param,
+    signature: Signature,
+    assumptions: list[str],
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+    source_text: str,
+) -> list[str]:
+    """Build an object for a struct/class parameter and pass it in.
+
+    Fields are filled nondeterministically, so the harness explores every
+    field combination -- including combinations no real caller would produce.
+    That is the honest default: the alternative is to guess an invariant and
+    silently narrow the proof. Where the object has a real invariant, state it
+    with --assume (or let triage propose it) and the solver will check the
+    property under it.
+    """
+    type_name = param.pointee() if (param.is_pointer or param.is_reference) else param.type
+    type_name = re.sub(r"^\s*(const|volatile)\s+", "", type_name).strip()
+    info = find_struct(source_text, type_name)
+
+    storage = f"{param.name}_obj"
+    lines = [f"{type_name} {storage};"]
+    lines += _fill_fields(info, storage, 0, options, typedefs, source_text, assumptions,
+                          seen={type_name})
+    assumptions.append(
+        f"`{param.name}` points to one `{type_name}` with every field "
+        "nondeterministic: field combinations no real caller can produce are "
+        "included, so a counterexample may be an unreachable object state"
+    )
+    if param.is_pointer:
+        lines.append(f"{_decl_type(param.type)} {param.name} = &{storage};")
+    elif param.is_reference:
+        lines.append(f"{type_name}& {param.name} = {storage};")
+    else:
+        lines.append(f"{type_name}& {param.name} = {storage};")
+    return lines
+
+
+def _fill_fields(
+    info: StructInfo,
+    prefix: str,
+    depth: int,
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+    source_text: str,
+    assumptions: list[str],
+    seen: set[str],
+) -> list[str]:
+    lines: list[str] = []
+    for f in info.fields:
+        target = f"{prefix}.{f.name}"
+        if f.array_len is not None:
+            lines += _fill_array_field(f, target, typedefs, assumptions)
+            continue
+        if f.is_pointer:
+            lines += _fill_pointer_field(
+                f, target, depth, options, typedefs, source_text, assumptions, seen
+            )
+            continue
+        nondet = nondet_for(f.type, typedefs)
+        if nondet is not None:
+            lines.append(f"{target} = {nondet};")
+            continue
+        nested = _try_struct(source_text, f.type)
+        if nested is not None and nested.name not in seen:
+            lines += _fill_fields(
+                nested, target, depth, options, typedefs, source_text, assumptions,
+                seen | {nested.name},
+            )
+        else:
+            assumptions.append(
+                f"field `{target}` of type `{f.type}` is left uninitialised "
+                "(ESBMC treats it as nondeterministic, but veripp did not "
+                "model its structure)"
+            )
+    for raw, why in info.unsupported.items():
+        assumptions.append(f"member `{raw}` was not initialised: {why}")
+    return lines
+
+
+def _fill_array_field(
+    f: Field, target: str, typedefs: dict[str, str], assumptions: list[str]
+) -> list[str]:
+    nondet = nondet_for(f.type, typedefs)
+    if nondet is None:
+        assumptions.append(
+            f"array field `{target}` of `{f.type}` is left uninitialised "
+            "(element type not modelled)"
+        )
+        return []
+    if not f.array_len or not f.array_len.isdigit():
+        assumptions.append(
+            f"array field `{target}` has a non-literal extent "
+            f"(`{f.array_len}`) and is left uninitialised"
+        )
+        return []
+    var = f"veripp_i_{f.name}"
+    return [
+        f"for (unsigned long {var} = 0; {var} < {f.array_len}; ++{var})",
+        f"    {target}[{var}] = {nondet};",
+    ]
+
+
+def _fill_pointer_field(
+    f: Field,
+    target: str,
+    depth: int,
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+    source_text: str,
+    assumptions: list[str],
+    seen: set[str],
+) -> list[str]:
+    if depth >= options.max_struct_depth:
+        assumptions.append(
+            f"pointer field `{target}` is null (struct depth bound "
+            f"{options.max_struct_depth} reached); deeper object graphs are "
+            "NOT explored"
+        )
+        return [f"{target} = 0;"]
+
+    pointee = f.pointee()
+    nondet = nondet_for(pointee, typedefs)
+    storage = f"{target.replace('.', '_')}_target"
+    if nondet is not None:
+        assumptions.append(f"pointer field `{target}` points to one nondeterministic `{pointee}`")
+        return [f"static {pointee} {storage} = {nondet};", f"{target} = &{storage};"]
+
+    nested = _try_struct(source_text, pointee)
+    if nested is None:
+        assumptions.append(
+            f"pointer field `{target}` is null: `{pointee}` is not a type "
+            "veripp can construct here"
+        )
+        return [f"{target} = 0;"]
+
+    lines = [f"static {pointee} {storage};"]
+    lines += _fill_fields(
+        nested, storage, depth + 1, options, typedefs, source_text, assumptions,
+        seen | {pointee},
+    )
+    lines.append(f"{target} = &{storage};")
+    assumptions.append(f"pointer field `{target}` points to a nondeterministic `{pointee}`")
+    return lines
+
+
+def _try_struct(source_text: str, type_name: str) -> StructInfo | None:
+    name = re.sub(r"^\s*(const|volatile|struct|class)\s+", "", type_name).strip()
+    if not re.fullmatch(r"[A-Za-z_]\w*", name):
+        return None
+    try:
+        return find_struct(source_text, name)
+    except SignatureError:
+        return None

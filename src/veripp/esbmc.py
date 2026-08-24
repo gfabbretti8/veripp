@@ -194,6 +194,33 @@ class VerifyResult:
         """Every assignment in the counterexample, in execution order."""
         return [a for step in self.trace for a in step.assignments]
 
+    def input_summary(self, limit: int = 12, width: int = 90) -> list[str]:
+        """Readable counterexample inputs: what a developer needs to reproduce.
+
+        The raw trace is faithful but unusable for objects -- ESBMC prints the
+        whole containing struct as the "value" of every field write, so an
+        8-element array field produces eight near-identical multi-line dumps.
+        This collapses array indices, keeps only the final value written to
+        each location, and truncates the dumps.
+        """
+        latest: dict[str, str] = {}
+        counts: dict[str, int] = {}
+        for a in self.input_assignments():
+            key = re.sub(r"\[\s*\d+\s*\]", "[*]", a.lvalue)
+            latest[key] = a.value
+            counts[key] = counts.get(key, 0) + 1
+
+        lines: list[str] = []
+        for key, value in list(latest.items())[:limit]:
+            value = " ".join(value.split())
+            if len(value) > width:
+                value = value[: width - 3] + "..."
+            suffix = f"   ({counts[key]} elements)" if counts[key] > 1 else ""
+            lines.append(f"{key} = {value}{suffix}")
+        if len(latest) > limit:
+            lines.append(f"... and {len(latest) - limit} more")
+        return lines
+
     def input_assignments(self) -> list[Assignment]:
         """Assignments made in main(): the concrete inputs that trigger the bug.
 
@@ -392,21 +419,37 @@ def _parse_trace(output: str) -> list[TraceStep]:
 
 
 def _parse_assignments(block: str) -> list[Assignment]:
+    """Assignments from one trace state, joining multi-line struct values.
+
+    A struct value spans lines and its continuations contain `=` of their own
+    (`.inner=nil, .next=nil }`), so "does this line look like an assignment"
+    is not enough to tell a new assignment from a continuation. Brace balance
+    is: while the value so far has an unclosed `{`, every following line
+    belongs to it.
+    """
     assignments: list[Assignment] = []
+    open_braces = 0
     for line in block.splitlines():
         if not line.strip() or _DASHES_RE.match(line):
             continue
-        if line.strip().startswith("Violated property"):
+        if open_braces <= 0 and line.strip().startswith("Violated property"):
             break
+
+        if open_braces > 0 and assignments:  # inside a multi-line value
+            assignments[-1].value += " " + line.strip()
+            assignments[-1].raw += "\n" + line
+            open_braces += line.count("{") - line.count("}")
+            continue
+
         m = _ASSIGNMENT_RE.match(line)
         if m is None:
-            # A continuation of a multi-line struct/array value.
             if assignments:
                 assignments[-1].value += " " + line.strip()
                 assignments[-1].raw += "\n" + line
             continue
         value = _BINARY_SUFFIX_RE.sub("", m.group("value")).strip()
         assignments.append(Assignment(lvalue=m.group("lvalue"), value=value, raw=line))
+        open_braces = value.count("{") - value.count("}")
     return assignments
 
 

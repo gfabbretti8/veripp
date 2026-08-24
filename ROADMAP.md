@@ -31,6 +31,17 @@ Known M1 limits, all disclosed at runtime rather than papered over:
       rejected, so a checker with a false-negative hole cannot silently back
       a "verified" result (esbmc#6508 is one such hole in 8.4).
 
+## M1.6 — objects as inputs (done)
+- [x] Struct/class parameters built field by field: nested structs, array
+      fields, pointer fields to a depth bound, enums, and honest refusal for
+      opaque types. Struct definitions are resolved through the TU's own
+      `#include "..."` headers, where real libraries keep them.
+- [x] Preconditions may talk about fields (`--assume 'w->count > 0'`).
+- [x] Counterexample rendering for objects: array writes collapsed, one line
+      per location, long struct dumps truncated.
+- Measured on lodepng: harnessable functions went 20.8% -> 65.8%, and the
+  "pointer to non-scalar" refusal went 66.2% -> 23.1%.
+
 ## M2 — real projects
 - libclang slicer: compile_commands.json -> self-contained TU per function.
 - Sound havoc stubs for external calls.

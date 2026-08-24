@@ -159,3 +159,37 @@ def test_soundness_probes_are_wired_and_meaningful():
     assert all(isinstance(v, bool) for v in results.values())
     # A checker that misses a plain local-array overflow is beyond salvage.
     assert results["local-array bounds"] is True
+
+
+def test_multiline_struct_values_are_one_assignment():
+    """ESBMC prints a struct value across lines, and the continuations contain
+    `=` of their own -- so line shape alone cannot separate them."""
+    output = (
+        "[Counterexample]\n\n"
+        "State 1 file h.cpp line 23 column 5 function main thread 0\n"
+        "----------------------------------------------------\n"
+        "  w_obj.count = { .count=nondet_symbol(nondet0), .name=nil,\n"
+        "    .inner=nil, .next=nil }\n"
+        "\nVERIFICATION FAILED\n"
+    )
+    result = parse_output(output, CFG, exit_code=1)
+    assignments = result.assignments()
+    assert len(assignments) == 1
+    assert assignments[0].lvalue == "w_obj.count"
+    assert ".next=nil }" in assignments[0].value
+
+
+def test_input_summary_collapses_arrays_and_truncates():
+    states = "".join(
+        f"State {i} file h.cpp line 25 column 9 function main thread 0\n"
+        "----------------------------------------------------\n"
+        f"  obj.name[{i}] = {'x' * 200}\n\n"
+        for i in range(8)
+    )
+    result = parse_output("[Counterexample]\n\n" + states + "VERIFICATION FAILED\n",
+                          CFG, exit_code=1)
+    summary = result.input_summary()
+    assert len(summary) == 1
+    assert "obj.name[*]" in summary[0]
+    assert "(8 elements)" in summary[0]
+    assert len(summary[0]) < 160  # truncated, not a wall of text
