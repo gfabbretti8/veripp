@@ -595,9 +595,15 @@ int main() {{
 """
 
 
+def _comment_lines(assumptions: list[str]) -> str:
+    """Assumptions as a `//` block. Each becomes exactly one line: a stray
+    newline here would end the comment and emit uncompilable C++."""
+    return "\n".join(f"//   - {' '.join(a.split())}" for a in assumptions) or "//   - none"
+
+
 def _render(source: Path, signature: Signature, body: list[str], assumptions: list[str]) -> str:
     params = ", ".join(f"{p.type} {p.name}".replace("  ", " ") for p in signature.params)
-    assumption_lines = "\n".join(f"//   - {a}" for a in assumptions) or "//   - none"
+    assumption_lines = _comment_lines(assumptions)
     while body and not body[0].strip():
         body.pop(0)
     indented = "\n".join(("    " + line if line else "") for line in body)
@@ -799,7 +805,7 @@ def _render_sequence(source, info, methods, body, assumptions, options) -> str:
         )
         for m in methods
     )
-    assumption_lines = "\n".join(f"//   - {a}" for a in assumptions) or "//   - none"
+    assumption_lines = _comment_lines(assumptions)
     indented = "\n".join(("    " + line if line else "") for line in body)
     return _SEQUENCE_HEADER.format(
         source=source,
@@ -833,7 +839,9 @@ def _emit_object(
     property under it.
     """
     type_name = param.pointee() if (param.is_pointer or param.is_reference) else param.type
-    type_name = re.sub(r"^\s*(const|volatile)\s+", "", type_name).strip()
+    type_name = re.sub(
+        r"^\s*(?:(?:const|volatile|struct|union|class|enum)\s+)+", "", type_name
+    ).strip()
     info = find_struct(source_text, type_name)
 
     storage = f"{param.name}_obj"

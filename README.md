@@ -145,6 +145,26 @@ veripp verify examples/ring_buffer.cpp --class RingBuffer --max-calls 6 \
 Without `--function` or `--class`, veripp verifies the file's own `main()` —
 useful when you have written the harness yourself.
 
+## Scan a whole file
+
+```bash
+veripp scan src/parser.cpp
+```
+
+Harnesses and verifies every function veripp can model, then reports what it
+proved, what produced counterexamples, and — importantly — what it could not
+reach and why:
+
+```
+  PROVED             39  no overflow, out-of-bounds, null deref or division by
+                         zero, within the stated bounds and assumptions
+  COUNTEREXAMPLE     53  a property fails for some input -- triage each one
+  INCONCLUSIVE       87  timed out, hit the unwind bound, or the frontend refused it
+  NOT HARNESSABLE    81  veripp could not build inputs for the signature
+```
+
+`--json` for machine-readable output, `-j` for parallelism.
+
 ## Real projects
 
 veripp reads your build system rather than making you restate it. Point it at

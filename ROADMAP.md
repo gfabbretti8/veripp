@@ -48,6 +48,8 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [x] `--link`: compile other translation units alongside the harness, and
       detect/disclose callees that are declared but never defined (ESBMC
       reports these for C but not C++, so veripp works them out itself).
+- [x] `veripp scan`: harness and verify every function in a file, and report
+      what could not be reached and why.
 - [ ] Cache keyed on function-body hash; `veripp verify-changed` for CI.
 - Note: the libclang slicer this milestone originally called for was dropped.
   The measured blocker was never TU assembly -- tinyxml2 is a single .cpp and

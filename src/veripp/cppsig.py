@@ -800,6 +800,10 @@ def find_struct(source: str, name: str) -> StructInfo:
     scrubbed = scrub(source)
     ranges = [c for c in find_class_ranges(scrubbed) if c.name == name]
     if not ranges:
+        anon = _typedef_struct_range(scrubbed, name)
+        if anon is not None:
+            ranges = [anon]
+    if not ranges:
         raise SignatureError(
             f"no definition of `{name}` is visible in this translation unit, "
             "so a harness cannot construct one (an opaque/forward-declared "
@@ -828,6 +832,36 @@ def find_struct(source: str, name: str) -> StructInfo:
         except SignatureError as exc:
             info.unsupported[raw[:40]] = str(exc)
     return info
+
+
+def _typedef_struct_range(scrubbed: str, name: str) -> "_ClassRange | None":
+    """Range of `typedef struct { ... } Name;` -- the usual C idiom.
+
+    The struct itself has no name there, so `find_class_ranges` (which keys off
+    `struct Name {`) never sees it. Most C libraries declare every type this
+    way, so without this the generator refuses their entire API.
+    """
+    for m in re.finditer(rf"\}}\s*{re.escape(name)}\s*;", scrubbed):
+        close = scrubbed.index("}", m.start())
+        open_brace = _matching_open(scrubbed, close)
+        if open_brace is None:
+            continue
+        head = scrubbed[:open_brace].rstrip()
+        if re.search(r"\b(struct|union)\s*$", head):
+            return _ClassRange(name=name, start=open_brace, end=close)
+    return None
+
+
+def _matching_open(scrubbed: str, close: int) -> int | None:
+    depth = 0
+    for i in range(close, -1, -1):
+        if scrubbed[i] == "}":
+            depth += 1
+        elif scrubbed[i] == "{":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
 
 
 def _is_union(scrubbed: str, rng: "_ClassRange") -> bool:
@@ -891,7 +925,12 @@ def _parse_fields(text: str, access: str) -> list[Field]:
             name = name[1:].strip()
         if not re.fullmatch(r"[A-Za-z_]\w*", name):
             raise SignatureError(f"could not read a field name from {decl!r}")
-        fields.append(Field(type=type_.strip(), name=name, array_len=extent, access=access))
+        fields.append(Field(
+            type=" ".join(type_.split()),
+            name=" ".join(name.split()),
+            array_len=extent,
+            access=access,
+        ))
     return fields
 
 
@@ -974,3 +1013,37 @@ _NOT_A_CALL = {
     "dynamic_cast", "decltype", "noexcept", "alignof", "typeid", "defined",
     "and", "or", "not", "assert",
 }
+
+
+# ---------------------------------------------------- enumerating targets ---
+
+_TRAILING_WORDS = "|".join(sorted(_TRAILING_QUALS - {"&", "&&"}))
+
+
+def function_definitions(source: str) -> list[str]:
+    """Names of things that look like function definitions in `source`.
+
+    A best-effort list of candidate targets for a whole-file scan. Each name is
+    expected to go back through `find_function`, which is the part that refuses
+    what it cannot model -- this only has to avoid missing real definitions.
+    """
+    scrubbed = scrub(source)
+    names: list[str] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", scrubbed):
+        name = m.group(1)
+        if name in _NOT_A_CALL or name in _NOT_A_MEMBER:
+            continue
+        lparen = scrubbed.index("(", m.end() - 1)
+        try:
+            rparen = match_bracket(scrubbed, lparen)
+        except SignatureError:
+            continue
+        tail = scrubbed[rparen + 1 : rparen + 120]
+        stripped = re.sub(rf"\b({_TRAILING_WORDS})\b|\s+", "", tail)
+        if stripped[:1] != "{":
+            continue  # a call or a declaration, not a definition
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names

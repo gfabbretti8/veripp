@@ -21,6 +21,7 @@ from .harness import (
 )
 from .llm import AnthropicLLM, NullLLM
 from .paths import contracts_include_dir, scratch_dir
+from .scan import scan
 from .triage import TargetInfo
 
 _DEFAULT_STD = "c++17"
@@ -46,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
     h = sub.add_parser("harness", help="print the generated harness without verifying")
     _add_common_args(h, require_function=True)
 
+    s = sub.add_parser(
+        "scan",
+        help="verify every function in a file that veripp can harness",
+    )
+    _add_common_args(s)
+    s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
+    s.add_argument("--json", action="store_true", help="machine-readable output")
+    s.add_argument("--quiet", "-q", action="store_true", help="summary only, no progress")
+
     d = sub.add_parser("doctor", help="check that dependencies are available")
     d.add_argument(
         "--allow-unsound",
@@ -61,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.source.exists():
         print(f"error: {args.source} not found", file=sys.stderr)
         return EXIT_USAGE
+
+    if args.command == "scan":
+        return _scan(args)
 
     if args.command == "harness":
         try:
@@ -187,6 +200,66 @@ def _build_harness(args) -> Harness:
     )
 
 
+def _scan(args) -> int:
+    config = _config_for(args)
+    options = _harness_options(args)
+    seen: list[str] = []
+
+    def progress(done: int, total: int, result) -> None:
+        if args.quiet or args.json:
+            return
+        mark = {"verified": "PROVED", "counterexample": "COUNTEREX",
+                "refused": "skip"}.get(result.outcome, result.outcome)
+        print(f"[{done:4d}/{total}] {mark:>10}  {result.name}", file=sys.stderr)
+        seen.append(result.name)
+
+    report = scan(args.source, config, options, jobs=args.jobs, progress=progress)
+
+    if args.json:
+        print(json.dumps({
+            "source": str(report.source),
+            "candidates": report.candidates,
+            "proved": [r.name for r in report.proved],
+            "counterexamples": [
+                {"function": r.name, "signature": r.signature, "property": r.detail,
+                 "assumptions": r.assumptions, "stubbed_calls": r.stubbed_calls}
+                for r in report.counterexamples
+            ],
+            "inconclusive": [{"function": r.name, "outcome": r.outcome} for r in report.inconclusive],
+            "not_harnessable": report.refusal_reasons(),
+        }, indent=2, default=str))
+    else:
+        print(report.summary())
+    return EXIT_VERIFIED if not report.counterexamples else EXIT_COUNTEREXAMPLE
+
+
+def _config_for(args) -> VerifyConfig:
+    extra_args: list[str] = []
+    for header in args.include_file:
+        extra_args += ["--include-file", str(header)]
+    std = args.std
+    defines = list(args.define)
+    include_dirs = _include_dirs(args)
+    entry = _compile_entry(args)
+    if entry is not None:
+        defines = entry.defines + defines
+        extra_args += [a for a in entry.esbmc_args() if a == "--include-file"] and []
+        for header in entry.force_includes:
+            extra_args += ["--include-file", str(header)]
+        if entry.std and args.std == _DEFAULT_STD and _is_cxx_std(entry.std):
+            std = entry.std
+    return VerifyConfig(
+        unwind=args.unwind,
+        timeout_s=args.timeout,
+        cpp_std=std,
+        include_dirs=include_dirs,
+        defines=defines,
+        link_sources=[s.resolve() for s in getattr(args, "link", [])],
+        overflow_check=not args.no_overflow_check,
+        extra_args=extra_args,
+    )
+
+
 def _verify(args) -> int:
     harness: Harness | None = None
     target = args.source
@@ -211,7 +284,7 @@ def _verify(args) -> int:
         include_dirs = list(entry.include_dirs) + include_dirs
         defines = entry.defines + defines
         extra_args += entry.esbmc_args()[len(entry.include_dirs) * 2 + len(entry.defines) * 2 :]
-        if entry.std and args.std == _DEFAULT_STD:
+        if entry.std and args.std == _DEFAULT_STD and _is_cxx_std(entry.std):
             std = entry.std
 
     config = VerifyConfig(
@@ -262,6 +335,14 @@ def _verify(args) -> int:
             print(f"(harness kept at {target})")
 
     return _exit_code(report)
+
+
+def _is_cxx_std(std: str) -> bool:
+    """veripp's harness is always C++ (it needs `extern "C"` and references),
+    and it #includes the target. A C project's -std=c11 would be rejected on a
+    .cpp file, so the build system's C standard is deliberately not forwarded.
+    """
+    return "++" in std or std.startswith(("gnu++", "c++"))
 
 
 def _compile_entry(args, quiet: bool = False):
