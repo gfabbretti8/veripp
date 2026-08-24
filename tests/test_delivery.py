@@ -80,13 +80,30 @@ class TestDockerfile:
         soundness regression for every arm64 user, so pin the intent here.
         """
         text = read("Dockerfile")
-        arm_stage = text.split("AS esbmc-arm64", 1)[1].split("FROM ", 1)[0]
-        assert "scripts/build.sh" in arm_stage, (
-            "the arm64 stage must build ESBMC from source"
+        arm_stage = text.split("AS esbmc-arm64", 1)[1].split("\nFROM ", 1)[0]
+        # Judge the instructions, not the comments explaining them.
+        instructions = "\n".join(
+            line for line in arm_stage.splitlines()
+            if not line.lstrip().startswith("#")
         )
-        assert "esbmc-linux.zip" not in arm_stage, (
+        assert "cmake --build" in instructions or "build.sh" in instructions, (
+            "the arm64 stage must compile ESBMC from source"
+        )
+        assert "esbmc-linux.zip" not in instructions, (
             "esbmc-linux.zip is x86_64; it cannot be used for arm64"
         )
+
+    def test_arm64_disables_the_32bit_libc_model(self) -> None:
+        """arm64 has no 32-bit multilib, so that model cannot be built.
+
+        esbmc's own scripts/build.sh skips g++-multilib on aarch64 and then
+        asks for the 32-bit libc model anyway, which fails on a missing
+        bits/libc-header-start.h. Homebrew's formula turns it off on Linux for
+        the same reason.
+        """
+        text = read("Dockerfile")
+        arm_stage = text.split("AS esbmc-arm64", 1)[1].split("\nFROM ", 1)[0]
+        assert "-DENABLE_BUNDLE_LIBC_32BIT=OFF" in arm_stage
 
     def test_the_build_refuses_to_ship_an_unsound_checker(self) -> None:
         assert re.search(r"^RUN veripp doctor", read("Dockerfile"), re.M), (

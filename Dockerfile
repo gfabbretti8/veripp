@@ -46,9 +46,9 @@ ARG ESBMC_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git wget gnupg unzip \
-        build-essential cmake ninja-build python3 python3-pip python3-venv \
-        bison flex libboost-all-dev libgmp-dev libssl-dev \
-        ccache pkg-config \
+        build-essential cmake ninja-build python3 python3-dev \
+        bison flex libboost-all-dev libgmp-dev libssl-dev libz3-dev \
+        pkg-config \
     && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
     wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
@@ -57,27 +57,53 @@ RUN set -eux; \
       > /etc/apt/sources.list.d/llvm.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      llvm-22 clang-22 libclang-22-dev libclang-cpp22-dev; \
+      llvm-22 llvm-22-dev clang-22 libclang-22-dev libclang-cpp22-dev; \
     rm -rf /var/lib/apt/lists/*
-# esbmc's scripts/build.sh pip-installs its Python dependencies into the system
-# interpreter, which Ubuntu 24.04 refuses under PEP 668. This stage is a
-# throwaway builder whose only output is a single copied binary, so overriding
-# the guard here cannot affect anything that ships.
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
-# build.sh pip-installs meson as root, which lands in ~/.local/bin -- not on
-# PATH by default, so the build fails at line 417 with `meson: not found`.
-ENV PATH="/root/.local/bin:${PATH}"
-
 RUN set -eux; \
     git clone --depth 1 --branch "${ESBMC_VERSION}" \
       https://github.com/esbmc/esbmc.git /src/esbmc \
     || git clone --depth 1 https://github.com/esbmc/esbmc.git /src/esbmc
 WORKDIR /src/esbmc
-RUN ./scripts/build.sh -b Release -S OFF -c 22 -e OFF
+
+# Configured directly rather than through ./scripts/build.sh. That script
+# targets the project's own CI and turns on the regression suite, csmith, and
+# the Solidity/Jimple/Python frontends, none of which we ship -- and on arm64
+# two of its defaults are fatal:
+#
+#   ENABLE_BUNDLE_LIBC_32BIT  builds a 32-bit libc model, which needs 32-bit
+#                             headers that do not exist on arm64 (build.sh
+#                             itself skips g++-multilib there, then asks for
+#                             the model anyway). Homebrew's formula turns this
+#                             off on Linux for the same reason.
+#   ENABLE_PYTHON_FRONTEND    pulls library/python/*.c into the libc model.
+#
+# These flags mirror Homebrew's esbmc formula, which is the configuration
+# known to produce a working arm64 Linux build.
 RUN set -eux; \
-    bin="$(find /src/esbmc -name esbmc -type f -perm -u+x | head -1)"; \
-    test -n "$bin"; \
-    mkdir -p /opt/esbmc/bin && cp "$bin" /opt/esbmc/bin/esbmc
+    cmake -S . -B build -GNinja \
+      -DDOWNLOAD_DEPENDENCIES=On \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DENABLE_BUNDLE_LIBC_32BIT=OFF \
+      -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm \
+      -DClang_DIR=/usr/lib/cmake/clang-22 \
+      -DENABLE_Z3=ON -DZ3_DIR=/usr \
+      -DENABLE_BOOLECTOR=OFF \
+      -DENABLE_BITWUZLA=OFF \
+      -DENABLE_GOTO_CONTRACTOR=OFF \
+      -DENABLE_PYTHON_FRONTEND=OFF \
+      -DENABLE_SOLIDITY_FRONTEND=OFF \
+      -DENABLE_JIMPLE_FRONTEND=OFF \
+      -DENABLE_CSMITH=OFF \
+      -DENABLE_FUZZER=OFF \
+      -DBUILD_TESTING=OFF \
+      -DENABLE_REGRESSION=OFF \
+      -DBUILD_STATIC=OFF \
+      -DENABLE_WERROR=OFF \
+      -DCMAKE_INSTALL_PREFIX=/opt/esbmc; \
+    cmake --build build; \
+    cmake --install build
+RUN test -x /opt/esbmc/bin/esbmc && /opt/esbmc/bin/esbmc --version
 
 # ------------------------------------------------------------ selector ----
 # TARGETARCH is supplied by buildkit: amd64 | arm64.
