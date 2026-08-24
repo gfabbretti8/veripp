@@ -76,16 +76,26 @@ stated bounds. Full table, and the veripp bugs each library exposed, in
 - An LLM, only for triage — see below. `--no-llm` runs the plain verifier
   pipeline with no model at all.
 
-ESBMC is a C++ binary, not a Python package, so uv cannot install it — that
-one is on you:
+ESBMC is a C++ binary, not a Python package, so uv cannot install it. If you
+would rather not think about that at all, use the image — it carries a checker
+that has already passed the soundness probe at build time:
 
 ```bash
-brew install esbmc          # macOS
-# or download esbmc-linux.zip from the releases page above and put it on PATH
+docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
 ```
 
-`veripp doctor` checks all of the above, tells you what is missing, and probes
-your checker for known soundness holes.
+Otherwise install it yourself:
+
+```bash
+brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
+# Linux x86_64: download esbmc-linux.zip from the `weekly` release above,
+# unzip it, and put the binary on PATH.
+# Linux arm64: no prebuilt ESBMC is published; use the image.
+```
+
+`veripp doctor` checks all of the above, tells you what is missing, prints the
+right command for your machine and architecture, and probes your checker for
+known soundness holes.
 
 ## Quick start
 

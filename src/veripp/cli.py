@@ -582,18 +582,47 @@ def _make_llm(args) -> tuple[object, str | None]:
     return llm, None
 
 
+DOCKER_HINT = (
+    'docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan FILE.c'
+)
+
+
 def _esbmc_install_hint() -> str:
-    """The exact command for this machine, not a link to go read."""
+    """The exact command for *this* machine, not a link to go read.
+
+    Architecture matters more than it looks. ESBMC publishes one Linux binary
+    and it is x86_64; handing an aarch64 user that URL gets them a download
+    that will not execute. The only prebuilt arm64 Linux ESBMC anywhere is the
+    Homebrew bottle, pinned to 8.4, which is the release that silently misses
+    out-of-bounds writes (esbmc#6508) -- so recommending it would trade a
+    clear failure for a quiet one. On that platform the image is the answer.
+    """
     import platform
 
-    if platform.system() == "Darwin":
+    system = platform.system()
+    machine = platform.machine().lower()
+
+    if system == "Darwin":
+        # The macOS release zip links against Homebrew's z3/gmp/mpfr by
+        # absolute path, so it is not relocatable; brew is the only sane route.
         return "brew install --HEAD esbmc"
-    return (
-        "curl -fsSL -o /tmp/esbmc.zip "
-        "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip "
-        "&& unzip -q /tmp/esbmc.zip -d ~/.local/esbmc "
-        "&& chmod +x ~/.local/esbmc/*/bin/esbmc"
-    )
+
+    if system == "Linux" and machine in ("x86_64", "amd64"):
+        return (
+            "curl -fsSL -o /tmp/esbmc.zip "
+            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip "
+            "&& unzip -q /tmp/esbmc.zip -d ~/.local/esbmc "
+            "&& chmod +x ~/.local/esbmc/*/bin/esbmc"
+        )
+
+    if system == "Linux":
+        return (
+            f"{DOCKER_HINT}\n"
+            f"      (no prebuilt ESBMC is published for Linux/{machine}; the image "
+            "carries one built from source)"
+        )
+
+    return DOCKER_HINT
 
 
 def _doctor(allow_unsound: bool = False) -> int:

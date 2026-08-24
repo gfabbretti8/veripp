@@ -1,0 +1,115 @@
+---
+name: veripp
+description: Prove a C or C++ function cannot overflow, read or write out of bounds, divide by zero, or dereference null - or get a concrete input that makes it happen. Use when the user asks to verify, prove, formally check, model-check, or find memory-safety and arithmetic bugs in C/C++ code, when reviewing security-sensitive parsing or buffer code, or when a fuzzer found nothing and they want a stronger guarantee than testing.
+---
+
+# veripp
+
+veripp runs a bounded model checker (ESBMC) over a C/C++ function and returns
+either a proof or a concrete counterexample. Your job is to point it at the
+right function and interpret what comes back honestly.
+
+## The one thing to understand first
+
+**You do not write the verification harness. veripp writes it.**
+
+If you have used ESBMC directly, you will be tempted to hand-write a `main()`
+full of `__ESBMC_nondet_int()`, add `__ESBMC_assume(...)` lines, and annotate
+loops with invariants. Do not do that here. veripp reads the function
+signature, builds the nondeterministic harness itself - including struct
+parameters field by field, array bounds, pointer depth, and enum ranges - and
+re-checks every assumption it makes.
+
+Write a harness by hand only when veripp explicitly refuses a parameter type
+and you have read its stated reason.
+
+## Start here
+
+```bash
+veripp doctor                    # is the checker present, and is it sound?
+veripp scan path/to/file.c       # every function in the file
+veripp verify file.c --function parse_header
+```
+
+Always run `veripp doctor` first on an unfamiliar machine. It plants known bugs
+and checks the installed ESBMC actually finds them. The published ESBMC 8.4
+release silently misses out-of-bounds writes to a member array
+(esbmc/esbmc#6508), so a "verified" from that build is not worth having, and
+doctor is what tells you.
+
+## Reading the result
+
+| Exit | Meaning | What to tell the user |
+|---|---|---|
+| 0 | VERIFIED | Proved **within the stated bounds**. Quote the bounds. |
+| 1 | COUNTEREXAMPLE | A concrete input reaches the fault. This is a real lead. |
+| 2 | Usage error | Your invocation was wrong. |
+| 3 | Inconclusive / vacuous | Proved nothing. Do not report it as a pass. |
+
+Three failure modes to name out loud rather than paper over:
+
+- **Bounded, not total.** A pass means "no counterexample within N loop
+  unwindings and arrays of length M". Say the numbers. `--unwind` and
+  `--max-array-len` change them.
+- **Vacuous proofs.** If preconditions contradict each other, everything is
+  provable. veripp re-runs the harness with a deliberately false assertion to
+  catch this and reports VACUOUS. Never report a vacuous run as verified.
+- **Stubbed callees.** If a called function has no body in the translation
+  unit, the checker invents a return value. veripp lists those calls. Pass
+  `--link other.c` to give it the real ones, or say which were stubbed.
+
+## Counterexamples need triage before you report them
+
+A counterexample proves the fault is reachable **in the generated harness**.
+That is not the same as reachable from real calling code. Before telling the
+user they have a bug:
+
+1. Read the input assignment veripp printed. Is it a value a caller could
+   actually pass?
+2. If the function is internal and callers always pass, say, a non-zero length,
+   the finding is an unenforced precondition, not a bug. Re-run with
+   `--assume 'len > 0'` and see if it proves.
+3. Only call it a bug when you can name a public entry point that reaches it.
+
+veripp will propose a precondition itself if an LLM is configured
+(`--model`), but the solver re-checks every proposal, so treat the proposal as
+a hypothesis, not an answer.
+
+## Common invocations
+
+```bash
+# a whole file, in parallel, machine-readable
+veripp scan src/parser.c --jobs 4 --json
+
+# a function that needs its build flags
+veripp verify src/parser.c --function parse --compile-commands build/compile_commands.json
+
+# a precondition the callers guarantee but the signature does not
+veripp verify src/img.c --function scale --assume 'w > 0 && h > 0'
+
+# a class: bounded sequences of public method calls, not a single call
+veripp verify src/Buf.cpp --class Buf --max-calls 4 --assert 'b.size() <= b.capacity()'
+
+# see what it generated before trusting it
+veripp harness src/parser.c --function parse
+```
+
+`veripp harness` is the honesty check. If a result surprises you, read the
+harness before believing either the proof or the counterexample.
+
+## Where it works and where it does not
+
+ESBMC handles C and C-like C++ well. Heavy STL and template metaprogramming
+hit real frontend gaps - some inputs crash the checker outright. That is a
+tool limit, not a proof of anything. If `veripp scan` reports a large number
+of refusals, run `veripp harness` on one of them and report the stated reason
+rather than guessing.
+
+## If ESBMC is missing
+
+```bash
+docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan file.c
+```
+
+The image carries a sound ESBMC for both amd64 and arm64. Otherwise
+`veripp doctor` prints the install instructions for the host.

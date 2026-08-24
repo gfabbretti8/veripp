@@ -1,0 +1,151 @@
+name: image
+
+# Two architectures, built on native runners rather than under emulation.
+# That is not a preference: the arm64 leg compiles ESBMC (and LLVM bindings)
+# from source because no arm64 Linux ESBMC binary is published anywhere, and
+# doing that under qemu turns a long build into an unusable one.
+#
+# Each arch pushes a digest; a final job stitches them into one manifest, so
+# `docker run ghcr.io/OWNER/veripp` resolves to the right image on any host.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      push:
+        description: 'Push to ghcr.io (otherwise build and test only)'
+        type: boolean
+        default: false
+  # On pull requests we build the amd64 image only, and never push. This keeps
+  # the Dockerfile from rotting between releases without paying for the arm64
+  # source build on every PR.
+  pull_request:
+    paths: ['Dockerfile', '.dockerignore', '.github/workflows/image.yml', 'src/**', 'pyproject.toml']
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      # On a pull request, amd64 only -- the arm64 leg compiles ESBMC from
+      # source and is not worth an hour of runner time per PR.
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'pull_request'
+          && '[{"platform":"linux/amd64","runner":"ubuntu-24.04","arch":"amd64"}]'
+          || '[{"platform":"linux/amd64","runner":"ubuntu-24.04","arch":"amd64"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","arch":"arm64"}]') }}
+    runs-on: ${{ matrix.runner }}
+    # The arm64 source build of ESBMC is the reason for this number.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name == 'push' || inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build and load locally first so the smoke test runs against the exact
+      # image we are about to publish, not a rebuild of it.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: veripp:smoketest
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Smoke test the image
+        run: ./tests/image_smoketest.sh veripp:smoketest
+
+      - name: Push by digest
+        if: github.event_name == 'push' || inputs.push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        if: github.event_name == 'push' || inputs.push
+        shell: bash
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' || inputs.push
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  manifest:
+    needs: build
+    if: github.event_name == 'push' || inputs.push
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Create the multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
+        shell: bash
+
+      - name: Verify both architectures are in the manifest
+        run: |
+          set -euo pipefail
+          tag="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          got="$(docker buildx imagetools inspect "$tag" --raw \
+                 | jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' \
+                 | grep -v unknown | sort -u | tr '\n' ' ')"
+          echo "manifest covers: $got"
+          for want in linux/amd64 linux/arm64; do
+            case "$got" in *"$want"*) ;; *) echo "::error::$want missing from manifest"; exit 1 ;; esac
+          done
