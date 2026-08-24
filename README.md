@@ -251,6 +251,15 @@ docker run --rm -v "$PWD:/src:ro" ghcr.io/gfabbretti8/veripp \
     verify src/img.c --function scale --assume 'w > 0 && h > 0'
 ```
 
+`--compile-commands` works too, even though your `compile_commands.json`
+records absolute paths from your machine and the tree is mounted at `/src`
+inside. veripp finds the entry by its trailing path components and rebases the
+whole thing — include dirs included — onto wherever the tree actually is. The
+same applies to a CI checkout that does not sit where the database was
+generated. If two entries match equally well it says so rather than guess.
+
+Roughly 450 MB (amd64) and 530 MB (arm64), most of it ESBMC itself.
+
 ## As a skill for coding agents
 
 Copy [`skill/veripp`](skill/veripp) into your agent's skills directory
