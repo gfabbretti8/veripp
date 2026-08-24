@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .cppsig import SignatureError, function_definitions
+from dataclasses import replace as _replace
+
 from .esbmc import Outcome, VerifyConfig, run
 from .harness import HarnessError, HarnessOptions, generate
 from .paths import scratch_dir
@@ -131,6 +133,7 @@ def scan(
     jobs: int = 4,
     only: list[str] | None = None,
     progress=None,
+    escalations: int = 1,
 ) -> ScanReport:
     """Harness and verify every function in `source` that veripp can model."""
     options = options or HarnessOptions()
@@ -155,6 +158,16 @@ def scan(
         try:
             path = harness.write(workdir, tag=name)
             result = run(path, config)
+            # `verify` widens the bound when it runs out; without the same
+            # here, `scan` reports "inconclusive" for functions `verify` would
+            # have settled, and the two commands disagree about one function.
+            attempt, widened = 0, config
+            while (
+                result.outcome is Outcome.UNWIND_LIMIT and attempt < escalations
+            ):
+                widened = _replace(widened, unwind=widened.unwind * 4)
+                result = run(path, widened)
+                attempt += 1
         except (OSError, RuntimeError) as exc:
             return FunctionResult(name=name, outcome="tool_error",
                                   signature=printable, detail=str(exc))

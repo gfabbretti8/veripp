@@ -126,3 +126,41 @@ class TestErrorGuidance:
 
     def test_it_points_at_scan(self, capsys, src):
         assert "veripp scan" in self._run(capsys, src, "zzzzzz")
+
+
+@pytest.mark.esbmc
+class TestScanEscalation:
+    """`scan` must not answer "inconclusive" where `verify` would answer.
+
+    `verify` widens the unwind bound when a run exhausts it. `scan` did not,
+    so the two commands disagreed about the same function -- 41 of lodepng's
+    inconclusive results were a bound `verify` would have widened.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "static int walk(unsigned n) {\n"
+        "    int s = 0;\n"
+        "    for (unsigned i = 0; i < n && i < 20; ++i) s += 1;\n"
+        "    return s;\n"
+        "}\n"
+    )
+
+    def _scan(self, tmp_path, escalations):
+        from veripp.scan import scan
+
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC)
+        config = VerifyConfig(
+            timeout_s=90, unwind=2,
+            include_dirs=[contracts_include_dir(), p.parent],
+        )
+        return scan(p, config, HarnessOptions(), jobs=1, escalations=escalations)
+
+    def test_without_escalation_the_bound_is_hit(self, tmp_path):
+        outcomes = {r.name: r.outcome for r in self._scan(tmp_path, 0).results}
+        assert outcomes["walk"] == "unwind_limit"
+
+    def test_with_escalation_it_settles(self, tmp_path):
+        outcomes = {r.name: r.outcome for r in self._scan(tmp_path, 1).results}
+        assert outcomes["walk"] != "unwind_limit"

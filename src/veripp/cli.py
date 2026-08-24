@@ -68,6 +68,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
     s.add_argument("--json", action="store_true", help="machine-readable output")
     s.add_argument("--quiet", "-q", action="store_true", help="summary only, no progress")
+    s.add_argument(
+        "--escalations",
+        type=int,
+        default=1,
+        help="how many times to widen the unwind bound when a function runs "
+        "out of it (0 disables; each round costs another solver run)",
+    )
 
     d = sub.add_parser("doctor", help="check that dependencies are available")
     d.add_argument(
@@ -266,7 +273,8 @@ def _scan(args) -> int:
         print(f"[{done:4d}/{total}] {mark:>10}  {result.name}", file=sys.stderr)
         seen.append(result.name)
 
-    report = scan(args.source, config, options, jobs=args.jobs, progress=progress)
+    report = scan(args.source, config, options, jobs=args.jobs, progress=progress,
+                  escalations=args.escalations)
 
     if args.json:
         print(json.dumps({
