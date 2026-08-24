@@ -122,5 +122,21 @@ else
   printf '  ok   runs as non-root (uid %s)\n' "$id_out"; pass=$((pass+1))
 fi
 
+# Size is a feature. The published esbmc binary is 604MB unstripped and the
+# runtime once carried a compiler it never invoked; both were found only by
+# looking. A ceiling turns the next regression into a test failure.
+LIMIT_MB="${SMOKE_MAX_MB:-700}"
+# Measured from inside, not via `docker image inspect -f {{.Size}}`. For an
+# image buildx loaded for a non-native platform, that field under-reports
+# badly -- it said 162 MB for a filesystem that is really 446 MB -- and a size
+# guard that reads low is worse than none.
+size_mb=$($DOCKER run --rm "${PLATFORM_ARG[@]}" --entrypoint sh "$IMAGE" \
+          -c "du -sm --exclude=/proc --exclude=/sys / 2>/dev/null | tail -1 | cut -f1")
+if [ "$size_mb" -le "$LIMIT_MB" ]; then
+  printf '  ok   image is %s MB (ceiling %s MB)\n' "$size_mb" "$LIMIT_MB"; pass=$((pass+1))
+else
+  printf '  FAIL image is %s MB, over the %s MB ceiling\n' "$size_mb" "$LIMIT_MB"; fail=$((fail+1))
+fi
+
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

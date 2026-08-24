@@ -1,0 +1,64 @@
+name: action-selftest
+
+# The composite action had no test at all, which is how it shipped with
+# `uv run --directory` -- a flag that resolves the caller's `source:` against
+# the action's own checkout, so every relative path failed. Nothing in the
+# suite could see that, because nothing ran the action.
+#
+# This runs it the way a caller does, from a working directory that is NOT the
+# action's, which is the specific condition that bug needed.
+
+on:
+  push:
+    paths: ['action.yml', '.github/workflows/action-selftest.yml', 'src/**']
+  pull_request:
+    paths: ['action.yml', '.github/workflows/action-selftest.yml', 'src/**']
+  workflow_dispatch:
+
+jobs:
+  finds-a-bug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # examples/off_by_one.cpp has a real off-by-one. The action must fail
+      # the job on it, because that is the whole product.
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          source: examples/off_by_one.cpp
+          function: sum_array
+
+      - name: The action must have reported a counterexample
+        run: |
+          if [ "${{ steps.run.outcome }}" != "failure" ]; then
+            echo "::error::veripp passed a file with a known off-by-one"
+            exit 1
+          fi
+          echo "correctly failed on a known bug"
+
+  proves-a-good-one:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A relative path from a subdirectory: the case `--directory` broke.
+      - run: mkdir -p nested && cp examples/ring_buffer.cpp nested/
+
+      - uses: ./
+        with:
+          source: nested/ring_buffer.cpp
+          function: push
+
+  fail-on-never-is-honest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Must succeed despite pointing at a file with a known bug.
+      - uses: ./
+        with:
+          source: examples/off_by_one.cpp
+          function: sum_array
+          fail-on: never

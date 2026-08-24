@@ -37,7 +37,7 @@ ARG UBUNTU=24.04
 FROM ubuntu:${UBUNTU} AS esbmc-amd64
 ARG ESBMC_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip \
+        ca-certificates curl unzip binutils \
     && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
     curl -fsSL -o /tmp/esbmc.zip \
@@ -48,6 +48,10 @@ RUN set -eux; \
     mkdir -p /opt/esbmc/bin /opt/esbmc/lib && cp "$bin" /opt/esbmc/bin/esbmc; \
     chmod +x /opt/esbmc/bin/esbmc; \
     rm -rf /tmp/esbmc.zip /tmp/unz
+# The published binary is static and unstripped: 604MB, of which 455MB is
+# debug symbols nobody debugging *their own C code* will ever read. Verified
+# that the stripped binary still passes `veripp doctor`.
+RUN strip --strip-unneeded /opt/esbmc/bin/esbmc && du -h /opt/esbmc/bin/esbmc
 
 # ---------------------------------------------------------------- arm64 ----
 # Mirrors esbmc's own .github/workflows/release.yml `build-linux-arm64` job,
@@ -125,7 +129,8 @@ RUN set -eux; \
         */libLLVM*|*/libclang*) cp -L "$lib" /opt/esbmc/lib/ ;; \
       esac; \
     done; \
-    ls -1 /opt/esbmc/lib
+    strip --strip-unneeded /opt/esbmc/bin/esbmc /opt/esbmc/lib/*; \
+    du -sh /opt/esbmc
 
 RUN test -x /opt/esbmc/bin/esbmc \
     && LD_LIBRARY_PATH=/opt/esbmc/lib /opt/esbmc/bin/esbmc --version
@@ -138,11 +143,13 @@ FROM esbmc-${TARGETARCH} AS esbmc
 # ------------------------------------------------------------- runtime ----
 FROM ubuntu:${UBUNTU} AS runtime
 
-# ESBMC shells out to a C/C++ preprocessor and needs system headers to parse
-# real code; a bare python image cannot verify anything.
+# ESBMC parses C and C++ with its own embedded clang, so it needs the system
+# *headers* -- a bare python image cannot resolve <string.h> and verifies
+# nothing -- but not gcc or g++ themselves. Confirmed by removing them and
+# re-running both a C and a C++ verification.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-venv libstdc++6 libgomp1 libgmp10 \
-        gcc g++ libc6-dev \
+        libc6-dev libstdc++-13-dev \
         ca-certificates \
         libz3-4 libedit2 libxml2 libzstd1 liblzma5 libtinfo6 libffi8 \
         libboost-filesystem1.83.0 libboost-program-options1.83.0 \
