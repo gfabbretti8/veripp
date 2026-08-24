@@ -31,6 +31,12 @@ ARG ESBMC_VERSION=weekly
 # weeks after that tag. Building `weekly` on arm64 therefore fails on the very
 # bug whose fix is already upstream.
 ARG ESBMC_SOURCE_REF=master
+# Compile parallelism for the arm64 source build. Left empty, it is derived
+# from the builder's memory rather than its core count: linking LLVM-heavy
+# objects wants roughly 2GB per job, so ninja's default of one job per core
+# runs a 6GB machine out of memory ("cannot allocate memory") long before it
+# runs out of CPU. Set it explicitly to override.
+ARG ESBMC_BUILD_JOBS=
 ARG UBUNTU=24.04
 
 # ---------------------------------------------------------------- amd64 ----
@@ -58,6 +64,7 @@ RUN strip --strip-unneeded /opt/esbmc/bin/esbmc && du -h /opt/esbmc/bin/esbmc
 # which is the only arm64 Linux build recipe the project actually exercises.
 FROM ubuntu:${UBUNTU} AS esbmc-arm64
 ARG ESBMC_SOURCE_REF
+ARG ESBMC_BUILD_JOBS
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git wget gnupg unzip \
@@ -114,7 +121,16 @@ RUN set -eux; \
       -DBUILD_STATIC=OFF \
       -DENABLE_WERROR=OFF \
       -DCMAKE_INSTALL_PREFIX=/opt/esbmc; \
-    cmake --build build; \
+    jobs="${ESBMC_BUILD_JOBS:-}"; \
+    if [ -z "$jobs" ]; then \
+      cpus="$(nproc)"; \
+      mem_gb="$(awk '/MemTotal/ {printf "%d", $2/1048576}' /proc/meminfo)"; \
+      jobs="$(( mem_gb / 2 ))"; \
+      [ "$jobs" -lt 1 ] && jobs=1; \
+      [ "$jobs" -gt "$cpus" ] && jobs="$cpus"; \
+    fi; \
+    echo "building esbmc with -j$jobs"; \
+    cmake --build build --parallel "$jobs"; \
     cmake --install build
 # BUILD_STATIC=OFF (as Homebrew does) leaves esbmc linked against LLVM and
 # clang shared objects that come from apt.llvm.org, not stock Ubuntu. Rather
