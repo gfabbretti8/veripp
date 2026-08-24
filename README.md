@@ -129,8 +129,13 @@ preconditions hoisted in front of the call. Inspect it before you trust it:
 veripp harness examples/off_by_one.cpp --function sum_array
 ```
 
-Parameters that are structs or objects are built field by field with
-nondeterministic values — nested structs recursively, array fields by loop,
+Parameters that are structs or objects are built by calling the library's own
+initialiser when one can be found (`vec_init`, `HuffmanTree_init`), so the
+object starts in a state that genuinely occurs. That is a narrower question
+than "any object at all", and it is stated with the result.
+
+With `--no-initializers`, or when no initialiser exists, they are built field
+by field with nondeterministic values — nested structs recursively, array fields by loop,
 pointer fields followed to `--max-struct-depth` (default 2) and then
 null-terminated. Every simplification is reported as an assumption, including
 the big one: an object with every field nondeterministic includes states no
@@ -332,12 +337,13 @@ Two places this bites in practice, both handled explicitly:
 
 Read this before judging the output.
 
-- **Counterexamples need triage, and many are not bugs.** A generated harness
-  gives a struct every possible field value, including combinations no caller
-  can construct, so it will report failures that cannot happen in your program.
-  On lodepng most counterexamples were artifacts of exactly this. The proofs
-  are the trustworthy half; treat findings as leads, and use `--assume` (or an
-  LLM) to state what real callers guarantee.
+- **Counterexamples need triage; not all are bugs.** Where an object has no
+  initialiser to build it from, the harness gives it every possible field
+  value, including combinations no caller can construct — so it can report a
+  failure that cannot happen in your program. veripp filters the mechanically
+  decidable cases into a separate "harness artifact" count, but the rest are
+  leads, not findings. The proofs are the trustworthy half. Use `--assume` (or
+  an LLM) to state what real callers guarantee.
 - **The released ESBMC is unsound for a common pattern.** v8.4 misses
   out-of-bounds writes to a member array indexed by another member of the same
   object ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508), fixed

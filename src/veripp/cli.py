@@ -180,6 +180,13 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         "for a symbol esbmclibc lacks); repeatable",
     )
     bounds.add_argument(
+        "--no-initializers",
+        action="store_true",
+        help="fill object parameters field by field instead of calling the "
+        "library's own initialiser. Broader, but admits field combinations "
+        "the type's invariants forbid, so expect failures no caller can cause.",
+    )
+    bounds.add_argument(
         "--no-overflow-check",
         action="store_true",
         help="disable arithmetic overflow checking (isolate other properties)",
@@ -201,6 +208,7 @@ def _harness_options(args) -> HarnessOptions:
         max_calls=getattr(args, "max_calls", HarnessOptions.max_calls),
         include_dirs=_include_dirs(args),
         link_sources=[s.resolve() for s in getattr(args, "link", [])],
+        use_initializers=not getattr(args, "no_initializers", False),
     )
 
 

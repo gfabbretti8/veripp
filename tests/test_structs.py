@@ -265,3 +265,58 @@ class TestElaboratedTypeFields:
         from veripp.harness import normalize_type
 
         assert normalize_type("struct Node") == normalize_type("Node") == "Node"
+
+
+class TestLibraryInitializers:
+    """Build an object the way the library does, not field by field.
+
+    Filling every field independently admits combinations the type's own
+    invariants forbid, and those produce failures no caller could cause. On
+    lodepng that was the largest remaining source of false leads, and 31 of
+    the 50 affected types shipped their own constructor.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "typedef struct { unsigned char* data; size_t size; size_t allocsize; } vec_t;\n"
+        "static void vec_init(vec_t* v) { v->data = 0; v->size = 0; v->allocsize = 0; }\n"
+        "static size_t vec_size(vec_t* v) { return v->size; }\n"
+    )
+
+    def _harness(self, tmp_path, **kw):
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC)
+        return generate(p, "vec_size", HarnessOptions(**kw))
+
+    def test_the_initializer_is_called(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "vec_init(&v_obj);" in code
+        assert "v_obj.size = VERIPP_NONDET" not in code  # not also field-filled
+
+    def test_the_narrower_question_is_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("as `vec_init` leaves it" in a for a in assumptions)
+        assert any("NOT explored" in a for a in assumptions)
+
+    def test_it_can_be_turned_off(self, tmp_path):
+        code = self._harness(tmp_path, use_initializers=False).code
+        assert "vec_init(&v_obj);" not in code
+        assert "v_obj.size" in code
+
+    def test_an_initializer_is_not_called_on_itself(self, tmp_path):
+        """Verifying vec_init must not begin by calling vec_init."""
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC)
+        assert "vec_init(&v_obj);" not in generate(p, "vec_init").code
+
+    def test_an_initializer_needing_more_arguments_is_not_a_drop_in(self, tmp_path):
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct { int n; } box_t;\n"
+            "static void box_init(box_t* b, int n) { b->n = n; }\n"
+            "static int box_get(box_t* b) { return b->n; }\n"
+        )
+        code = generate(p, "box_get").code
+        assert "box_init" not in code
+        assert "b_obj.n = VERIPP_NONDET_INT();" in code

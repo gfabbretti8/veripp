@@ -34,6 +34,7 @@ from .cppsig import (
     find_class,
     find_function,
     find_struct,
+    function_definitions,
     unresolved_callees,
     match_bracket,
     normalize_type,
@@ -62,6 +63,11 @@ class HarnessError(Exception):
 @dataclass
 class HarnessOptions:
     max_array_len: int = DEFAULT_MAX_ARRAY_LEN
+    #: Build an object by calling the library's own initialiser when one can
+    #: be found, instead of filling every field independently. Off means the
+    #: broader-but-less-real question: every field combination, including ones
+    #: the type's invariants forbid.
+    use_initializers: bool = True
     #: Translation units compiled alongside the harness (--link). Their
     #: definitions resolve callees, so they must be visible here too or veripp
     #: would warn about stubs the run does not actually have.
@@ -916,6 +922,24 @@ def _emit_object(
     info = find_struct(source_text, type_name)
 
     storage = f"{param.name}_obj"
+
+    initializer = (
+        _find_initializer(source_text, type_name, signature.name, typedefs)
+        if options.use_initializers else None
+    )
+    if initializer is not None:
+        assumptions.append(
+            f"`{param.name}` is a `{type_name}` as `{initializer}` leaves it, "
+            "not an arbitrary one: states reached by mutating it afterwards "
+            "are NOT explored (--no-initializers fills every field instead, "
+            "which also admits combinations the type forbids)"
+        )
+        pass_as = (
+            f"{_decl_type(param.type)} {param.name} = &{storage};"
+            if param.is_pointer else f"{type_name}& {param.name} = {storage};"
+        )
+        return [f"{type_name} {storage};", f"{initializer}(&{storage});", pass_as]
+
     lines = [f"{type_name} {storage};"]
     lines += _fill_fields(info, storage, 0, options, typedefs, source_text, assumptions,
                           seen={type_name})
@@ -1135,6 +1159,44 @@ def _fill_pointer_field(
     lines.append(f"{target} = &{storage};")
     assumptions.append(f"pointer field `{target}` points to a nondeterministic `{pointee}`")
     return lines
+
+
+_INIT_SUFFIXES = ("_init", "_new", "_create", "_reset")
+
+
+def _find_initializer(
+    source_text: str, type_name: str, target: str, typedefs: dict[str, str]
+) -> str | None:
+    """A function in this TU that puts a fresh `type_name` into a valid state.
+
+    Filling a struct field by field admits combinations the type's own
+    invariants forbid, and those produce failures no caller could cause. When
+    the library ships the constructor -- `ucvector_init`, `HuffmanTree_init`,
+    `lodepng_info_init` -- using it asks a narrower question about a state
+    that genuinely occurs, which is worth far more than a broad question about
+    states that cannot.
+    """
+    stem = re.sub(r"^(lode|_)+", "", type_name).lower()
+    for name in function_definitions(source_text):
+        if name == target or not name.lower().endswith(_INIT_SUFFIXES):
+            continue
+        base = name.lower()
+        for suffix in _INIT_SUFFIXES:
+            base = base[: -len(suffix)] if base.endswith(suffix) else base
+        if stem not in base.replace("_", "") and base.replace("_", "") not in stem:
+            continue
+        try:
+            sig = find_function(source_text, name)
+        except SignatureError:
+            continue
+        if len(sig.params) != 1 or not sig.params[0].is_pointer:
+            continue  # an initialiser needing more inputs is not a drop-in
+        if normalize_type(sig.params[0].pointee(), typedefs) != normalize_type(
+            type_name, typedefs
+        ):
+            continue
+        return name
+    return None
 
 
 def _try_struct(source_text: str, type_name: str) -> StructInfo | None:
