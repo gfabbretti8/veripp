@@ -89,8 +89,12 @@ Known M1 limits, all disclosed at runtime rather than papered over:
       harness.
 - [x] Benchmarks across nine libraries plus a reproduced CVE
       (`benchmarks/CORPUS.md`, `demo/cve-2019-13223/`).
+- [x] Both delivery workflows verified on real runners: the action self-test
+      (three jobs, including a relative path from a subdirectory — the case
+      the `--directory` bug broke) and `image.yml` with `push: false`.
 - [ ] Actually publish: the image to ghcr.io, the package to PyPI. Both need
-      credentials and a decision to make the repo public.
+      credentials and a decision to make the repo public. Everything up to
+      the push is rehearsed — see RELEASING.md.
 - [ ] CppCon lightning talk / Show HN.
 
 Two things worth knowing before touching delivery:

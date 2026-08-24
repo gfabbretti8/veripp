@@ -46,7 +46,17 @@ at, so it has to exist before those instructions are true.
 Tagging `v*` runs `.github/workflows/image.yml`, which builds both
 architectures on native runners, smoke-tests each one, pushes them by digest,
 and stitches a manifest. To rehearse without tagging, run the workflow
-manually with `push: false` — it builds and smoke-tests and pushes nothing.
+manually with `push: false` — it builds and smoke-tests and pushes nothing:
+
+```bash
+gh workflow run image.yml -f push=false
+```
+
+Rehearsed and green: amd64 on `ubuntu-24.04` (446 MB) and arm64 on
+`ubuntu-24.04-arm` (528 MB), 13/13 smoke tests each, the in-build `veripp
+doctor` passing both soundness probes on both, and the login/push/digest
+steps correctly skipped. Note that the arm64 runner was available on a
+private repository, which is not something to take for granted.
 
 Two things about this build are worth remembering before changing it:
 
