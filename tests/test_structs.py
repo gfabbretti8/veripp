@@ -320,3 +320,42 @@ class TestLibraryInitializers:
         code = generate(p, "box_get").code
         assert "box_init" not in code
         assert "b_obj.n = VERIPP_NONDET_INT();" in code
+
+
+class TestStructAliases:
+    """`typedef struct json_value_t JSON_Value;` -- a C API's handle type.
+
+    Looking up the alias found nothing while the definition sat in the same
+    file under its tag, so parson looked like a library built on genuinely
+    opaque handles: 19% of its functions reachable. It was 91%.
+    """
+
+    SRC = (
+        "struct json_value_t { void* parent; int type; double num; };\n"
+        "typedef struct json_value_t JSON_Value;\n"
+        "typedef struct json_value_t *JSON_ValuePtr;\n"
+    )
+
+    def test_an_alias_resolves_to_its_tag(self):
+        assert [f.name for f in find_struct(self.SRC, "JSON_Value").fields] == [
+            "parent", "type", "num",
+        ]
+
+    def test_the_tag_itself_still_works(self):
+        assert find_struct(self.SRC, "json_value_t").fields
+
+    def test_a_pointer_alias_is_not_silently_unwrapped(self):
+        """`typedef struct T *Alias;` names a pointer, a different type."""
+        with pytest.raises(SignatureError):
+            find_struct(self.SRC, "JSON_ValuePtr")
+
+    def test_a_genuinely_opaque_type_is_still_refused(self):
+        with pytest.raises(SignatureError, match="not visible"):
+            find_struct("typedef struct hidden_t Hidden;\n", "Hidden")
+
+    def test_an_aliased_parameter_can_be_harnessed(self, tmp_path):
+        p = tmp_path / "s.c"
+        p.write_text('#include "veripp/contracts.hpp"\n' + self.SRC +
+                     "static int kind(JSON_Value* v) { return v->type; }\n")
+        code = generate(p, "kind").code
+        assert "v_obj.type = VERIPP_NONDET_INT();" in code

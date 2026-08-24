@@ -357,11 +357,10 @@ Read this before judging the output.
 - **C and C-like C++ only.** ESBMC's C++ frontend does not digest STL-heavy
   code; tinyxml2 crashes it and jsoncpp will not parse. Codecs, parsers and
   embedded-style code work well.
-- **How much of a file veripp can reach varies a lot.** lodepng 82%, cJSON
-  89%, tinyexpr 96% — but parson 19%, because nearly every function there
-  takes an opaque handle (`JSON_Value*`) that a harness cannot construct. Run
-  `veripp scan` on your own code to find out; it reports what it could not
-  reach and why.
+- **How much of a file veripp can reach varies.** lodepng 82%, cJSON 89%,
+  parson 91%, tinyexpr 96%. Types whose definition is not in the translation
+  unit cannot be constructed, and those functions are refused with the reason
+  given. Run `veripp scan` on your own code to find out.
 - **Bounded by default.** A proof covers executions within the unwind bound,
   which is stated with every result.
 

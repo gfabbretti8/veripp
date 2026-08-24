@@ -833,6 +833,13 @@ def find_struct(source: str, name: str) -> StructInfo:
         if anon is not None:
             ranges = [anon]
     if not ranges:
+        # `typedef struct json_value_t JSON_Value;` names an existing tag.
+        # Looking up the alias finds nothing while the definition sits in the
+        # same file under its tag -- the usual shape of a C API's handle type.
+        tag = _struct_tag_for_alias(scrubbed, name)
+        if tag is not None and tag != name:
+            return find_struct(source, tag)
+    if not ranges:
         raise SignatureError(
             f"no definition of `{name}` is visible in this translation unit, "
             "so a harness cannot construct one (an opaque/forward-declared "
@@ -863,6 +870,21 @@ def find_struct(source: str, name: str) -> StructInfo:
         except SignatureError as exc:
             info.unsupported[raw[:40]] = str(exc)
     return info
+
+
+_ALIAS_RE_TEMPLATE = (
+    r"\btypedef\s+(?:struct|union)\s+([A-Za-z_]\w*)\s+{name}\s*;"
+)
+
+
+def _struct_tag_for_alias(scrubbed: str, name: str) -> str | None:
+    """The struct tag an alias refers to, for `typedef struct TAG ALIAS;`.
+
+    Only a plain alias counts: `typedef struct TAG *ALIAS;` names a pointer,
+    which is a different type and must not be silently unwrapped.
+    """
+    m = re.search(_ALIAS_RE_TEMPLATE.format(name=re.escape(name)), scrubbed)
+    return m.group(1) if m else None
 
 
 def _typedef_struct_range(scrubbed: str, name: str) -> "_ClassRange | None":
