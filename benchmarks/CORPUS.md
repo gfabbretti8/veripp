@@ -46,7 +46,7 @@ the solver then checks.
 be constructed without knowing the intended type. Refusing is correct there;
 guessing would produce a confident wrong answer.
 
-## One idea that measured worse
+## Two ideas that measured worse
 
 Objects are built with the library's own initialiser where one exists
 (`T_init(T*)`). The obvious extension is the *factory* shape many C APIs use
@@ -60,6 +60,14 @@ genuinely different objects — picking one narrows the question in a way the
 caller never asked for. And calling a real constructor drags allocation into
 every harness, which costs solver time that was buying proofs elsewhere.
 An initialiser filling a caller-owned object has neither problem.
+
+**Shrinking the bound when a run times out.** Timeouts are the largest
+unhelpful outcome left (22 of jansson's 88 functions, 39 of cJSON's), and a
+proof at unwind 2 is a weaker claim but a real one. Retrying a timed-out run
+at a quarter of the bound changed jansson's inconclusive count from 28 to 28:
+the timeouts became unwind-limit results instead, which is no more use. The
+functions that time out are ones whose loops need a *larger* bound to say
+anything, so making it smaller only reaches the bound sooner. Removed.
 
 ## What these libraries taught the tool
 
