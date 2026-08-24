@@ -251,3 +251,60 @@ class TestWorkflows:
         """qemu turns the arm64 source build from long into unusable."""
         text = read(".github/workflows/image.yml")
         assert "ubuntu-24.04-arm" in text
+
+
+@pytest.fixture(scope="module")
+def workspace(tmp_path_factory):
+    """A checkout-like tree that is deliberately not the repository."""
+    import shutil
+
+    if shutil.which("uv") is None:
+        pytest.skip("uv not on PATH")
+    ws = tmp_path_factory.mktemp("workspace")
+    (ws / "nested").mkdir()
+    shutil.copy(ROOT / "examples/ring_buffer.cpp", ws / "nested")
+    shutil.copy(ROOT / "examples/off_by_one.cpp", ws)
+    return ws
+
+
+@pytest.mark.esbmc
+class TestActionCommandsFromAForeignWorkspace:
+    """Run what the action runs, from somewhere that is not the action.
+
+    The `--directory` bug was invisible to every other test because they all
+    run with the repository as the working directory, where a path resolved
+    against the action's checkout and a path resolved against the caller's
+    workspace are the same path. The bug only appears when those two differ,
+    which on a runner they always do.
+    """
+
+    @staticmethod
+    def _run(workspace, *args):
+        import subprocess
+
+        return subprocess.run(
+            ["uv", "run", "--project", str(ROOT), "veripp", *args],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+
+    def test_doctor(self, workspace) -> None:
+        assert self._run(workspace, "doctor").returncode == 0
+
+    def test_relative_path_in_a_subdirectory_resolves(self, workspace) -> None:
+        """The precise shape --directory broke."""
+        result = self._run(
+            workspace, "verify", "nested/ring_buffer.cpp", "--function", "push"
+        )
+        assert "not found" not in result.stdout + result.stderr, (
+            "the source was resolved against the wrong directory"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_a_known_bug_still_exits_1(self, workspace) -> None:
+        result = self._run(
+            workspace, "verify", "off_by_one.cpp", "--function", "sum_array"
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
