@@ -1115,7 +1115,7 @@ def _fill_counted_pointer_field(
     )
     constraints.append(f"VERIPP_ASSUME({counter} <= {cap});")
     return [
-        f"static {pointee} {storage}[{cap}];",
+        f"{pointee} {storage}[{cap}];",
         *fill,
         f"{target} = {storage};",
     ]
@@ -1167,7 +1167,7 @@ def _fill_pointer_field(
     storage = f"{target.replace('.', '_')}_target"
     if nondet is not None:
         assumptions.append(f"pointer field `{target}` points to one nondeterministic `{pointee}`")
-        return [f"static {pointee} {storage} = {nondet};", f"{target} = &{storage};"]
+        return [f"{pointee} {storage} = {nondet};", f"{target} = &{storage};"]
 
     nested = _try_struct(source_text, pointee)
     if nested is None:
@@ -1177,7 +1177,7 @@ def _fill_pointer_field(
         )
         return [f"{target} = 0;"]
 
-    lines = [f"static {pointee} {storage};"]
+    lines = [f"{pointee} {storage};"]
     lines += _fill_fields(
         nested, storage, depth + 1, options, typedefs, source_text, assumptions,
         seen | {pointee},

@@ -241,3 +241,40 @@ def test_contracts_header_is_usable_from_c():
     assert "_Bool" in text
     # the brace must be inside the guard, not produced by a macro
     assert 'extern "C" {' in text
+
+
+class TestGeneratedCIsValidC:
+    """A C harness must be valid C, not C++ that happens to compile.
+
+    `static char x = nondet();` initialises static storage with a function
+    call. C++ allows it; C does not. It broke 72 of cJSON's 117 functions,
+    and never appeared in lodepng because lodepng is C++.
+    """
+
+    def test_no_static_local_carries_a_call_initialiser(self, tmp_path):
+        from veripp.harness import generate
+
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct node { struct node* next; char* label; int n; } node;\n"
+            "static int depth(node* r) { return r->next ? r->n : 0; }\n"
+        )
+        for line in generate(p, "depth").code.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("static ") and "=" in stripped:
+                raise AssertionError(f"static local with an initialiser: {stripped}")
+
+    def test_pointer_targets_are_still_addressable(self, tmp_path):
+        """Dropping `static` must not cost the pointee its address: every
+        local lives in main(), which does not return before the call."""
+        from veripp.harness import generate
+
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct { char* label; } item;\n"
+            "static int len(item* i) { return i->label ? 1 : 0; }\n"
+        )
+        code = generate(p, "len").code
+        assert "i_obj.label = &" in code
