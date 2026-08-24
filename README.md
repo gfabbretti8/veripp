@@ -58,7 +58,9 @@ triages counterexamples with any LLM; and refuses to call a vacuous or
 unsoundly-obtained result a proof.
 
 Measured on [lodepng](https://github.com/lvandeve/lodepng) (260 functions):
-82% harnessable, 55 proved. See `ROADMAP.md` for what is not done, and
+82% harnessable, **92 proved** free of overflow, out-of-bounds, null deref and
+division by zero within the stated bounds, against 51 counterexamples to
+triage. See `ROADMAP.md` for what is not done, and
 **Known limits** below for what to expect before you point it at your code.
 
 ## Requirements
@@ -209,12 +211,15 @@ proved, what produced counterexamples, and — importantly — what it could not
 reach and why:
 
 ```
-  PROVED             39  no overflow, out-of-bounds, null deref or division by
+  PROVED             92  no overflow, out-of-bounds, null deref or division by
                          zero, within the stated bounds and assumptions
-  COUNTEREXAMPLE     53  a property fails for some input -- triage each one
-  INCONCLUSIVE       87  timed out, hit the unwind bound, or the frontend refused it
-  NOT HARNESSABLE    81  veripp could not build inputs for the signature
+  COUNTEREXAMPLE     51  a property fails for some input -- triage each one
+  HARNESS ARTIFACT   12  failed because of how the harness was built, not the code
+  INCONCLUSIVE       69  timed out, hit the unwind bound, or the frontend refused it
+  NOT HARNESSABLE    47  veripp could not build inputs for the signature
 ```
+
+(That is real output from `veripp scan` on lodepng.cpp.)
 
 `--json` for machine-readable output, `-j` for parallelism.
 
