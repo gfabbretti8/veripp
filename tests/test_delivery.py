@@ -58,6 +58,28 @@ class TestAction:
                 "pass it through env: instead"
             )
 
+    def test_the_verify_step_disables_errexit_around_the_run(self) -> None:
+        """GitHub runs composite `shell: bash` as `bash -e -o pipefail`.
+
+        veripp exits 1 on a counterexample and 3 when inconclusive -- both
+        ordinary outcomes the action is supposed to interpret. Under -e the
+        script dies at the veripp call instead, so no annotation is printed,
+        `fail-on: never` never runs, and an inconclusive result fails the job
+        rather than warning. `set -uo pipefail` does NOT clear -e; only
+        `set +e` does. This shipped, and only a real runner caught it.
+        """
+        text = read("action.yml")
+        block = text[text.index("Run veripp") :]
+        run_body = block[block.index("run: |") :]
+        assert "set +e" in run_body, (
+            "the step must `set +e` before invoking veripp: GitHub's composite "
+            "bash runs with -e, which aborts on veripp's meaningful non-zero "
+            "exit codes before fail-on can be honoured"
+        )
+        assert run_body.index("set +e") < run_body.index("status=$?"), (
+            "`set +e` must come before the veripp invocation, not after"
+        )
+
     def test_defaults_to_the_sound_esbmc(self) -> None:
         """8.4 silently misses out-of-bounds writes (esbmc#6508)."""
         text = read("action.yml")

@@ -109,6 +109,13 @@ runs:
         VERIPP_FAIL_ON: ${{ inputs.fail-on }}
       run: |
         set -uo pipefail
+        # GitHub runs composite `shell: bash` steps as `bash -e -o pipefail`,
+        # and `set -uo pipefail` above does NOT clear that -e. Without the
+        # `set +e` here, a counterexample (exit 1) killed the script on the
+        # spot: no annotation was printed, `fail-on: never` never got to run,
+        # and an inconclusive result (exit 3) failed the job instead of
+        # warning. Found by the self-test workflow on a real runner.
+        set +e
         # Word-splitting of VERIPP_ARGS is intended -- it carries flags like
         # `-I include -D NDEBUG`.
         # shellcheck disable=SC2086
@@ -120,6 +127,7 @@ runs:
             veripp scan "$VERIPP_SOURCE" $VERIPP_ARGS
         fi
         status=$?
+        set -e
 
         # 0 verified, 1 counterexample, 2 usage, 3 inconclusive/vacuous.
         case "$status" in
