@@ -55,10 +55,27 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p ~/.cache/veripp-esbmc
-        case "${{ runner.os }}" in
-          Linux)  asset=esbmc-linux.zip ;;
-          macOS)  asset=esbmc-macos.zip ;;
-          *) echo "::error::veripp's action supports Linux and macOS runners"; exit 1 ;;
+        arch="$(uname -m)"
+        case "${{ runner.os }}:$arch" in
+          Linux:x86_64|Linux:amd64)
+            asset=esbmc-linux.zip ;;
+          macOS:*)
+            asset=esbmc-macos.zip ;;
+          Linux:aarch64|Linux:arm64)
+            # esbmc publishes no arm64 Linux binary, and the only prebuilt one
+            # anywhere (the Homebrew 8.4 bottle) silently misses out-of-bounds
+            # writes -- esbmc/esbmc#6508 -- which is exactly what veripp is
+            # for. Say so instead of downloading an x86_64 binary that cannot
+            # execute and failing three steps later with "exec format error".
+            echo "::error::veripp's action needs an x86_64 Linux or a macOS" \
+                 "runner: upstream publishes no arm64 Linux ESBMC binary, and" \
+                 "the only prebuilt arm64 build is unsound (esbmc/esbmc#6508)." \
+                 "On an arm64 runner, use the container image instead:" \
+                 "docker run --rm -v \"\$PWD:/src\" ghcr.io/gfabbretti8/veripp scan FILE"
+            exit 1 ;;
+          *)
+            echo "::error::veripp's action supports x86_64 Linux and macOS runners (got ${{ runner.os }}/$arch)"
+            exit 1 ;;
         esac
         curl -fsSL -o /tmp/esbmc.zip \
           "https://github.com/esbmc/esbmc/releases/download/$ESBMC_VERSION/$asset"

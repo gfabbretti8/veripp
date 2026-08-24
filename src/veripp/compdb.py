@@ -73,17 +73,89 @@ def load(database: Path) -> list[dict]:
     return entries
 
 
+def _entry_path(raw: dict, database: Path) -> tuple[Path, Path]:
+    directory = Path(raw.get("directory", database.parent))
+    candidate = Path(raw.get("file", ""))
+    if not candidate.is_absolute():
+        candidate = directory / candidate
+    return directory, candidate
+
+
+def _shared_tail(a: Path, b: Path) -> int:
+    """How many trailing path components `a` and `b` have in common."""
+    n = 0
+    left, right = a.parts, b.parts
+    while n < min(len(left), len(right)) and left[-1 - n] == right[-1 - n]:
+        n += 1
+    return n
+
+
+def _relocated(entries: list[dict], target: Path, database: Path) -> CompileEntry | None:
+    """Match a database written against a different absolute root.
+
+    A compilation database records absolute paths from the machine that
+    generated it. Mount that tree somewhere else -- /src in a container, a
+    differently-named CI checkout -- and every path in it is wrong, including
+    the -I flags. The tree itself is unchanged, though, so the entry can be
+    found by its trailing components and the whole entry rebased onto wherever
+    the tree now lives.
+
+    Only an unambiguous match is accepted: if two entries tie, the database
+    cannot tell us which file we were handed, and guessing would silently
+    verify the wrong translation unit with the wrong flags.
+    """
+    best_n = 0
+    best: list[tuple[dict, Path, Path]] = []
+    for raw in entries:
+        directory, candidate = _entry_path(raw, database)
+        n = _shared_tail(candidate, target)
+        if n == 0:
+            continue
+        if n > best_n:
+            best_n, best = n, [(raw, directory, candidate)]
+        elif n == best_n:
+            best.append((raw, directory, candidate))
+
+    if best_n == 0:
+        return None
+    if len(best) > 1:
+        names = ", ".join(str(c) for _, _, c in best[:3])
+        raise CompDBError(
+            f"{target} matches {len(best)} entries in {database} equally well "
+            f"({names}...). The database was written for a different directory "
+            "layout and cannot be rebased unambiguously; pass -I/-D by hand."
+        )
+
+    raw, directory, candidate = best[0]
+    old_root = Path(*candidate.parts[: len(candidate.parts) - best_n])
+    new_root = Path(*target.parts[: len(target.parts) - best_n])
+
+    def rebase(path: Path) -> Path:
+        try:
+            return new_root / path.relative_to(old_root)
+        except ValueError:
+            # Outside the moved tree (a system include, say). Leave it alone.
+            return path
+
+    entry = _parse(raw, rebase(directory), target)
+    entry.include_dirs = [rebase(p) for p in entry.include_dirs]
+    entry.force_includes = [rebase(p) for p in entry.force_includes]
+    return entry
+
+
 def entry_for(database: Path, source: Path) -> CompileEntry:
     """The compile command for `source`, parsed into flags ESBMC understands."""
     entries = load(database)
     target = source.resolve()
     for raw in entries:
-        directory = Path(raw.get("directory", database.parent))
-        candidate = Path(raw.get("file", ""))
-        if not candidate.is_absolute():
-            candidate = directory / candidate
+        directory, candidate = _entry_path(raw, database)
         if candidate.resolve() == target:
             return _parse(raw, directory, target)
+
+    relocated = _relocated(entries, target, database)
+    if relocated is not None:
+        return relocated
+
     raise CompDBError(
         f"{source} is not in {database} "
         f"({len(entries)} entries). Headers are usually absent from a "
