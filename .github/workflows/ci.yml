@@ -2,13 +2,16 @@ name: ci
 on: [push, pull_request]
 
 env:
-  # `weekly` is a rolling tag rebuilt from master. We track it rather than the
-  # v8.4 release because 8.4 carries esbmc#6508 -- it silently misses
-  # out-of-bounds writes to a member array indexed by another member of the
-  # same object, which is the ordinary container idiom and exactly the code
-  # veripp is pointed at. `veripp doctor` below re-checks that behaviourally on
-  # every run, so a regression in the rolling build fails the job rather than
-  # quietly weakening every "verified".
+  # We track `weekly` rather than the v8.4 release because 8.4 carries
+  # esbmc#6508 -- it silently misses out-of-bounds writes to a member array
+  # indexed by another member of the same object, which is the ordinary
+  # container idiom and exactly the code veripp is pointed at.
+  #
+  # `weekly` is newer than 8.4 and passes our soundness probe, but do not read
+  # it as "master": despite the name it is cut infrequently. As of 2026-08-24
+  # it points at a commit from 2026-05-27, with master ~1900 commits ahead.
+  # That is why `veripp doctor` re-checks the checker behaviourally on every
+  # run instead of trusting a version string.
   ESBMC_VERSION: weekly
 
 jobs:

@@ -24,9 +24,11 @@ inputs:
     default: 'counterexample'
   esbmc-version:
     description: >-
-      ESBMC release tag. Defaults to the rolling `weekly` build: the v8.4
-      release silently misses out-of-bounds writes in ordinary container code
-      (esbmc/esbmc#6508), which veripp checks for and refuses to build proofs on.
+      ESBMC release tag. Defaults to `weekly`, because the v8.4 release
+      silently misses out-of-bounds writes in ordinary container code
+      (esbmc/esbmc#6508), which veripp checks for and refuses to build proofs
+      on. Note that `weekly` is cut infrequently despite the name, so it is
+      not the same as master; `veripp doctor` probes whichever build you get.
     required: false
     default: 'weekly'
 

@@ -68,7 +68,8 @@ stated bounds. Full table, and the veripp bugs each library exposed, in
 
 - [uv](https://docs.astral.sh/uv/) (it installs Python for you)
 - [ESBMC](https://github.com/esbmc/esbmc/releases) built from master, or the
-  rolling [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build.
+  [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build (which,
+  despite the name, is cut infrequently — check its date).
   **Not the v8.4 release** — it carries
   [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
   out-of-bounds writes in ordinary container code. `veripp doctor` checks this

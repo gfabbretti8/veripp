@@ -19,7 +19,16 @@
 # runs at build time on both, so an image that cannot detect a planted bug
 # never gets published.
 
+# The prebuilt amd64 asset comes from a release tag.
 ARG ESBMC_VERSION=weekly
+# The arm64 source build takes a git ref, and it is deliberately NOT `weekly`.
+# The weekly tag is described as rolling but is in practice cut infrequently --
+# at the time of writing it points at 2026-05-27, with master ~1900 commits
+# ahead. esbmc/esbmc#5252, which is what makes an arm64 Linux build possible at
+# all (SVE builtin types, 32-bit libc, Solidity stub), merged 2026-06-09, two
+# weeks after that tag. Building `weekly` on arm64 therefore fails on the very
+# bug whose fix is already upstream.
+ARG ESBMC_SOURCE_REF=master
 ARG UBUNTU=24.04
 
 # ---------------------------------------------------------------- amd64 ----
@@ -42,7 +51,7 @@ RUN set -eux; \
 # Mirrors esbmc's own .github/workflows/release.yml `build-linux-arm64` job,
 # which is the only arm64 Linux build recipe the project actually exercises.
 FROM ubuntu:${UBUNTU} AS esbmc-arm64
-ARG ESBMC_VERSION
+ARG ESBMC_SOURCE_REF
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git wget gnupg unzip \
@@ -59,10 +68,8 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       llvm-22 llvm-22-dev clang-22 libclang-22-dev libclang-cpp22-dev; \
     rm -rf /var/lib/apt/lists/*
-RUN set -eux; \
-    git clone --depth 1 --branch "${ESBMC_VERSION}" \
-      https://github.com/esbmc/esbmc.git /src/esbmc \
-    || git clone --depth 1 https://github.com/esbmc/esbmc.git /src/esbmc
+RUN git clone --depth 1 --branch "${ESBMC_SOURCE_REF}" \
+      https://github.com/esbmc/esbmc.git /src/esbmc
 WORKDIR /src/esbmc
 
 # Configured directly rather than through ./scripts/build.sh. That script
