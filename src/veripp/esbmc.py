@@ -49,6 +49,12 @@ class VerifyConfig:
     extra_args: list[str] = field(default_factory=list)
     include_dirs: list[Path] = field(default_factory=list)
     defines: list[str] = field(default_factory=list)
+    #: Extra translation units compiled alongside the harness. Linking the TU
+    #: that defines a callee is a SOUNDNESS matter, not a convenience: ESBMC
+    #: havocs an undefined function's return value but does not model its
+    #: writes through pointer arguments, so an unlinked callee is silently
+    #: assumed to have no side effects.
+    link_sources: list[Path] = field(default_factory=list)
     cpp_std: str = "c++17"
 
     def to_args(self) -> list[str]:
@@ -166,6 +172,23 @@ class ViolatedProperty:
         return out
 
 
+_NO_BODY_RE = re.compile(r"^WARNING: no body for function (\S+)\s*$", re.M)
+
+
+def bodiless_functions(output: str) -> list[str]:
+    """Functions ESBMC found no definition for, in call order of first sight.
+
+    These are the holes in a result. ESBMC havocs their return values, which
+    is sound, but assumes they do not write through their pointer arguments,
+    which is not: a "verified" that depends on one is only valid if the
+    function really has no such side effect.
+    """
+    seen: dict[str, None] = {}
+    for m in _NO_BODY_RE.finditer(output):
+        seen.setdefault(m.group(1), None)
+    return list(seen)
+
+
 @dataclass
 class VerifyResult:
     outcome: Outcome
@@ -176,6 +199,11 @@ class VerifyResult:
     duration_s: float | None = None
     exit_code: int | None = None
     error: str | None = None  # frontend/tool error message, when there is one
+
+    @property
+    def stubbed_calls(self) -> list[str]:
+        """Callees with no body in this run (see `bodiless_functions`)."""
+        return bodiless_functions(self.raw_output)
 
     @property
     def violated_property(self) -> ViolatedProperty | None:
@@ -282,7 +310,7 @@ def run(source: Path, config: VerifyConfig, esbmc_bin: str | None = None) -> Ver
             "esbmc not found on PATH. Install from "
             "https://github.com/esbmc/esbmc/releases, or `brew install esbmc`"
         )
-    cmd = [binary, str(source), *config.to_args()]
+    cmd = [binary, str(source), *(str(s) for s in config.link_sources), *config.to_args()]
     started = time.monotonic()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=config.timeout_s)

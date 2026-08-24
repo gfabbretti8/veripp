@@ -145,6 +145,37 @@ veripp verify examples/ring_buffer.cpp --class RingBuffer --max-calls 6 \
 Without `--function` or `--class`, veripp verifies the file's own `main()` —
 useful when you have written the harness yourself.
 
+## Real projects
+
+veripp reads your build system rather than making you restate it. Point it at
+a source file and it finds the nearest `compile_commands.json` (including in
+`build/`), and takes that file's include paths, defines and language standard
+from it:
+
+```bash
+veripp verify src/area.cpp --function area
+# note: using build/compile_commands.json (1 include dirs, 1 defines, -std=c++17)
+```
+
+Use `--compile-commands PATH` to choose one, `--no-compile-commands` to ignore
+them.
+
+**Linking matters for soundness, not convenience.** ESBMC gives an undefined
+function a nondeterministic return value, but assumes it does not write
+through its pointer arguments. So a callee whose definition is in another
+translation unit is silently treated as side-effect-free. veripp detects those
+callees itself — ESBMC reports them for C but not for C++ — and names them:
+
+```
+STUBBED CALLS (no body was available): normalize. Their effects were not
+modelled, so this counterexample may be an artifact of the missing definition
+rather than a real bug -- check it first.
+```
+
+Add the defining source with `--link src/helper.cpp` (repeatable) and the run
+accounts for it. In the example above that is the difference between a false
+counterexample and a proof.
+
 ## Check your checker
 
 ```bash

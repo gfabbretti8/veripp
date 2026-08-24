@@ -233,3 +233,17 @@ class TestOutOfLineDefinitions:
     def test_access_specifiers_and_labels_still_end_a_declaration(self):
         src = "class C {\npublic:\n  int f(int x) { return x; }\n};"
         assert find_function(src, "f").return_type == "int"
+
+
+def test_two_preprocessor_directives_before_a_definition():
+    """`_decl_head` advanced past each directive using offsets from the same
+    slice, so a second `#include` compounded them and swallowed the return
+    type. Real project files routinely have several."""
+    src = (
+        '#include "geom.h"\n'
+        '#include "veripp/contracts.hpp"\n'
+        "int area(Box* b) { return b->w * b->h; }\n"
+    )
+    sig = find_function(src, "area")
+    assert sig.return_type == "int"
+    assert [(p.type, p.name) for p in sig.params] == [("Box*", "b")]

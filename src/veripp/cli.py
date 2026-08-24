@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .agent import AgentReport, Budget, verify_with_agent
+from .compdb import CompDBError, entry_for, find_database
 from .cppsig import SignatureError
 from .esbmc import Outcome, VerifyConfig, check_soundness, find_esbmc
 from .harness import (
@@ -21,6 +22,8 @@ from .harness import (
 from .llm import AnthropicLLM, NullLLM
 from .paths import contracts_include_dir, scratch_dir
 from .triage import TargetInfo
+
+_DEFAULT_STD = "c++17"
 
 EXIT_VERIFIED = 0
 EXIT_COUNTEREXAMPLE = 1
@@ -102,12 +105,36 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
     )
     p.add_argument("--unwind", type=int, default=8)
     p.add_argument("--timeout", type=int, default=120, help="per-attempt timeout (s)")
-    p.add_argument("--std", default="c++17")
+    p.add_argument("--std", default=_DEFAULT_STD)
     p.add_argument(
         "--max-array-len",
         type=int,
         default=HarnessOptions.max_array_len,
         help="harness bound on generated buffer lengths",
+    )
+    p.add_argument(
+        "--compile-commands",
+        type=Path,
+        metavar="PATH",
+        help="clang compilation database (or a directory holding one). "
+        "Include paths, defines and the language standard for the target file "
+        "are taken from it. Auto-discovered near the source if not given; "
+        "--no-compile-commands disables that.",
+    )
+    p.add_argument(
+        "--no-compile-commands",
+        action="store_true",
+        help="do not look for a compilation database",
+    )
+    p.add_argument(
+        "--link",
+        action="append",
+        type=Path,
+        default=[],
+        metavar="SOURCE",
+        help="also compile this translation unit. Needed when the target "
+        "calls a function defined elsewhere: an unlinked callee is assumed to "
+        "have no side effects, which is unsound. Repeatable.",
     )
     p.add_argument("-I", "--include", action="append", type=Path, default=[])
     p.add_argument("-D", "--define", action="append", default=[], help="preprocessor macro")
@@ -139,6 +166,8 @@ def _harness_options(args) -> HarnessOptions:
     return HarnessOptions(
         max_array_len=args.max_array_len,
         max_calls=getattr(args, "max_calls", HarnessOptions.max_calls),
+        include_dirs=_include_dirs(args),
+        link_sources=[s.resolve() for s in getattr(args, "link", [])],
     )
 
 
@@ -173,12 +202,25 @@ def _verify(args) -> int:
     extra_args: list[str] = []
     for header in args.include_file:
         extra_args += ["--include-file", str(header)]
+
+    std = args.std
+    defines = list(args.define)
+    include_dirs = _include_dirs(args)
+    entry = _compile_entry(args)
+    if entry is not None:
+        include_dirs = list(entry.include_dirs) + include_dirs
+        defines = entry.defines + defines
+        extra_args += entry.esbmc_args()[len(entry.include_dirs) * 2 + len(entry.defines) * 2 :]
+        if entry.std and args.std == _DEFAULT_STD:
+            std = entry.std
+
     config = VerifyConfig(
         unwind=args.unwind,
         timeout_s=args.timeout,
-        cpp_std=args.std,
-        include_dirs=_include_dirs(args),
-        defines=list(args.define),
+        cpp_std=std,
+        include_dirs=include_dirs,
+        defines=defines,
+        link_sources=[s.resolve() for s in args.link],
         overflow_check=not args.no_overflow_check,
         extra_args=extra_args,
     )
@@ -222,8 +264,48 @@ def _verify(args) -> int:
     return _exit_code(report)
 
 
+def _compile_entry(args, quiet: bool = False):
+    """Flags for the target file from a compilation database, if there is one."""
+    if getattr(args, "no_compile_commands", False):
+        return None
+    database = args.compile_commands
+    if database is not None and database.is_dir():
+        database = database / "compile_commands.json"
+    if database is None:
+        database = find_database(args.source)
+        if database is None:
+            return None
+    elif not database.is_file():
+        print(f"error: {database} not found", file=sys.stderr)
+        raise SystemExit(EXIT_USAGE)
+    try:
+        entry = entry_for(database, args.source)
+    except CompDBError as exc:
+        # Auto-discovery must never break a run that would otherwise work.
+        if args.compile_commands is not None:
+            print(f"error: {exc}", file=sys.stderr)
+            raise SystemExit(EXIT_USAGE) from exc
+        if not quiet:
+            print(f"note: {exc}", file=sys.stderr)
+        return None
+    if quiet:
+        return entry
+    print(
+        f"note: using {database} "
+        f"({len(entry.include_dirs)} include dirs, {len(entry.defines)} defines"
+        + (f", -std={entry.std}" if entry.std else "")
+        + ")",
+        file=sys.stderr,
+    )
+    return entry
+
+
 def _include_dirs(args) -> list[Path]:
-    dirs = list(args.include)
+    dirs: list[Path] = []
+    entry = _compile_entry(args, quiet=True)
+    if entry is not None:
+        dirs += entry.include_dirs
+    dirs += list(args.include)
     bundled = contracts_include_dir()
     if bundled is not None and bundled not in dirs:
         dirs.append(bundled)
@@ -243,6 +325,7 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "accepted_preconditions": report.accepted_preconditions,
         "unsound_probes": report.unsound_probes,
         "harness": str(report.harness) if report.harness else None,
+        "stubbed_calls": report.final.stubbed_calls,
         "function": harness.signature.qualified_name if harness else None,
         "sequence": bool(harness and harness.class_info),
         "violated_property": asdict(prop) if prop else None,

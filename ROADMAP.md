@@ -43,9 +43,16 @@ Known M1 limits, all disclosed at runtime rather than papered over:
   "pointer to non-scalar" refusal went 66.2% -> 23.1%.
 
 ## M2 — real projects
-- libclang slicer: compile_commands.json -> self-contained TU per function.
-- Sound havoc stubs for external calls.
-- Cache keyed on function-body hash; `veripp verify-changed` for CI.
+- [x] compile_commands.json: include paths, defines and -std taken from the
+      build system, auto-discovered near the source.
+- [x] `--link`: compile other translation units alongside the harness, and
+      detect/disclose callees that are declared but never defined (ESBMC
+      reports these for C but not C++, so veripp works them out itself).
+- [ ] Cache keyed on function-body hash; `veripp verify-changed` for CI.
+- Note: the libclang slicer this milestone originally called for was dropped.
+  The measured blocker was never TU assembly -- tinyxml2 is a single .cpp and
+  still failed -- it was type visibility and frontend gaps, addressed by
+  following the compilation database's include paths instead.
 
 ## M3 — sell it
 - GitHub Action.

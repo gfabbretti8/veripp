@@ -578,8 +578,15 @@ def _decl_head(scrubbed: str, name_start: int) -> int:
     # A preprocessor directive also ends whatever came before it: without this,
     # a file whose first function follows an #include has the directive text
     # swept into its return type.
-    for m in re.finditer(r"^[ \t]*#.*$", scrubbed[start:name_start], re.M):
-        start += m.end()
+    # Take the LAST directive in one pass: match offsets are relative to this
+    # slice, so advancing `start` inside the loop would compound them and, with
+    # two #includes, overshoot past the return type.
+    region = scrubbed[start:name_start]
+    last = None
+    for m in re.finditer(r"^[ \t]*#.*$", region, re.M):
+        last = m
+    if last is not None:
+        start += last.end()
     return start
 
 
@@ -906,3 +913,64 @@ def collect_enum_types(source: str) -> set[str]:
     for m in re.finditer(r"\benum\s+([A-Za-z_]\w*)\s*;", scrubbed):
         names.add(m.group(1))
     return names
+
+
+# ----------------------------------------------------- unresolved callees ---
+
+_DECLARED_RE_TEMPLATE = r"\b{name}\s*\([^;{{}}]*\)\s*(?:const\s*)?;"
+
+
+def unresolved_callees(source: str, body: str) -> list[str]:
+    """Functions `body` calls that are declared here but defined elsewhere.
+
+    ESBMC havocs such a call's return value but assumes it does not write
+    through its pointer arguments, so an unresolved callee can turn a real
+    proof into a false one -- or, as often, invent a counterexample. ESBMC
+    reports these itself for C but not for C++, so veripp works them out
+    rather than trusting the warning.
+    """
+    scrubbed_body = scrub(body)
+    called: list[str] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", scrubbed_body):
+        name = m.group(1)
+        if name in seen or name in _NOT_A_CALL:
+            continue
+        seen.add(name)
+        called.append(name)
+
+    scrubbed_source = scrub(source)
+    macros = set(re.findall(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", source, re.M))
+
+    unresolved: list[str] = []
+    for name in called:
+        if name in macros:
+            continue  # a macro call site is not a function call
+        try:
+            find_function(source, name)
+        except SignatureError as exc:
+            # Only count it when the name really is a function here: declared
+            # with no definition. A declaration ends in `;` and is not itself
+            # preceded by a value context, which is what separates
+            #     void normalize(Box *b);        <- declaration
+            # from
+            #     x = normalize(b);              <- a call
+            if "no definition" not in str(exc):
+                continue
+            for m in re.finditer(
+                _DECLARED_RE_TEMPLATE.format(name=re.escape(name)), scrubbed_source
+            ):
+                head = scrubbed_source[max(0, m.start() - 60) : m.start()].rstrip()
+                if head and head[-1] in "=(,&|!+-*/<>?:{};" and not head.endswith(";"):
+                    continue  # a call in an expression, not a declaration
+                unresolved.append(name)
+                break
+    return unresolved
+
+
+_NOT_A_CALL = {
+    "if", "for", "while", "switch", "return", "sizeof", "catch", "throw",
+    "new", "delete", "static_cast", "const_cast", "reinterpret_cast",
+    "dynamic_cast", "decltype", "noexcept", "alignof", "typeid", "defined",
+    "and", "or", "not", "assert",
+}

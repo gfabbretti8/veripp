@@ -34,6 +34,7 @@ from .cppsig import (
     find_class,
     find_function,
     find_struct,
+    unresolved_callees,
     match_bracket,
     normalize_type,
     scrub,
@@ -61,6 +62,15 @@ class HarnessError(Exception):
 @dataclass
 class HarnessOptions:
     max_array_len: int = DEFAULT_MAX_ARRAY_LEN
+    #: Translation units compiled alongside the harness (--link). Their
+    #: definitions resolve callees, so they must be visible here too or veripp
+    #: would warn about stubs the run does not actually have.
+    link_sources: list[Path] = field(default_factory=list)
+    #: Where to look for the headers a source `#include`s. Real projects keep
+    #: their struct definitions in an include/ directory the build system
+    #: points at with -I, so without these the generator cannot see the types
+    #: it has to construct.
+    include_dirs: list[Path] = field(default_factory=list)
     assume_pointers_nonnull: bool = True
     #: How far to follow pointer fields when building an object. Value fields
     #: terminate on their own; pointers do not, so the chain is cut here and
@@ -79,6 +89,9 @@ class Harness:
     assumptions: list[str] = field(default_factory=list)
     source: Path | None = None
     class_info: ClassInfo | None = None  # set for sequence harnesses
+    #: Callees declared but not defined in this translation unit. Their side
+    #: effects are not modelled, so they weaken whatever the run concludes.
+    unresolved_calls: list[str] = field(default_factory=list)
 
     def write(self, directory: Path, tag: str = "") -> Path:
         directory.mkdir(parents=True, exist_ok=True)
@@ -163,7 +176,10 @@ def generate(
     signature = find_function(text, function)
     # Struct definitions usually live in the library's own header, not the .cpp
     # being targeted, so resolve types against both.
-    expanded = _with_local_includes(source, text)
+    expanded = _with_local_includes(source, text, options.include_dirs)
+    # Linked TUs resolve callees, so their definitions must be visible
+    # here too, or veripp reports stubs the run does not actually have.
+    expanded = "\n".join([expanded, *_linked_text(options)])
     typedefs = collect_scalar_typedefs(expanded)
     _ENUMS.clear()
     _ENUMS.update(collect_enum_types(expanded))
@@ -204,32 +220,75 @@ def generate(
     body.append("")
     body += _emit_call(signature, assumptions)
 
+    unresolved = unresolved_callees(expanded, signature.body)
+    if unresolved:
+        assumptions.append(
+            "these callees are declared but not defined in this translation "
+            f"unit, so their side effects are NOT modelled: {', '.join(unresolved)}"
+            " (link the defining source with --link)"
+        )
     return Harness(
         code=_render(source, signature, body, assumptions),
         signature=signature,
         assumptions=assumptions,
         source=source,
+        unresolved_calls=unresolved,
     )
 
 
 _LOCAL_INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"', re.M)
 
 
-def _with_local_includes(source: Path, text: str) -> str:
-    """`text` plus the contents of its local `#include "..."` headers (one level).
+def _linked_text(options: HarnessOptions) -> list[str]:
+    parts: list[str] = []
+    for path in options.link_sources:
+        try:
+            parts.append(path.read_text(errors="replace"))
+        except OSError:
+            continue
+    return parts
 
-    Project typedefs (`mz_ulong`) usually live in the library's own header,
-    not in the .cpp being targeted; without this the alias map misses them.
-    System includes are left alone -- their scalars are already known.
+
+def _with_local_includes(
+    source: Path, text: str, include_dirs: list[Path] | None = None, depth: int = 2
+) -> str:
+    """`text` plus the contents of the headers it `#include`s, transitively.
+
+    Struct definitions and project typedefs live in the library's headers, not
+    in the .cpp being targeted, so the generator cannot see the types it must
+    construct without following them. Headers are resolved the way the
+    compiler resolves them: next to the including file, then along -I paths
+    from the compilation database. System includes are left alone -- their
+    scalars are already known, and their contents would only slow the scan.
     """
-    parts = [text]
-    for name in _LOCAL_INCLUDE_RE.findall(scrub(text) and text):
-        candidate = (source.parent / name)
-        if candidate.is_file():
-            try:
-                parts.append(candidate.read_text(errors="replace"))
-            except OSError:
-                continue
+    search = [source.parent, *(include_dirs or [])]
+    seen: set[Path] = set()
+    parts: list[str] = []
+
+    def absorb(current: Path, body: str, remaining: int) -> None:
+        parts.append(body)
+        if remaining <= 0:
+            return
+        # Scanned on the raw text on purpose: scrub() blanks string literals,
+        # which erases the filename in `#include "geom.h"`. Following a
+        # commented-out include only widens the pool of visible type
+        # definitions, which is harmless here.
+        for name in _LOCAL_INCLUDE_RE.findall(body):
+            for directory in [current.parent, *search]:
+                candidate = directory / name
+                if not candidate.is_file():
+                    continue
+                resolved = candidate.resolve()
+                if resolved in seen:
+                    break
+                seen.add(resolved)
+                try:
+                    absorb(candidate, candidate.read_text(errors="replace"), remaining - 1)
+                except OSError:
+                    pass
+                break
+
+    absorb(source, text, depth)
     return "\n".join(parts)
 
 
@@ -578,7 +637,10 @@ def generate_sequence(
     options = options or HarnessOptions()
     text = source.read_text()
     info = find_class(text, class_name)
-    expanded = _with_local_includes(source, text)
+    expanded = _with_local_includes(source, text, options.include_dirs)
+    # Linked TUs resolve callees, so their definitions must be visible
+    # here too, or veripp reports stubs the run does not actually have.
+    expanded = "\n".join([expanded, *_linked_text(options)])
     typedefs = collect_scalar_typedefs(expanded)
     _ENUMS.clear()
     _ENUMS.update(collect_enum_types(expanded))

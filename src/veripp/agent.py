@@ -58,6 +58,27 @@ class AgentReport:
                 "  This is a BOUNDED proof: it holds for executions within the "
                 "unwind bound above, not for all executions."
             )
+        stubbed = self.final.stubbed_calls
+        if stubbed:
+            names = ", ".join(stubbed[:8]) + ("..." if len(stubbed) > 8 else "")
+            if self.verified:
+                lines.append(
+                    f"  STUBBED CALLS (no body was available): {names}. ESBMC "
+                    "havocs their return values but assumes they do not write "
+                    "through pointer arguments -- if any of them does, this "
+                    "result does not account for it."
+                )
+            else:
+                lines.append(
+                    f"  STUBBED CALLS (no body was available): {names}. Their "
+                    "effects were not modelled, so this counterexample may be "
+                    "an artifact of the missing definition rather than a real "
+                    "bug -- check it first."
+                )
+            lines.append(
+                "  Link the defining source with --link, or point veripp at "
+                "compile_commands.json."
+            )
         if self.verified and self.unsound_probes:
             lines.append(
                 "  CHECKER IS KNOWN-UNSOUND for: "
