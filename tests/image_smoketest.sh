@@ -5,6 +5,12 @@
 # architecture it was built for. It is deliberately end-to-end: the point is
 # not that the binary starts, it is that a proof and a counterexample both
 # come out correct, from a read-only bind mount, as a non-root user.
+#
+# Keep at least one fixture that includes real system headers. An earlier
+# version of this file tested only self-contained toys, and passed 13/13 on an
+# arm64 image that could not parse a single line of real code -- 104 of
+# cJSON's 117 functions came back as parse errors. Self-contained fixtures
+# cannot see a broken include chain, because they never use it.
 set -uo pipefail
 
 IMAGE="${1:?usage: image_smoketest.sh IMAGE[:TAG]}"
@@ -58,6 +64,32 @@ int pick(int i) {
 }
 EOF
 
+# Every fixture above is self-contained, and that is exactly how an image that
+# could not parse ANY real code once passed this test 13/13: esbmc's bundled
+# libc headers #include_next onto clang's resource headers, and if those are
+# missing the failure only appears once a translation unit reaches a system
+# header. Which is all real code, and none of the toys.
+cat > "$work/headers.c" <<'EOF'
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+size_t span(const char *s) {
+  if (s == NULL) return 0;
+  return strlen(s);
+}
+EOF
+
+cat > "$work/headers.cpp" <<'EOF'
+#include <cstddef>
+#include <cstring>
+
+std::size_t span_cpp(const char *s) {
+  if (s == nullptr) return 0;
+  return std::strlen(s);
+}
+EOF
+
 echo "== $IMAGE ($($DOCKER image inspect -f '{{.Architecture}}' "$IMAGE" 2>/dev/null || echo '?')) =="
 
 # Fail loudly and specifically if the bind mount did not make it into the
@@ -99,6 +131,23 @@ case "$out" in *[Oo]verflow*) ;; *) echo "  FAIL counterexample did not mention 
 
 out=$(run verify oob.c --function pick)
 check "out-of-bounds read -> COUNTEREXAMPLE (rc 1)" 1 $? "$out"
+
+# The check that actually represents real code.
+out=$(run verify headers.c --function span)
+rc=$?
+case "$out" in
+  *"file not found"*|*"PARSING ERROR"*)
+    printf '  FAIL C system headers do not resolve:\n%s\n' "$out"; fail=$((fail+1)) ;;
+  *) check "a C file including <stddef.h>/<stdlib.h>/<string.h>" 0 "$rc" "$out" ;;
+esac
+
+out=$(run verify headers.cpp --function span_cpp)
+rc=$?
+case "$out" in
+  *"file not found"*|*"PARSING ERROR"*)
+    printf '  FAIL C++ system headers do not resolve:\n%s\n' "$out"; fail=$((fail+1)) ;;
+  *) check "a C++ file including <cstddef>/<cstring>" 0 "$rc" "$out" ;;
+esac
 
 out=$(run scan safe.c)
 check "scan a file" 0 $? "$out"

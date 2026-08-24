@@ -498,3 +498,41 @@ class TestCveDemo:
         assert "Result: counterexample" in output, output[-2000:]
         assert "division by zero" in output, output[-2000:]
         assert "Result: verified" in output, output[-2000:]
+
+
+class TestSystemHeadersAreReachable:
+    """esbmc's bundled libc headers `#include_next` onto clang's resource
+    headers. If those are absent, every translation unit that touches a real
+    system header dies with "'stddef.h' file not found" -- and nothing else
+    does, so an image that cannot parse a single line of real code passes a
+    smoke test built from self-contained fixtures. That happened: the arm64
+    image scored 13/13 while failing 104 of 117 functions in cJSON.
+    """
+
+    def test_the_arm64_stage_stages_clang_resource_headers(self) -> None:
+        """Built against a system LLVM, esbmc hard-codes the path to clang's
+        resource headers and its own libc headers #include_next onto them.
+        The directory has to exist, as a real directory, at that path: a
+        symlink does not satisfy clang's header search, and
+        -DESBMC_CLANG_HEADERS_BUNDLED=ON does not substitute for it. Both were
+        tried against a real cJSON scan before settling on this.
+        """
+        text = read("Dockerfile")
+        arm_stage = text.split("AS esbmc-arm64", 1)[1].split("\nFROM ", 1)[0]
+        assert "overlay" in arm_stage and "stddef.h" in arm_stage
+
+    def test_the_runtime_applies_the_overlay(self) -> None:
+        runtime = read("Dockerfile").split("AS runtime", 1)[1]
+        assert "/opt/esbmc/overlay" in runtime and "cp -a" in runtime
+
+    def test_the_smoke_test_exercises_system_headers(self) -> None:
+        smoke = read("tests/image_smoketest.sh")
+        for header in ("<stddef.h>", "<stdlib.h>", "<string.h>", "<cstddef>"):
+            assert header in smoke, (
+                f"the smoke test must include {header}: without a system "
+                "header no fixture can detect a broken include chain"
+            )
+        assert "PARSING ERROR" in smoke, (
+            "the smoke test must fail loudly on a frontend parse error rather "
+            "than accept it as an ordinary non-zero exit"
+        )

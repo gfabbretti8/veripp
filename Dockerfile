@@ -58,6 +58,8 @@ RUN set -eux; \
 # debug symbols nobody debugging *their own C code* will ever read. Verified
 # that the stripped binary still passes `veripp doctor`.
 RUN strip --strip-unneeded /opt/esbmc/bin/esbmc && du -h /opt/esbmc/bin/esbmc
+# The prebuilt binary carries its own headers; nothing to overlay.
+RUN mkdir -p /opt/esbmc/overlay
 
 # ---------------------------------------------------------------- arm64 ----
 # Mirrors esbmc's own .github/workflows/release.yml `build-linux-arm64` job,
@@ -148,6 +150,24 @@ RUN set -eux; \
     strip --strip-unneeded /opt/esbmc/bin/esbmc /opt/esbmc/lib/*; \
     du -sh /opt/esbmc
 
+# Built against a system LLVM, esbmc hard-codes the path to clang's resource
+# headers -- its own libc headers #include_next onto them. Without that
+# directory, every translation unit that reaches a real system header dies
+# with "'stddef.h' file not found" while self-contained files pass, so the
+# image looks healthy and cannot verify a line of real code.
+#
+# It has to be the actual directory at the actual path. A symlink there does
+# not satisfy clang's header search (tried), and -DESBMC_CLANG_HEADERS_BUNDLED
+# does not help either (also tried). Stage it under a root that the runtime
+# overlays onto /.
+RUN set -eux; \
+    dir="$(dirname "$(find /usr/lib/llvm-22/lib/clang -name stddef.h | head -1)")"; \
+    test -n "$dir"; \
+    mkdir -p "/opt/esbmc/overlay$(dirname "$dir")"; \
+    cp -a "$dir" "/opt/esbmc/overlay$dir"; \
+    ls "/opt/esbmc/overlay$dir/stddef.h"
+
+
 RUN test -x /opt/esbmc/bin/esbmc \
     && LD_LIBRARY_PATH=/opt/esbmc/lib /opt/esbmc/bin/esbmc --version
 
@@ -172,6 +192,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=esbmc /opt/esbmc /opt/esbmc
+
+# Put anything the checker expects at an absolute path back where it belongs.
+# Empty on amd64.
+RUN set -eux; \
+    if [ -d /opt/esbmc/overlay ] && [ -n "$(ls -A /opt/esbmc/overlay)" ]; then \
+      cp -a /opt/esbmc/overlay/. /; \
+    fi; \
+    rm -rf /opt/esbmc/overlay
+
 ENV PATH="/opt/veripp/bin:/opt/esbmc/bin:${PATH}" \
     LD_LIBRARY_PATH="/opt/esbmc/lib"
 
