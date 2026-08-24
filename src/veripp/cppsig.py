@@ -98,18 +98,30 @@ class SignatureError(Exception):
     """The scanner could not recover a signature it is willing to stand behind."""
 
 
+#: A cv-qualifier applied to the pointer itself, as in `cJSON * const item`.
+#: It says the pointer cannot be reassigned, which is nothing to a harness --
+#: but it hides the `*`, and a parameter not recognised as a pointer is
+#: refused outright.
+_TRAILING_CV_RE = re.compile(r"(?:\s*\b(?:const|volatile)\b)+\s*$")
+
+
 @dataclass
 class Param:
     type: str
     name: str
 
     @property
+    def _bare(self) -> str:
+        """The type with any cv-qualifier on the pointer itself removed."""
+        return _TRAILING_CV_RE.sub("", self.type.rstrip()).rstrip()
+
+    @property
     def is_pointer(self) -> bool:
-        return self.type.rstrip().endswith("*")
+        return self._bare.endswith("*")
 
     @property
     def is_reference(self) -> bool:
-        return self.type.rstrip().endswith("&")
+        return self._bare.endswith("&")
 
     @property
     def is_const(self) -> bool:
@@ -117,7 +129,7 @@ class Param:
 
     def pointee(self) -> str:
         """Type pointed/referred to, with the outer `*`/`&` and `const` removed."""
-        t = self.type.rstrip()
+        t = self._bare
         if t.endswith("*") or t.endswith("&"):
             t = t[:-1].rstrip()
         return re.sub(r"^\s*const\b\s*", "", t).strip()
@@ -394,13 +406,15 @@ def find_function(source: str, target: str) -> Signature:
 
     name_start, lparen, rparen, quals, brace = candidates[0]
 
-    head = _decl_head(scrubbed, name_start)
+    head, after_colon = _decl_head(scrubbed, name_start)
     enclosing = _enclosing_class_range(classes, name_start)
     qualifier = _qualifier(scrubbed[head:name_start], name)
     class_name = qualifier or (enclosing.name if enclosing else None)
     if qualifier is not None:
         enclosing = next((c for c in classes if c.name == qualifier), enclosing)
-    _reject_unmodellable(scrubbed, head, name_start, name, class_name, enclosing)
+    _reject_unmodellable(
+        scrubbed, head, name_start, name, class_name, enclosing, after_colon
+    )
 
     # Read the return type off the scrubbed text: comments must not leak into it.
     return_type, is_static = _return_type(scrubbed[head:name_start], name)
@@ -480,6 +494,7 @@ def _reject_unmodellable(
     name: str,
     class_name: str | None,
     enclosing: "_ClassRange | None",
+    after_colon: bool = False,
 ) -> None:
     """Refuse the shapes a harness cannot be built for, before guessing at one.
 
@@ -508,7 +523,11 @@ def _reject_unmodellable(
             "concrete harness exists. Wrap a concrete instantiation "
             f"(e.g. `{class_name}<int>`) in a non-template function and target that."
         )
-    if _looks_like_an_initialiser_list(before):
+    # Only text following a `:` can be a constructor initialiser list. Without
+    # that check a macro-wrapped return type -- `CJSON_PUBLIC(cJSON *) f(...)`,
+    # which is how most C libraries mark their exports -- looks like one
+    # because of the parentheses, and the function is refused.
+    if after_colon and _looks_like_an_initialiser_list(before):
         raise SignatureError(
             f"`{name}` here is an entry in a constructor initialiser list, not a "
             "function definition (the last entry is followed by the constructor "
@@ -559,7 +578,7 @@ def _looks_like_an_initialiser_list(head: str) -> bool:
     return "(" in flat or "," in flat
 
 
-def _decl_head(scrubbed: str, name_start: int) -> int:
+def _decl_head(scrubbed: str, name_start: int) -> tuple[int, bool]:
     """Offset where the declaration containing `name_start` begins.
 
     A single `:` ends the previous thing (an access specifier, a label, the
@@ -569,10 +588,12 @@ def _decl_head(scrubbed: str, name_start: int) -> int:
     return type at all, which refused the most common shape in real C++.
     """
     i = name_start - 1
+    after_colon = False
     while i >= 0:
         ch = scrubbed[i]
         if ch == ":":
             if not (scrubbed[i - 1 : i] == ":" or scrubbed[i + 1 : i + 2] == ":"):
+                after_colon = True
                 break
         elif ch in ";{}":
             break
@@ -590,7 +611,8 @@ def _decl_head(scrubbed: str, name_start: int) -> int:
         last = m
     if last is not None:
         start += last.end()
-    return start
+        after_colon = False  # a directive intervened; no initialiser list here
+    return start, after_colon
 
 
 def _return_type(head: str, name: str) -> tuple[str, bool]:

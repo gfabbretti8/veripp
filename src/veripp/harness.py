@@ -617,6 +617,8 @@ def _emit_buffer(
 def _decl_type(type_: str) -> str:
     """Declaration type for a harness local: drop a top-level reference."""
     t = re.sub(r"\s+", " ", type_).strip()
+    # `T * const` is fine to declare (assigned once), but `T &` is not a
+    # variable declaration the harness can initialise separately.
     return t[:-1].strip() if t.endswith("&") else t
 
 

@@ -247,3 +247,49 @@ def test_two_preprocessor_directives_before_a_definition():
     sig = find_function(src, "area")
     assert sig.return_type == "int"
     assert [(p.type, p.name) for p in sig.params] == [("Box*", "b")]
+
+
+class TestCIdioms:
+    """Shapes that are ordinary in C and were refused outright.
+
+    Both were found by scanning libraries veripp had never been tuned
+    against; neither appears in lodepng, the only library it had been
+    measured on.
+    """
+
+    def test_a_macro_wrapped_return_type_is_not_an_initialiser_list(self):
+        """`CJSON_PUBLIC(cJSON *) f(...)` is how most C libraries mark exports.
+
+        The parentheses made it look like a constructor initialiser list, and
+        79 of cJSON's 117 functions were refused for being C++ syntax they
+        could not possibly be.
+        """
+        src = "#define CJSON_PUBLIC(t) t\nCJSON_PUBLIC(int) add(int a, int b) { return a + b; }\n"
+        sig = find_function(src, "add")
+        assert [(p.type, p.name) for p in sig.params] == [("int", "a"), ("int", "b")]
+
+    def test_a_real_initialiser_list_is_still_refused(self):
+        src = (
+            "class D : public B {\n  int a_;\npublic:\n"
+            "  D(int a) :\n    B( 0 ),\n    a_( a )\n  {\n    a_ = 1;\n  }\n};"
+        )
+        with pytest.raises(SignatureError):
+            find_function(src, "a_")
+
+    def test_a_const_qualified_pointer_is_still_a_pointer(self):
+        """`cJSON * const item` promises the pointer is not reassigned. That
+        is nothing to a harness, but it hides the `*`, and a parameter not
+        recognised as a pointer is refused."""
+        src = "int size(const char * const s, unsigned n) { return (int)n; }"
+        param = find_function(src, "size").params[0]
+        assert param.is_pointer
+        assert param.pointee() == "char"
+
+    def test_const_pointer_parameters_can_be_harnessed(self, tmp_path):
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct { int n; } item_t;\n"
+            "static int peek(item_t * const it) { return it->n; }\n"
+        )
+        assert "it_obj" in generate(p, "peek").code
