@@ -23,10 +23,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .cppsig import (
+    ClassInfo,
     Param,
     Signature,
     SignatureError,
     collect_scalar_typedefs,
+    find_class,
     find_function,
     match_bracket,
     normalize_type,
@@ -36,6 +38,10 @@ from .cppsig import (
 #: Default bound on the length of a generated buffer. Small on purpose: BMC
 #: cost grows fast, and off-by-one bugs show up at any length.
 DEFAULT_MAX_ARRAY_LEN = 4
+
+#: Default length of a generated call sequence. Each step multiplies the state
+#: space, so this is deliberately small; raise it with --max-calls.
+DEFAULT_MAX_CALLS = 4
 
 _LOOP_VAR = "veripp_i"
 _RECEIVER = "veripp_obj"
@@ -49,6 +55,10 @@ class HarnessError(Exception):
 class HarnessOptions:
     max_array_len: int = DEFAULT_MAX_ARRAY_LEN
     assume_pointers_nonnull: bool = True
+    #: Length of the generated call sequence for a class target. A single call
+    #: on a fresh object explores almost nothing about a stateful type; the
+    #: interesting states are the ones several calls build up.
+    max_calls: int = DEFAULT_MAX_CALLS
 
 
 @dataclass
@@ -57,6 +67,7 @@ class Harness:
     signature: Signature
     assumptions: list[str] = field(default_factory=list)
     source: Path | None = None
+    class_info: ClassInfo | None = None  # set for sequence harnesses
 
     def write(self, directory: Path, tag: str = "") -> Path:
         directory.mkdir(parents=True, exist_ok=True)
@@ -96,8 +107,8 @@ _NONDET_BY_TYPE = {
 }
 
 _LENGTH_NAMES = {
-    "n", "len", "length", "size", "count", "num", "nmemb", "sz", "cnt", "nelem",
-    "n_elems", "num_elements", "capacity",
+    "n", "l", "len", "length", "size", "count", "num", "nmemb", "sz", "cnt",
+    "nelem", "n_elems", "num_elements", "capacity", "bytes", "nbytes", "cb",
 }
 
 
@@ -248,7 +259,8 @@ def _pair_buffers_with_lengths(
 def _is_length_name(name: str) -> bool:
     lowered = name.lower()
     return lowered in _LENGTH_NAMES or lowered.endswith(
-        ("_len", "_size", "_count", "_n", "len", "size", "count")
+        ("_len", "_size", "_count", "_n", "len", "size", "count",
+         "capacity", "bytes", "num", "cap", "sz")
     )
 
 
@@ -487,6 +499,196 @@ def _render(source: Path, signature: Signature, body: list[str], assumptions: li
         qualified=signature.qualified_name,
         signature=f"{signature.return_type} {signature.qualified_name}({params})"
         + (" const" if signature.is_const else ""),
+        assumptions=assumption_lines,
+        include=source.resolve(),
+        body=indented,
+    )
+
+
+# ------------------------------------------------- sequence harnesses ----
+
+_STEP_VAR = "veripp_step"
+_CHOICE_VAR = "veripp_choice"
+
+
+def generate_sequence(
+    source: Path,
+    class_name: str,
+    options: HarnessOptions | None = None,
+    assertions: list[str] | None = None,
+) -> Harness:
+    """Drive a bounded, nondeterministic sequence of public method calls.
+
+    A single call on a default-constructed object is a very weak question to
+    ask about a stateful type: the states that matter are the ones a sequence
+    of calls builds up. This emits the harness a person would write by hand --
+    construct, then loop `max_calls` times picking any public method with
+    nondeterministic arguments -- so every reachable state within that bound
+    is explored, not just the initial one.
+    """
+    options = options or HarnessOptions()
+    text = source.read_text()
+    info = find_class(text, class_name)
+    typedefs = collect_scalar_typedefs(_with_local_includes(source, text))
+    _reject_conflicting_main(text, source)
+
+    callable_methods: list[Signature] = []
+    unsupported: dict[str, str] = dict(info.skipped)
+    for method in info.methods:
+        try:
+            _method_arguments(method, typedefs, options, [], probe=True)
+        except HarnessError as exc:
+            unsupported[method.name] = str(exc).split(";")[0]
+            continue
+        callable_methods.append(method)
+
+    if not callable_methods:
+        raise HarnessError(
+            f"no public method of `{class_name}` can be driven with "
+            "nondeterministic arguments"
+            + (f" (skipped: {', '.join(sorted(unsupported))})" if unsupported else "")
+        )
+
+    assumptions: list[str] = []
+    body = _emit_construction(info, options, typedefs, assumptions)
+    assumptions.append(
+        f"at most {options.max_calls} calls are made, each one any public "
+        f"method of `{class_name}` with nondeterministic arguments; longer "
+        "sequences are NOT explored"
+    )
+    if unsupported:
+        assumptions.append(
+            "these public methods are never called, so states only they can "
+            f"produce are unexplored: {', '.join(sorted(unsupported))}"
+        )
+
+    body.append("")
+    body.append(f"for (int {_STEP_VAR} = 0; {_STEP_VAR} < {options.max_calls}; ++{_STEP_VAR}) {{")
+    body.append(f"    unsigned {_CHOICE_VAR} = VERIPP_NONDET_UINT();")
+    body.append(f"    VERIPP_ASSUME({_CHOICE_VAR} < {len(callable_methods)});")
+    for idx, method in enumerate(callable_methods):
+        keyword = "if" if idx == 0 else "} else if"
+        body.append(f"    {keyword} ({_CHOICE_VAR} == {idx}) {{")
+        args: list[str] = []
+        for line in _method_arguments(method, typedefs, options, assumptions):
+            body.append(f"        {line}")
+        args = [p.name for p in method.params]
+        call = f"{_RECEIVER}.{method.name}({', '.join(args)})"
+        body.append(f"        {call};" if method.returns_void else f"        (void){call};")
+    body.append("    }")
+    for expr in assertions or []:
+        body.append(f"    VERIPP_ASSERT({expr});")
+    body.append("}")
+
+    signature = Signature(
+        name=class_name, return_type="", params=[], class_name=class_name
+    )
+    return Harness(
+        code=_render_sequence(source, info, callable_methods, body, assumptions, options),
+        signature=signature,
+        assumptions=assumptions,
+        source=source,
+        class_info=info,
+    )
+
+
+def _method_arguments(
+    method: Signature,
+    typedefs: dict[str, str],
+    options: HarnessOptions,
+    assumptions: list[str],
+    probe: bool = False,
+) -> list[str]:
+    """Declarations for one call's arguments, scoped to that branch."""
+    lines: list[str] = []
+    sink: list[str] = [] if probe else assumptions
+    lengths = _pair_buffers_with_lengths(method.params, typedefs)
+    buffers = set(lengths)
+    for param in method.params:
+        if param.name in buffers:
+            continue
+        lines += _emit_scalar(param, method, sink, options, typedefs)
+    for buffer_name, length in lengths.items():
+        param = next(p for p in method.params if p.name == buffer_name)
+        lines += _emit_buffer(param, length, options, sink, typedefs)
+    return lines
+
+
+def _emit_construction(
+    info: ClassInfo,
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+    assumptions: list[str],
+) -> list[str]:
+    if info.default_constructible:
+        assumptions.append(
+            f"the sequence starts from a default-constructed `{info.name}`"
+        )
+        return [f"{info.name} {_RECEIVER};"]
+
+    for ctor in sorted(info.constructors, key=lambda c: len(c.params)):
+        try:
+            lines = _method_arguments(ctor, typedefs, options, [], probe=True)
+        except HarnessError:
+            continue
+        lines = _method_arguments(ctor, typedefs, options, assumptions)
+        args = ", ".join(p.name for p in ctor.params)
+        assumptions.append(
+            f"the sequence starts from `{info.name}({args})` with "
+            "nondeterministic constructor arguments"
+        )
+        return lines + [f"{info.name} {_RECEIVER}({args});"]
+
+    raise HarnessError(
+        f"`{info.name}` has no default constructor and none of its "
+        "constructors can be called with nondeterministic arguments"
+    )
+
+
+_SEQUENCE_HEADER = """// Generated by veripp -- do not edit; regenerate with:
+//     veripp harness {source} --class {cls} --max-calls {calls}
+//
+// Sequence harness for `{cls}`: every state reachable in at most {calls}
+// public method calls, each with nondeterministic arguments.
+//
+// Methods driven:
+{methods}
+//
+// Assumptions baked into this harness (reported with every result):
+{assumptions}
+
+#define VERIPP_GENERATED_HARNESS 1
+#include "veripp/contracts.hpp"
+#include "{include}"
+
+#if !defined(__ESBMC__)
+#error "veripp harnesses are built by ESBMC only (it is invoked with -D__ESBMC__)"
+#endif
+
+int main() {{
+{body}
+    return 0;
+}}
+"""
+
+
+def _render_sequence(source, info, methods, body, assumptions, options) -> str:
+    method_lines = "\n".join(
+        "//   - {} {}({}){}".format(
+            m.return_type,
+            m.name,
+            ", ".join(f"{p.type} {p.name}" for p in m.params),
+            " const" if m.is_const else "",
+        )
+        for m in methods
+    )
+    assumption_lines = "\n".join(f"//   - {a}" for a in assumptions) or "//   - none"
+    indented = "\n".join(("    " + line if line else "") for line in body)
+    return _SEQUENCE_HEADER.format(
+        source=source,
+        cls=info.name,
+        calls=options.max_calls,
+        methods=method_lines,
         assumptions=assumption_lines,
         include=source.resolve(),
         body=indented,

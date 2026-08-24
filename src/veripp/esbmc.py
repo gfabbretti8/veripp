@@ -441,3 +441,61 @@ def _tool_error(output: str, exit_code: int | None) -> str | None:
     if exit_code not in (None, 0, 1):
         return f"esbmc exited with status {exit_code}"
     return None
+
+
+# ------------------------------------------------ soundness self-check ---
+#
+# A model checker that answers "verified" on a program that provably fails is
+# worse than no checker: every result built on it is a false proof. ESBMC 8.4
+# has exactly such a hole (esbmc/esbmc#6508 -- fixed on master, unreleased):
+# an out-of-bounds write to a member array is missed when the index is another
+# member of the same object reached through `this` or a pointer, which is the
+# ordinary container idiom. veripp refuses to present "verified" from a
+# checker that fails this probe without saying so.
+
+SOUNDNESS_PROBES: dict[str, tuple[str, str]] = {
+    "member-array bounds (esbmc#6508)": (
+        "struct S { int a[4]; unsigned n; };\n"
+        "static void push(struct S *s, int v) { s->a[s->n++] = v; }\n"
+        "int main(void) { struct S s; s.n = 0;\n"
+        "  for (int i = 0; i < 5; ++i) push(&s, i);\n"
+        "  return 0; }\n",
+        "c11",
+    ),
+    "local-array bounds": (
+        "int main(void) { int a[4]; unsigned n = 0;\n"
+        "  for (int i = 0; i < 5; ++i) a[n++] = i;\n"
+        "  return 0; }\n",
+        "c11",
+    ),
+}
+
+
+def check_soundness(esbmc_bin: str | None = None, timeout_s: int = 60) -> dict[str, bool]:
+    """Run known-failing programs; each MUST be reported as failing.
+
+    Returns probe name -> whether the checker correctly rejected it. A False
+    means this installation silently misses that class of bug.
+    """
+    import tempfile
+
+    binary = esbmc_bin or find_esbmc()
+    if binary is None:
+        raise RuntimeError("esbmc not found on PATH")
+
+    results: dict[str, bool] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, (code, std) in SOUNDNESS_PROBES.items():
+            path = Path(tmp) / "probe.c"
+            path.write_text(code)
+            try:
+                proc = subprocess.run(
+                    [binary, str(path), "--std", std, "--unwind", "8"],
+                    capture_output=True, text=True, timeout=timeout_s,
+                )
+            except subprocess.TimeoutExpired:
+                results[name] = False
+                continue
+            out = proc.stdout + proc.stderr
+            results[name] = "VERIFICATION FAILED" in out
+    return results

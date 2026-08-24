@@ -22,6 +22,15 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - Buffer lengths are bounded (`--max-array-len`, default 4).
 - Overloaded targets are refused rather than guessed at.
 
+## M1.5 — C++ objects (done)
+- [x] `--class`: bounded nondeterministic sequences over a class's public
+      methods, replacing the "exactly one call on a fresh object" limitation.
+      Catches state-dependent bugs a single-call harness proves "verified".
+- [x] `--assert`: properties checked after every call in a sequence.
+- [x] `veripp doctor` soundness self-check: known-failing programs must be
+      rejected, so a checker with a false-negative hole cannot silently back
+      a "verified" result (esbmc#6508 is one such hole in 8.4).
+
 ## M2 — real projects
 - libclang slicer: compile_commands.json -> self-contained TU per function.
 - Sound havoc stubs for external calls.

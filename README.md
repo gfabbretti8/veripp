@@ -118,8 +118,32 @@ preconditions hoisted in front of the call. Inspect it before you trust it:
 veripp harness examples/off_by_one.cpp --function sum_array
 ```
 
-Without `--function`, veripp verifies the file's own `main()` — useful when you
-have written the harness yourself.
+For a class, `--class` drives a bounded nondeterministic **sequence** of its
+public methods, so states built up across calls are explored — not just the
+first call on a fresh object:
+
+```bash
+veripp verify examples/ring_buffer.cpp --class RingBuffer --max-calls 6 \
+    --assert 'veripp_obj.size() <= RingBuffer::capacity'
+```
+
+Without `--function` or `--class`, veripp verifies the file's own `main()` —
+useful when you have written the harness yourself.
+
+## Check your checker
+
+```bash
+veripp doctor
+```
+
+runs known-*failing* programs through your ESBMC and confirms it rejects them.
+A model checker that answers "verified" on a program that provably fails is
+worse than none, because every result built on it is a false proof. ESBMC 8.4
+has one such hole ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508),
+fixed upstream but unreleased): an out-of-bounds write to a member array is
+missed when the index is another member of the same object reached through
+`this` or a pointer — the ordinary container idiom. `doctor` fails loudly
+rather than letting you build proofs on it.
 
 ## Killer example: a real CVE, found and fixed
 

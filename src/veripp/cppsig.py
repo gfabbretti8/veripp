@@ -121,6 +121,19 @@ class Param:
 
 
 @dataclass
+class ClassInfo:
+    """A class and the public surface a sequence harness can drive."""
+
+    name: str
+    is_struct: bool
+    templated: bool
+    methods: list["Signature"] = field(default_factory=list)
+    default_constructible: bool = True
+    constructors: list["Signature"] = field(default_factory=list)
+    skipped: dict[str, str] = field(default_factory=dict)  # method -> why
+
+
+@dataclass
 class Signature:
     name: str
     return_type: str
@@ -611,3 +624,120 @@ def _is_type_word(word: str, decl: str) -> bool:
         return True
     # `const Foo&` / `Foo*`: the last identifier is the type when nothing follows it.
     return decl.strip() == word
+
+
+# ------------------------------------------------------------- classes ----
+
+_ACCESS_RE = re.compile(r"\b(public|private|protected)\s*:")
+
+
+def find_class(source: str, name: str) -> ClassInfo:
+    """The public method surface of `name`, for driving a call sequence.
+
+    Only members reachable from outside are useful to a harness, so private
+    and protected members are skipped, and so is anything `find_function`
+    refuses (templates, operators, overloads it cannot disambiguate).
+    """
+    scrubbed = scrub(source)
+    ranges = [c for c in find_class_ranges(scrubbed) if c.name == name]
+    if not ranges:
+        raise SignatureError(f"no definition of class or struct `{name}` in the file")
+    if len(ranges) > 1:
+        raise SignatureError(f"`{name}` is defined {len(ranges)} times")
+    rng = ranges[0]
+    if rng.templated:
+        raise SignatureError(
+            f"`{name}` is a class template; harness a concrete instantiation "
+            "by wrapping it in a non-template type"
+        )
+
+    is_struct = _is_struct(scrubbed, rng)
+    info = ClassInfo(name=name, is_struct=is_struct, templated=False)
+    access = "public" if is_struct else "private"
+    ctor_declared = False
+
+    for member_name, member_start, member_access in _members(scrubbed, rng, access):
+        if member_name == name:  # constructor
+            ctor_declared = True
+            if member_access == "public":
+                try:
+                    info.constructors.append(_signature_at(source, scrubbed, member_start, name))
+                except SignatureError:
+                    pass
+            continue
+        if member_access != "public":
+            continue
+        try:
+            info.methods.append(find_function(source, member_name))
+        except SignatureError as exc:
+            info.skipped[member_name] = str(exc).split(";")[0].split("(")[0].strip()
+
+    info.default_constructible = (
+        not ctor_declared
+        or any(not c.params for c in info.constructors)
+    )
+    return info
+
+
+def _is_struct(scrubbed: str, rng: "_ClassRange") -> bool:
+    head = scrubbed[max(0, rng.start - 200) : rng.start]
+    m = list(re.finditer(r"\b(class|struct)\s+\w+", head))
+    return bool(m) and m[-1].group(1) == "struct"
+
+
+def _members(scrubbed: str, rng: "_ClassRange", access: str):
+    """Yield (name, offset, access) for members declared directly in the body.
+
+    Depth-aware: members of nested classes, and names inside method bodies,
+    belong to those scopes and are not part of this class's surface.
+    """
+    i = rng.start + 1
+    depth = 0
+    while i < rng.end:
+        ch = scrubbed[i]
+        if ch in "{([":
+            depth += 1
+            i += 1
+            continue
+        if ch in "})]":
+            depth -= 1
+            i += 1
+            continue
+        if depth == 0:
+            acc = _ACCESS_RE.match(scrubbed, i)
+            if acc:
+                access = acc.group(1)
+                i = acc.end()
+                continue
+            word = re.match(r"[A-Za-z_]\w*\s*\(", scrubbed[i:])
+            if word:
+                ident = word.group(0)[: word.group(0).index("(")].strip()
+                if ident not in _NOT_A_MEMBER:
+                    yield ident, i, access
+                # Skip the parameter list so nested names are not mistaken
+                # for members.
+                try:
+                    i = match_bracket(scrubbed, i + word.end() - 1) + 1
+                except SignatureError:
+                    i += word.end()
+                continue
+        i += 1
+
+
+_NOT_A_MEMBER = {
+    "if", "for", "while", "switch", "return", "sizeof", "operator", "catch",
+    "throw", "new", "delete", "static_assert", "decltype", "noexcept",
+    "alignof", "typeid", "explicit",
+}
+
+
+def _signature_at(source: str, scrubbed: str, offset: int, name: str) -> Signature:
+    """Signature of the member whose name starts at `offset` (constructors)."""
+    lparen = scrubbed.index("(", offset)
+    rparen = match_bracket(scrubbed, lparen)
+    return Signature(
+        name=name,
+        return_type="",
+        params=_parse_params(source[lparen + 1 : rparen]),
+        class_name=name,
+    )

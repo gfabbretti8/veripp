@@ -1,3 +1,5 @@
+import pytest
+
 """Parser tests against pinned real ESBMC 8.4 output (tests/golden/)."""
 
 from veripp.esbmc import Outcome, VerifyConfig, parse_output
@@ -141,3 +143,19 @@ def test_a_segfaulting_esbmc_is_a_tool_error_not_a_verdict():
     assert result.outcome is Outcome.TOOL_ERROR
     assert "139" in result.error
     assert not result.is_conclusive
+
+
+@pytest.mark.esbmc
+def test_soundness_probes_are_wired_and_meaningful():
+    """The probes must actually be programs that fail; a good checker rejects both.
+
+    This does not assert the local esbmc is sound -- 8.4 is not, by design of
+    the check -- only that the probe harness reports per-probe booleans.
+    """
+    from veripp.esbmc import SOUNDNESS_PROBES, check_soundness
+
+    results = check_soundness()
+    assert set(results) == set(SOUNDNESS_PROBES)
+    assert all(isinstance(v, bool) for v in results.values())
+    # A checker that misses a plain local-array overflow is beyond salvage.
+    assert results["local-array bounds"] is True

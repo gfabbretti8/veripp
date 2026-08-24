@@ -10,8 +10,14 @@ from pathlib import Path
 
 from .agent import AgentReport, Budget, verify_with_agent
 from .cppsig import SignatureError
-from .esbmc import Outcome, VerifyConfig, find_esbmc
-from .harness import Harness, HarnessError, HarnessOptions, generate
+from .esbmc import Outcome, VerifyConfig, check_soundness, find_esbmc
+from .harness import (
+    Harness,
+    HarnessError,
+    HarnessOptions,
+    generate,
+    generate_sequence,
+)
 from .llm import AnthropicLLM, NullLLM
 from .paths import contracts_include_dir, scratch_dir
 from .triage import TargetInfo
@@ -60,12 +66,33 @@ def main(argv: list[str] | None = None) -> int:
 
 def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False) -> None:
     p.add_argument("source", type=Path)
-    p.add_argument(
+    target = p.add_mutually_exclusive_group(required=require_function)
+    target.add_argument(
         "--function",
-        required=require_function,
         help="target function; veripp generates a harness for it. Overloads "
         "are picked by parameter types: --function 'f(int, unsigned)'. "
         "(omit to verify the file's own main)",
+    )
+    target.add_argument(
+        "--class",
+        dest="cls",
+        help="target class; veripp drives a nondeterministic sequence of its "
+        "public methods, so states built up across calls are explored",
+    )
+    p.add_argument(
+        "--max-calls",
+        type=int,
+        default=HarnessOptions.max_calls,
+        help="length of the generated call sequence for --class",
+    )
+    p.add_argument(
+        "--assert",
+        dest="assertions",
+        action="append",
+        default=[],
+        metavar="EXPR",
+        help="property checked after every call in a --class sequence; the "
+        "object under test is named `veripp_obj`. Repeatable.",
     )
     p.add_argument("--unwind", type=int, default=8)
     p.add_argument("--timeout", type=int, default=120, help="per-attempt timeout (s)")
@@ -102,11 +129,25 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
     )
 
 
+def _harness_options(args) -> HarnessOptions:
+    return HarnessOptions(
+        max_array_len=args.max_array_len,
+        max_calls=getattr(args, "max_calls", HarnessOptions.max_calls),
+    )
+
+
 def _build_harness(args) -> Harness:
+    if getattr(args, "cls", None):
+        return generate_sequence(
+            args.source,
+            args.cls,
+            _harness_options(args),
+            assertions=list(getattr(args, "assertions", []) or []),
+        )
     return generate(
         args.source,
         args.function,
-        HarnessOptions(max_array_len=args.max_array_len),
+        _harness_options(args),
         extra_preconditions=list(getattr(args, "assume", []) or []),
     )
 
@@ -114,11 +155,12 @@ def _build_harness(args) -> Harness:
 def _verify(args) -> int:
     harness: Harness | None = None
     target = args.source
-    if args.function:
+    if args.function or getattr(args, "cls", None):
         try:
             harness = _build_harness(args)
         except (HarnessError, SignatureError) as exc:
-            print(f"error: cannot harness `{args.function}`: {exc}", file=sys.stderr)
+            what = args.function or args.cls
+            print(f"error: cannot harness `{what}`: {exc}", file=sys.stderr)
             return EXIT_USAGE
         target = harness.write(scratch_dir())
 
@@ -139,9 +181,9 @@ def _verify(args) -> int:
         TargetInfo(
             source=args.source,
             function=args.function,
-            options=HarnessOptions(max_array_len=args.max_array_len),
+            options=_harness_options(args),
         )
-        if harness
+        if harness and args.function
         else None
     )
     report = verify_with_agent(
@@ -187,6 +229,7 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "accepted_preconditions": report.accepted_preconditions,
         "harness": str(report.harness) if report.harness else None,
         "function": harness.signature.qualified_name if harness else None,
+        "sequence": bool(harness and harness.class_info),
         "violated_property": asdict(prop) if prop else None,
         "trace": [asdict(step) for step in report.final.trace],
         "diagnosis": asdict(report.diagnosis) if report.diagnosis else None,
@@ -222,6 +265,16 @@ def _doctor() -> int:
 
         version = subprocess.run([esbmc, "--version"], capture_output=True, text=True)
         print(f"  {version.stdout.strip() or version.stderr.strip()}")
+    unsound: list[str] = []
+    if esbmc:
+        print("soundness self-check (known-failing programs must be rejected):")
+        try:
+            for name, ok in check_soundness(esbmc).items():
+                print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
+                if not ok:
+                    unsound.append(name)
+        except RuntimeError as exc:
+            print(f"  could not run: {exc}")
     include = contracts_include_dir()
     print(f"contracts header: {include / 'veripp/contracts.hpp' if include else 'NOT FOUND'}")
     try:
@@ -233,6 +286,17 @@ def _doctor() -> int:
     import os
 
     print(f"ANTHROPIC_API_KEY: {'set' if os.environ.get('ANTHROPIC_API_KEY') else 'not set'}")
+    if unsound:
+        print(
+            "\nWARNING: this esbmc silently misses "
+            + ", ".join(unsound)
+            + ".\n'verified' results covering that pattern are NOT trustworthy. "
+            "Upgrade esbmc (the member-array hole is esbmc/esbmc#6508, fixed "
+            "upstream but not in 8.4; `brew install --HEAD esbmc` builds a "
+            "fixed one).",
+            file=sys.stderr,
+        )
+        return EXIT_INCONCLUSIVE
     return EXIT_VERIFIED if esbmc else EXIT_USAGE
 
 
