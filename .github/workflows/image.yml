@@ -31,15 +31,22 @@ jobs:
   build:
     strategy:
       fail-fast: false
-      # On a pull request, amd64 only -- the arm64 leg compiles ESBMC from
-      # source and is not worth an hour of runner time per PR.
+      # Both architectures on every trigger, pull requests included. The arm64
+      # source build measures ~3.5 minutes on native arm64 cores, which is well
+      # worth paying per PR: it is the leg with no prebuilt binary to fall back
+      # on, so it is the one most likely to break silently.
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request'
-          && '[{"platform":"linux/amd64","runner":"ubuntu-24.04","arch":"amd64"}]'
-          || '[{"platform":"linux/amd64","runner":"ubuntu-24.04","arch":"amd64"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","arch":"arm64"}]') }}
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
     runs-on: ${{ matrix.runner }}
-    # The arm64 source build of ESBMC is the reason for this number.
-    timeout-minutes: 180
+    # Generous next to the ~15 minutes a cold arm64 build measures, but a
+    # stuck apt mirror should not hold a runner for hours.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write

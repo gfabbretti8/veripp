@@ -11,9 +11,11 @@
 #                pinned to the 8.4 release -- which silently misses
 #                out-of-bounds writes (esbmc/esbmc#6508) and is therefore
 #                unsound for our purposes. So on arm64 we build ESBMC from
-#                source. It is slow, it happens once per release, and it is
-#                the only way to hand arm64 users a checker that is as sound
-#                as the one amd64 users get.
+#                source. Configured as below -- without the frontends and test
+#                suites we do not ship -- that compile is about 3.5 minutes on
+#                four native arm64 cores, not the hour a full build.sh run
+#                costs. It is the only way to hand arm64 users a checker as
+#                sound as the one amd64 users get.
 #
 # Both paths land the same layout at /opt/esbmc/bin/esbmc, and `veripp doctor`
 # runs at build time on both, so an image that cannot detect a planted bug
@@ -43,7 +45,7 @@ RUN set -eux; \
     mkdir -p /tmp/unz && unzip -q /tmp/esbmc.zip -d /tmp/unz; \
     bin="$(find /tmp/unz -name esbmc -type f | head -1)"; \
     test -n "$bin"; \
-    mkdir -p /opt/esbmc/bin && cp "$bin" /opt/esbmc/bin/esbmc; \
+    mkdir -p /opt/esbmc/bin /opt/esbmc/lib && cp "$bin" /opt/esbmc/bin/esbmc; \
     chmod +x /opt/esbmc/bin/esbmc; \
     rm -rf /tmp/esbmc.zip /tmp/unz
 
@@ -110,7 +112,23 @@ RUN set -eux; \
       -DCMAKE_INSTALL_PREFIX=/opt/esbmc; \
     cmake --build build; \
     cmake --install build
-RUN test -x /opt/esbmc/bin/esbmc && /opt/esbmc/bin/esbmc --version
+# BUILD_STATIC=OFF (as Homebrew does) leaves esbmc linked against LLVM and
+# clang shared objects that come from apt.llvm.org, not stock Ubuntu. Rather
+# than add that repository to the runtime image -- which the amd64 half, a
+# static binary, has no use for -- bundle exactly what ldd asks for that the
+# runtime will not already have, and let each architecture hand the runtime a
+# self-contained /opt/esbmc tree.
+RUN set -eux; \
+    mkdir -p /opt/esbmc/lib; \
+    for lib in $(ldd /opt/esbmc/bin/esbmc | awk '/=>/ {print $3}'); do \
+      case "$lib" in \
+        */libLLVM*|*/libclang*) cp -L "$lib" /opt/esbmc/lib/ ;; \
+      esac; \
+    done; \
+    ls -1 /opt/esbmc/lib
+
+RUN test -x /opt/esbmc/bin/esbmc \
+    && LD_LIBRARY_PATH=/opt/esbmc/lib /opt/esbmc/bin/esbmc --version
 
 # ------------------------------------------------------------ selector ----
 # TARGETARCH is supplied by buildkit: amd64 | arm64.
@@ -126,10 +144,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-venv libstdc++6 libgomp1 libgmp10 \
         gcc g++ libc6-dev \
         ca-certificates \
+        libz3-4 libedit2 libxml2 libzstd1 liblzma5 libtinfo6 libffi8 \
+        libboost-filesystem1.83.0 libboost-program-options1.83.0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=esbmc /opt/esbmc/bin/esbmc /opt/esbmc/bin/esbmc
-ENV PATH="/opt/veripp/bin:/opt/esbmc/bin:${PATH}"
+COPY --from=esbmc /opt/esbmc /opt/esbmc
+ENV PATH="/opt/veripp/bin:/opt/esbmc/bin:${PATH}" \
+    LD_LIBRARY_PATH="/opt/esbmc/lib"
 
 # veripp itself: a venv, so the image has no opinion about the system python.
 COPY . /src/veripp

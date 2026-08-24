@@ -50,12 +50,18 @@ manually with `push: false` — it builds and smoke-tests and pushes nothing.
 
 Two things about this build are worth remembering before changing it:
 
-- **The arm64 leg compiles ESBMC from source and takes on the order of an
-  hour.** That is not an oversight to optimise away. No sound prebuilt arm64
-  Linux ESBMC exists — the only one anywhere is the Homebrew bottle at 8.4,
-  which carries [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and
-  silently misses out-of-bounds writes. `tests/test_delivery.py` fails if that
-  stage ever turns into a download.
+- **The arm64 leg compiles ESBMC from source**, because no sound prebuilt
+  arm64 Linux ESBMC exists — the only one anywhere is the Homebrew bottle at
+  8.4, which carries [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)
+  and silently misses out-of-bounds writes. `tests/test_delivery.py` fails if
+  that stage ever turns into a download. Measured at ~3.5 minutes on four
+  native arm64 cores; the cost is in the apt and clone steps around it, not
+  the compile.
+- **It builds from `master`, not `weekly`.** The arm64 build is only possible
+  because of [esbmc#5252](https://github.com/esbmc/esbmc/pull/5252) (ARM SVE
+  builtin types), merged 2026-06-09 — after the `weekly` tag was last cut.
+  Despite the name, `weekly` is not rebuilt weekly; check its date before
+  assuming it contains anything.
 - **It must be built on `ubuntu-24.04-arm`, not under qemu.** Emulating that
   compile turns a long build into an unusable one.
 
