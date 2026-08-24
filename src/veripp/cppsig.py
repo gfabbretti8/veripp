@@ -838,7 +838,11 @@ def find_struct(source: str, name: str) -> StructInfo:
         # same file under its tag -- the usual shape of a C API's handle type.
         tag = _struct_tag_for_alias(scrubbed, name)
         if tag is not None and tag != name:
-            return find_struct(source, tag)
+            try:
+                return find_struct(source, tag)
+            except SignatureError as exc:
+                # Report the name the caller wrote, not only the tag behind it.
+                raise SignatureError(f"`{name}` is an alias for {exc}") from exc
     if not ranges:
         raise SignatureError(
             f"no definition of `{name}` is visible in this translation unit, "

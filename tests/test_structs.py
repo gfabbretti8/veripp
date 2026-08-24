@@ -350,8 +350,10 @@ class TestStructAliases:
             find_struct(self.SRC, "JSON_ValuePtr")
 
     def test_a_genuinely_opaque_type_is_still_refused(self):
-        with pytest.raises(SignatureError, match="not visible"):
+        with pytest.raises(SignatureError, match="no definition") as exc:
             find_struct("typedef struct hidden_t Hidden;\n", "Hidden")
+        # The message must name the alias the caller wrote, not only the tag.
+        assert "Hidden" in str(exc.value) and "hidden_t" in str(exc.value)
 
     def test_an_aliased_parameter_can_be_harnessed(self, tmp_path):
         p = tmp_path / "s.c"
