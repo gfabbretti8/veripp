@@ -43,12 +43,18 @@ def main(argv: list[str] | None = None) -> int:
     h = sub.add_parser("harness", help="print the generated harness without verifying")
     _add_common_args(h, require_function=True)
 
-    sub.add_parser("doctor", help="check that dependencies are available")
+    d = sub.add_parser("doctor", help="check that dependencies are available")
+    d.add_argument(
+        "--allow-unsound",
+        action="store_true",
+        help="report soundness holes but exit 0 anyway (for CI pinned to a "
+        "release with a known, accepted hole)",
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "doctor":
-        return _doctor()
+        return _doctor(allow_unsound=args.allow_unsound)
     if not args.source.exists():
         print(f"error: {args.source} not found", file=sys.stderr)
         return EXIT_USAGE
@@ -198,6 +204,14 @@ def _verify(args) -> int:
     if harness and getattr(args, "assume", None):
         report.accepted_preconditions = list(args.assume) + report.accepted_preconditions
 
+    if report.final.outcome is Outcome.VERIFIED:
+        try:
+            report.unsound_probes = [
+                name for name, ok in check_soundness().items() if not ok
+            ]
+        except RuntimeError:
+            pass
+
     if args.json:
         print(json.dumps(_payload(report, harness), indent=2, default=str))
     else:
@@ -227,6 +241,7 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "config": asdict(report.final.config),
         "assumptions": report.assumptions,
         "accepted_preconditions": report.accepted_preconditions,
+        "unsound_probes": report.unsound_probes,
         "harness": str(report.harness) if report.harness else None,
         "function": harness.signature.qualified_name if harness else None,
         "sequence": bool(harness and harness.class_info),
@@ -257,7 +272,7 @@ def _make_llm():
         return NullLLM()
 
 
-def _doctor() -> int:
+def _doctor(allow_unsound: bool = False) -> int:
     esbmc = find_esbmc()
     print(f"esbmc: {esbmc or 'NOT FOUND — brew install esbmc, or see esbmc.org'}")
     if esbmc:
@@ -286,7 +301,7 @@ def _doctor() -> int:
     import os
 
     print(f"ANTHROPIC_API_KEY: {'set' if os.environ.get('ANTHROPIC_API_KEY') else 'not set'}")
-    if unsound:
+    if unsound and not allow_unsound:
         print(
             "\nWARNING: this esbmc silently misses "
             + ", ".join(unsound)

@@ -38,6 +38,9 @@ class AgentReport:
     assumptions: list[str] = field(default_factory=list)
     harness: Path | None = None
     accepted_preconditions: list[str] = field(default_factory=list)
+    #: Bug classes the checker that produced this result is known to miss.
+    #: A "verified" is only as sound as the checker behind it.
+    unsound_probes: list[str] = field(default_factory=list)
 
     @property
     def verified(self) -> bool:
@@ -54,6 +57,13 @@ class AgentReport:
             lines.append(
                 "  This is a BOUNDED proof: it holds for executions within the "
                 "unwind bound above, not for all executions."
+            )
+        if self.verified and self.unsound_probes:
+            lines.append(
+                "  CHECKER IS KNOWN-UNSOUND for: "
+                + ", ".join(self.unsound_probes)
+                + ". This 'verified' does NOT cover that class of bug; "
+                "upgrade esbmc and re-run (see `veripp doctor`)."
             )
         if self.accepted_preconditions:
             lines.append(

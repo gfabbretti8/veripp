@@ -40,7 +40,10 @@ jobs:
       # --locked fails if uv.lock is out of date with pyproject.toml, so a
       # dependency change cannot land without its lockfile update.
       - run: uv sync --locked
-      - run: uv run veripp doctor
+      # v8.4 is pinned for the golden transcripts, and it carries the known
+      # esbmc#6508 member-array hole (fixed upstream, unreleased). Surface it
+      # in the log without failing the build.
+      - run: uv run veripp doctor --allow-unsound
       - run: uv run pytest -q
 
   # The tests run from a source checkout; this proves the published artifact
