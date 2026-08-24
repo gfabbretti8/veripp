@@ -262,9 +262,16 @@ Roughly 450 MB (amd64) and 530 MB (arm64), most of it ESBMC itself.
 
 ## As a skill for coding agents
 
-Copy [`skill/veripp`](skill/veripp) into your agent's skills directory
-(`.claude/skills/veripp` for Claude Code) and the agent will reach for veripp
-when it is asked to verify or prove something about C/C++.
+In Claude Code, install it from this repository:
+
+```
+/plugin marketplace add gfabbretti8/veripp
+/plugin install veripp@veripp
+```
+
+For any other agent, copy [`skills/veripp`](skills/veripp) wherever it keeps
+skills. Either way the agent will reach for veripp when it is asked to verify
+or prove something about C/C++.
 
 The skill exists to correct one specific instinct. An agent that knows ESBMC
 will try to hand-write a `main()` full of `__ESBMC_nondet_int()`, sprinkle

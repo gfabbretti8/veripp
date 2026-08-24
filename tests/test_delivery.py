@@ -122,7 +122,7 @@ class TestDockerfile:
 
 
 class TestSkill:
-    PATH = "skill/veripp/SKILL.md"
+    PATH = "skills/veripp/SKILL.md"
 
     def test_has_well_formed_frontmatter(self) -> None:
         text = read(self.PATH)
@@ -159,6 +159,53 @@ class TestSkill:
             assert re.search(rf"^\| {code} \| {meaning}", text, re.M), (
                 f"SKILL.md documents exit code {code} incorrectly"
             )
+
+
+class TestPluginPackaging:
+    """The layout Claude Code's loader requires, which is easy to get subtly
+    wrong: `.claude-plugin/` holds only the manifests, and everything else --
+    skills/, commands/, agents/ -- lives at the plugin root, not inside it."""
+
+    def test_manifests_are_valid_json(self) -> None:
+        import json
+
+        for name in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json"):
+            json.loads(read(name))
+
+    def test_plugin_name_is_kebab_case(self) -> None:
+        import json
+
+        name = json.loads(read(".claude-plugin/plugin.json"))["name"]
+        assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name), name
+
+    def test_skills_live_at_the_plugin_root(self) -> None:
+        assert (ROOT / "skills/veripp/SKILL.md").is_file(), (
+            "skills must be at <root>/skills/, not inside .claude-plugin/, "
+            "or the plugin loader will not find them"
+        )
+        assert not (ROOT / ".claude-plugin/skills").exists()
+
+    def test_marketplace_points_at_a_real_plugin(self) -> None:
+        import json
+
+        market = json.loads(read(".claude-plugin/marketplace.json"))
+        assert market["owner"]["name"]
+        for entry in market["plugins"]:
+            source = entry["source"]
+            assert source.startswith("./"), source
+            manifest = ROOT / source / ".claude-plugin/plugin.json"
+            assert manifest.is_file(), f"{source} has no plugin manifest"
+            assert json.loads(manifest.read_text())["name"] == entry["name"]
+
+    def test_plugin_version_matches_the_package(self) -> None:
+        import json
+
+        manifest = json.loads(read(".claude-plugin/plugin.json"))
+        pyproject = read("pyproject.toml")
+        version = re.search(r'^version = "([^"]+)"', pyproject, re.M).group(1)
+        assert manifest["version"] == version, (
+            f"plugin.json says {manifest['version']}, pyproject says {version}"
+        )
 
 
 class TestSmokeTest:

@@ -1,0 +1,14 @@
+{
+  "name": "veripp",
+  "owner": {
+    "name": "gfabbretti8",
+    "url": "https://github.com/gfabbretti8"
+  },
+  "plugins": [
+    {
+      "name": "veripp",
+      "source": "./",
+      "description": "Bounded formal verification for C/C++ via ESBMC, with the verification harness generated from the function signature rather than written by hand."
+    }
+  ]
+}
