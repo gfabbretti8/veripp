@@ -159,3 +159,36 @@ def test_every_provider_shares_one_set_of_prompts():
 def test_offline_mode_needs_no_provider(context):
     assert NullLLM().classify(context) == "real_bug"
     assert NullLLM().propose_precondition(context) is None
+
+
+class TestClassificationParsing:
+    """Most models reason inside the reply before answering.
+
+    Only some providers split thinking into a separate field, and every
+    candidate label is named in the question -- so an early mention is
+    deliberation, not the answer. Taking the first word scored a local model
+    0/2 on the benchmark; taking its conclusion scored 1/2 with no other
+    change.
+    """
+
+    def _classify(self, reply, context):
+        with _Server(reply) as server:
+            return OpenAICompatibleLLM(model="m", base_url=server.url).classify(context)
+
+    def test_a_bare_answer(self, context):
+        assert self._classify("missing_assumption", context) == "missing_assumption"
+
+    def test_an_answer_after_reasoning(self, context):
+        reply = (
+            "This could be real_bug, or a harness_issue if the buffer is wrong.\n"
+            "But both call sites pass a non-zero count, so the caller upholds it.\n"
+            "missing_assumption"
+        )
+        assert self._classify(reply, context) == "missing_assumption"
+
+    def test_markdown_emphasis_does_not_hide_it(self, context):
+        assert self._classify("**real_bug**", context) == "real_bug"
+
+    def test_no_label_at_all_is_an_error(self, context):
+        with pytest.raises(LLMError, match="unusable classification"):
+            self._classify("I am not sure about this one.", context)

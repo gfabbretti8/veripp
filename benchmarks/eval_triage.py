@@ -12,7 +12,9 @@ out for your codebase:
 
     ./benchmarks/eval_triage.py --models claude-haiku-4-5,claude-sonnet-5,claude-opus-5
 
-Needs Anthropic credentials (ANTHROPIC_API_KEY, or `ant auth login`).
+Works with any provider veripp supports, including a local model:
+
+    ./benchmarks/eval_triage.py --models ollama:llama3.1        # no account needed
 """
 
 from __future__ import annotations
@@ -31,11 +33,11 @@ sys.path.insert(0, str(REPO / "src"))
 from veripp.agent import Budget, verify_with_agent  # noqa: E402
 from veripp.esbmc import VerifyConfig  # noqa: E402
 from veripp.harness import HarnessOptions, generate  # noqa: E402
-from veripp.llm import AnthropicLLM  # noqa: E402
+from veripp.llm import make_llm  # noqa: E402
 from veripp.paths import contracts_include_dir, scratch_dir  # noqa: E402
 from veripp.triage import TargetInfo  # noqa: E402
 
-DEFAULT_MODELS = ["claude-opus-5"]
+DEFAULT_MODELS = ["anthropic:claude-opus-5"]
 
 
 @dataclass
@@ -92,9 +94,9 @@ def ensure_corpus(root: Path) -> None:
             )
 
 
-def evaluate(model: str, corpus: Path, timeout: int) -> Score:
+def evaluate(model: str, corpus: Path, timeout: int, base_url: str | None) -> Score:
     score = Score(model=model)
-    llm = AnthropicLLM(model=model)
+    llm = make_llm(model, base_url)
     for case in CASES:
         source = corpus / case.rel
         if not source.is_file():
@@ -137,6 +139,7 @@ def main() -> int:
     ap.add_argument("--models", default=",".join(DEFAULT_MODELS),
                     help="comma-separated model ids to compare")
     ap.add_argument("--timeout", type=int, default=120)
+    ap.add_argument("--llm-base-url", help="endpoint for a provider not built in")
     args = ap.parse_args()
 
     corpus = args.corpus or Path(tempfile.mkdtemp())
@@ -146,7 +149,7 @@ def main() -> int:
     for model in [m.strip() for m in args.models.split(",") if m.strip()]:
         print(f"\n=== {model} ===", flush=True)
         try:
-            score = evaluate(model, corpus, args.timeout)
+            score = evaluate(model, corpus, args.timeout, args.llm_base_url)
         except RuntimeError as exc:  # no credentials, bad model id
             print(f"  cannot run: {exc}")
             continue

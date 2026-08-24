@@ -136,14 +136,13 @@ class PromptedLLM:
                 "precondition the counterexample violates\n"
                 "harness_issue - the harness models an input wrongly (e.g. an "
                 "unterminated string, a buffer of the wrong shape), violating "
-                "the function's documented or obvious contract"
+                "the function's documented or obvious contract\n\n"
+                "Think it through if you need to, then end your reply with the "
+                "chosen word on a line by itself."
             ),
             user=context.render(),
         )
-        word = reply.strip().split()[0].strip(".:,`*") if reply.strip() else ""
-        if word not in KINDS:
-            raise LLMError(f"unusable classification reply: {reply[:80]!r}")
-        return word
+        return _last_label(reply)
 
     def explain(self, context: TriageContext) -> str:
         return self._ask(
@@ -368,6 +367,24 @@ PROVIDERS: dict[str, dict] = {
     "ollama": {"base_url": "http://localhost:11434/v1", "api_key_env": "OLLAMA_API_KEY"},
     "lmstudio": {"base_url": "http://localhost:1234/v1", "api_key_env": "LMSTUDIO_API_KEY"},
 }
+
+
+_LABEL_RE = re.compile(r"\b(" + "|".join(KINDS) + r")\b")
+
+
+def _last_label(reply: str) -> str:
+    """The classification a model settled on.
+
+    Taking the first word only works for a model that answers bare. Most
+    reason first -- in the reply itself, since only some providers split
+    thinking into a separate field -- and every candidate label is named in
+    the question, so an early mention is deliberation, not the answer. The
+    last one is the conclusion.
+    """
+    matches = _LABEL_RE.findall(reply or "")
+    if not matches:
+        raise LLMError(f"unusable classification reply: {(reply or '')[:120]!r}")
+    return matches[-1]
 
 
 def _is_local(base_url: str) -> bool:
