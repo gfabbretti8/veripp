@@ -175,6 +175,24 @@ ESBMC, so a wrong guess costs a retry, not a wrong answer.
 `benchmarks/eval_triage.py --models a,b,c` scores providers against known
 answers so you can pick on evidence.
 
+## In CI
+
+```yaml
+- uses: gfabbretti8/veripp@main
+  with:
+    source: src/parser.c
+    fail-on: never      # report findings without failing, for a first run
+```
+
+It installs ESBMC (the `weekly` build, since the release is unsound for a
+pattern veripp targets), runs `veripp doctor` so a broken checker fails the job
+rather than producing quiet non-proofs, then scans. Set `function:` to verify
+one target, `args:` for `-I`/`-D`/`--link`/`--unwind`.
+
+Start with `fail-on: never`. A generated harness produces leads that still need
+triage, and a verifier that reddens the build on its first day gets removed on
+its second.
+
 ## Scan a whole file
 
 ```bash

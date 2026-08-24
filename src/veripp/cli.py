@@ -460,9 +460,27 @@ def _make_llm(args):
     return llm
 
 
+def _esbmc_install_hint() -> str:
+    """The exact command for this machine, not a link to go read."""
+    import platform
+
+    if platform.system() == "Darwin":
+        return "brew install --HEAD esbmc"
+    return (
+        "curl -fsSL -o /tmp/esbmc.zip "
+        "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip "
+        "&& unzip -q /tmp/esbmc.zip -d ~/.local/esbmc "
+        "&& chmod +x ~/.local/esbmc/*/bin/esbmc"
+    )
+
+
 def _doctor(allow_unsound: bool = False) -> int:
     esbmc = find_esbmc()
-    print(f"esbmc: {esbmc or 'NOT FOUND — brew install esbmc, or see esbmc.org'}")
+    if esbmc:
+        print(f"esbmc: {esbmc}")
+    else:
+        print("esbmc: NOT FOUND — veripp cannot verify anything without it.")
+        print(f"  install it with:  {_esbmc_install_hint()}")
     if esbmc:
         import subprocess
 
@@ -498,14 +516,21 @@ def _doctor(allow_unsound: bool = False) -> int:
         print(
             "\nWARNING: this esbmc silently misses "
             + ", ".join(unsound)
-            + ".\n'verified' results covering that pattern are NOT trustworthy. "
-            "Upgrade esbmc (the member-array hole is esbmc/esbmc#6508, fixed "
-            "upstream but not in 8.4; `brew install --HEAD esbmc` builds a "
-            "fixed one).",
+            + ".\n'verified' results covering that pattern are NOT trustworthy "
+            "(esbmc/esbmc#6508 is fixed upstream but in no release yet).\n"
+            f"  upgrade with:  {_esbmc_install_hint()}",
             file=sys.stderr,
         )
         return EXIT_INCONCLUSIVE
-    return EXIT_VERIFIED if esbmc else EXIT_USAGE
+    if not esbmc:
+        return EXIT_USAGE
+
+    print("\nready. try:")
+    print("  veripp verify examples/off_by_one.cpp --function sum_array   # finds a bug")
+    print("  veripp scan   examples/ring_buffer.cpp                       # a whole file")
+    if not unsound:
+        print("  ./demo/cve-2019-13223/run.sh                                 # a real CVE")
+    return EXIT_VERIFIED
 
 
 if __name__ == "__main__":

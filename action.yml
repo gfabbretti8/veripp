@@ -1,0 +1,92 @@
+name: 'veripp'
+description: 'Prove C/C++ functions free of overflow, out-of-bounds, null deref and division by zero.'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  source:
+    description: 'File to scan, or a single file to verify with `function`.'
+    required: true
+  function:
+    description: 'Verify one function instead of scanning the whole file.'
+    required: false
+  args:
+    description: 'Extra veripp arguments (-I, -D, --link, --unwind, --timeout ...).'
+    required: false
+    default: ''
+  fail-on:
+    description: >-
+      When to fail the job. "counterexample" (default) fails only on findings;
+      "never" reports without failing, which is the honest setting for a first
+      run, since a generated harness produces leads that still need triage.
+    required: false
+    default: 'counterexample'
+  esbmc-version:
+    description: >-
+      ESBMC release tag. Defaults to the rolling `weekly` build: the v8.4
+      release silently misses out-of-bounds writes in ordinary container code
+      (esbmc/esbmc#6508), which veripp checks for and refuses to build proofs on.
+    required: false
+    default: 'weekly'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v10.0.1
+      with:
+        enable-cache: true
+
+    - name: Cache ESBMC
+      id: cache-esbmc
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/veripp-esbmc
+        key: veripp-esbmc-${{ inputs.esbmc-version }}-${{ runner.os }}
+
+    - name: Install ESBMC
+      if: steps.cache-esbmc.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.cache/veripp-esbmc
+        case "${{ runner.os }}" in
+          Linux)  asset=esbmc-linux.zip ;;
+          macOS)  asset=esbmc-macos.zip ;;
+          *) echo "::error::veripp's action supports Linux and macOS runners"; exit 1 ;;
+        esac
+        curl -fsSL -o /tmp/esbmc.zip \
+          "https://github.com/esbmc/esbmc/releases/download/${{ inputs.esbmc-version }}/$asset"
+        unzip -q /tmp/esbmc.zip -d ~/.cache/veripp-esbmc
+
+    - name: Put ESBMC on PATH
+      shell: bash
+      run: |
+        bin="$(find ~/.cache/veripp-esbmc -name esbmc -type f | head -1)"
+        chmod +x "$bin"
+        dirname "$bin" >> "$GITHUB_PATH"
+
+    - name: Check the checker
+      shell: bash
+      run: uv run --directory "${{ github.action_path }}" veripp doctor
+
+    - name: Run veripp
+      shell: bash
+      run: |
+        set -uo pipefail
+        if [ -n "${{ inputs.function }}" ]; then
+          uv run --directory "${{ github.action_path }}" \
+            veripp verify "${{ inputs.source }}" --function "${{ inputs.function }}" ${{ inputs.args }}
+        else
+          uv run --directory "${{ github.action_path }}" \
+            veripp scan "${{ inputs.source }}" ${{ inputs.args }}
+        fi
+        status=$?
+        # 0 verified, 1 counterexample, 2 usage, 3 inconclusive/vacuous.
+        if [ "${{ inputs.fail-on }}" = "never" ]; then exit 0; fi
+        if [ "$status" -eq 3 ]; then
+          echo "::warning::veripp was inconclusive (bounds, timeout, or a vacuous proof)"
+          exit 0
+        fi
+        exit "$status"
