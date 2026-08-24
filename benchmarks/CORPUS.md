@@ -12,6 +12,22 @@ them is bounded by the assumptions each result states.
 | [libpng](https://github.com/pnggroup/libpng) `png.c` | the PNG reference implementation | 70 | **40** | 12 | 86% |
 | [lodepng](https://github.com/lvandeve/lodepng) | single-file PNG codec | 260 | **99** | 61 | 82% |
 | [cJSON](https://github.com/DaveGamble/cJSON) | ubiquitous C JSON parser | 117 | 32 | 19 | 89% |
+
+## The container reproduces these numbers
+
+Every figure above was measured on the host. Scanning cJSON through the
+published arm64 image gives **32 proved of 117 functions, 89% harnessable** —
+the same proved count and the same harnessable rate. Counterexamples come out
+higher (33 vs 19) because the table's runs had an LLM triaging findings, which
+reclassifies some of them; the solver-side numbers are what match.
+
+This comparison is worth repeating whenever the image changes. An earlier arm64
+image passed the entire smoke suite while returning `parse_error` for 104 of
+those 117 functions: it was missing clang's resource headers, so anything that
+reached a system header failed, and nothing in a suite of self-contained
+fixtures could see it. Aggregate numbers from a real library are what caught
+it.
+
 | [parson](https://github.com/kgabis/parson) | C JSON parser | 144 | 28 | 33 | 91% |
 | [lz4](https://github.com/lz4/lz4) `lz4.c` | compression, everywhere | 94 | 19 | 18 | 57% |
 | [tinyexpr](https://github.com/codeplea/tinyexpr) | expression evaluator | 47 | 17 | 5 | 96% |
