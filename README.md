@@ -168,7 +168,7 @@ veripp rediscovers [CVE-2019-13223](https://nvd.nist.gov/vuln/detail/CVE-2019-13
 Ogg Vorbis file — on the real, unmodified upstream source, then proves that the
 precondition the official fix enforces (`x1 != x0`) eliminates it. In agent mode
 the triage proposes that precondition itself; the solver confirms it. See
-[demo/cve-2019-13223](demo/cve-2019-13223/README.md).
+[demo/cve-2019-13223](https://github.com/gfabbretti8/veripp/blob/main/demo/cve-2019-13223/README.md).
 
 ## Bring your own model
 
@@ -362,7 +362,7 @@ Read this before judging the output.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: the LLM proposes,
+See [CONTRIBUTING.md](https://github.com/gfabbretti8/veripp/blob/main/CONTRIBUTING.md). The short version: the LLM proposes,
 the solver disposes, and every result states what it assumed.
 
 ## License

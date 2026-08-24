@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "veripp"
-version = "0.0.1"
+version = "0.1.0"
 description = "AI-operated formal verification for real C++ code (ESBMC + LLM agent loop)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,6 +35,7 @@ veripp = "veripp.cli:main"
 Homepage = "https://github.com/gfabbretti8/veripp"
 Repository = "https://github.com/gfabbretti8/veripp"
 Issues = "https://github.com/gfabbretti8/veripp/issues"
+Changelog = "https://github.com/gfabbretti8/veripp/commits/main"
 
 # PEP 735 group: `uv sync` installs it by default, `uv sync --no-dev` skips it.
 [dependency-groups]
@@ -42,6 +43,11 @@ dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The README tells people to run these, so an sdist without them is a broken
+# promise. They are small and text-only.
+[tool.setuptools.data-files]
+"share/veripp/examples" = ["examples/*.cpp"]
 
 # The contracts header is not documentation: veripp puts it on ESBMC's include
 # path at run time, so a wheel without it cannot verify anything. It lives
