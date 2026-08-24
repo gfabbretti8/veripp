@@ -258,6 +258,16 @@ whole thing — include dirs included — onto wherever the tree actually is. Th
 same applies to a CI checkout that does not sit where the database was
 generated. If two entries match equally well it says so rather than guess.
 
+The container runs as a non-root user, which means it cannot read a project
+directory that is not readable by others — a tree under a `0700` home
+directory, typically. If `/src` comes up unreadable, veripp says so and you can
+run as yourself instead:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src:ro" \
+    ghcr.io/gfabbretti8/veripp scan src/parser.c
+```
+
 Roughly 450 MB (amd64) and 530 MB (arm64), most of it ESBMC itself.
 
 ## As a skill for coding agents

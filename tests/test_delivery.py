@@ -420,6 +420,26 @@ class TestContainerHint:
         hint = cli._missing_source_hint()
         assert hint and "-v" in hint and "/src" in hint
 
+    def test_explains_an_unreadable_mount_separately(self, monkeypatch, tmp_path) -> None:
+        """Mounted-but-unreadable and nothing-mounted need different fixes.
+
+        The image runs as uid 65534, so a project under a 0700 home directory
+        is mounted yet unreadable. This is what broke the release workflow's
+        smoke test on GitHub's runners, where mktemp hands back a 0700 dir.
+        """
+        from veripp import cli
+
+        monkeypatch.setenv("VERIPP_IN_CONTAINER", "1")
+
+        class Unreadable:
+            def iterdir(self):
+                raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(cli, "Path", lambda _: Unreadable())
+        hint = cli._missing_source_hint()
+        assert hint and "--user" in hint
+        assert "empty" not in hint, "an unreadable mount is not an empty one"
+
     def test_the_image_sets_the_marker(self) -> None:
         assert "VERIPP_IN_CONTAINER=1" in read("Dockerfile")
 

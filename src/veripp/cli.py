@@ -605,9 +605,20 @@ def _missing_source_hint() -> str | None:
         return None
     workdir = Path("/src")
     try:
-        if any(workdir.iterdir()):
-            return None
+        empty = not any(workdir.iterdir())
+    except PermissionError:
+        # Mounted, but the image's non-root user cannot read it -- the usual
+        # cause is a project under a 0700 home directory. Saying "not found"
+        # here sends people looking for a typo that is not there.
+        return (
+            "hint: /src is mounted but this container cannot read it.\n"
+            "      The image runs as a non-root user, and the directory you\n"
+            "      mounted is not readable by it. Either loosen its mode, or\n"
+            '      re-run with:  --user "$(id -u):$(id -g)"'
+        )
     except OSError:
+        return None
+    if not empty:
         return None
     return (
         "hint: /src is empty, so nothing was mounted into the container.\n"

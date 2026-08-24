@@ -17,6 +17,11 @@ DOCKER="${DOCKER:-docker}"
 # SMOKE_TMPDIR lets the caller point somewhere the runtime can see.
 work="$(mktemp -d "${SMOKE_TMPDIR:-${TMPDIR:-/tmp}}/veripp-smoke.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
+# mktemp gives 0700, and the image runs as uid 65534, so without this the
+# container cannot read its own mount. Real users hit the same thing when
+# their project sits under a restrictive home directory; the fix for them is
+# --user "$(id -u):$(id -g)", which the README documents.
+chmod 755 "$work"
 
 # Set when testing an image whose architecture is not the host's, to stop the
 # runtime emitting a platform-mismatch warning into every captured output.
@@ -63,6 +68,13 @@ fi
 seen=$($DOCKER run --rm "${PLATFORM_ARG[@]}" -v "$work:/src:ro" --entrypoint sh "$IMAGE" -c 'ls /src' 2>&1)
 case "$seen" in
   *safe.c*) ;;
+  *"Permission denied"*)
+     echo "FATAL: /src is mounted but the container user cannot read it."
+     echo "       $work is mode $(stat -c '%a' "$work" 2>/dev/null || stat -f '%Lp' "$work")"
+     echo "       and the image runs as a non-root uid. chmod it, or pass"
+     echo '       --user "$(id -u):$(id -g)".'
+     echo "       ls /src gave: $seen"
+     exit 1 ;;
   *) echo "FATAL: the bind mount of $work is empty inside the container."
      echo "       Your container runtime is not sharing that path."
      echo "       Re-run with SMOKE_TMPDIR=\$HOME/tmp (and mkdir it first)."
