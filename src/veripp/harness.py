@@ -267,6 +267,11 @@ def generate(
 
 
 _LOCAL_INCLUDE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"', re.M)
+#: A project's own header is often included with angle brackets and found on
+#: the -I path -- libyaml's api.c reaches yaml.h that way. Following these is
+#: safe because a name is only followed when it exists in a directory the
+#: build system named: <stdio.h> is not in the project's -I dirs.
+_ANGLE_INCLUDE_RE = re.compile(r"^[ \t]*#[ \t]*include[ \t]*<([^>]+)>", re.M)
 
 
 def _linked_text(options: HarnessOptions) -> list[str]:
@@ -303,7 +308,14 @@ def _with_local_includes(
         # which erases the filename in `#include "geom.h"`. Following a
         # commented-out include only widens the pool of visible type
         # definitions, which is harmless here.
-        for name in _LOCAL_INCLUDE_RE.findall(body):
+        names = _LOCAL_INCLUDE_RE.findall(body) + [
+            # Angle-bracket includes resolve only against the -I directories,
+            # never next to the including file, which is what makes skipping
+            # the system headers automatic.
+            n for n in _ANGLE_INCLUDE_RE.findall(body)
+            if any((d / n).is_file() for d in (include_dirs or []))
+        ]
+        for name in names:
             for directory in [current.parent, *search]:
                 candidate = directory / name
                 if not candidate.is_file():

@@ -138,3 +138,51 @@ class TestLinkingChangesTheAnswer:
         # Without -I include, geom.h is unfindable and nothing would compile.
         code, out = self._run(capsys, project, "--link", str(project / "src" / "helper.cpp"))
         assert code == 0
+
+
+class TestUnconfiguredBuild:
+    """`use of undeclared identifier YAML_VERSION_STRING` is true and useless.
+
+    A project shipping `config.h.in` and no `config.h` has simply not been
+    configured. Saying so beats making the user decode a compiler error.
+    """
+
+    def _project(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "cmake").mkdir()
+        (tmp_path / "cmake" / "config.h.in").write_text("#define VERSION \"@VER@\"\n")
+        (tmp_path / "src" / "private.h").write_text('#include "config.h"\n')
+        source = tmp_path / "src" / "api.c"
+        source.write_text('#include "private.h"\nconst char* ver(void) { return VERSION; }\n')
+        return source
+
+    def test_the_missing_generated_header_is_named(self, tmp_path):
+        from veripp.cli import _unconfigured_build_hint
+
+        hint = _unconfigured_build_hint(self._project(tmp_path), [])
+        assert hint and "config.h" in hint
+        assert "has not been configured" in hint
+        assert "config.h.in" in hint
+
+    def test_it_looks_one_level_through_a_private_header(self, tmp_path):
+        """The .c includes the private header; that is what includes the
+        generated config."""
+        from veripp.cli import _unconfigured_build_hint
+
+        assert _unconfigured_build_hint(self._project(tmp_path), []) is not None
+
+    def test_a_configured_project_gets_no_hint(self, tmp_path):
+        from veripp.cli import _unconfigured_build_hint
+
+        source = self._project(tmp_path)
+        (tmp_path / "src" / "config.h").write_text('#define VERSION "1.0"\n')
+        assert _unconfigured_build_hint(source, []) is None
+
+    def test_a_missing_header_with_no_template_is_not_blamed_on_configuration(
+        self, tmp_path
+    ):
+        from veripp.cli import _unconfigured_build_hint
+
+        source = tmp_path / "a.c"
+        source.write_text('#include "nowhere.h"\nint f(void) { return 0; }\n')
+        assert _unconfigured_build_hint(source, []) is None

@@ -907,7 +907,12 @@ def _typedef_struct_range(scrubbed: str, name: str) -> "_ClassRange | None":
         if open_brace is None:
             continue
         head = scrubbed[:open_brace].rstrip()
-        if re.search(r"\b(struct|union)\s*$", head):
+        # Both spellings define the type here:
+        #     typedef struct { ... } Name;              (anonymous)
+        #     typedef struct name_s { ... } Name;       (tagged)
+        # The tagged form is the commoner one in C headers, and matching only
+        # the anonymous one refused every function taking such a type.
+        if re.search(r"\b(struct|union)\s*(?:[A-Za-z_]\w*\s*)?$", head):
             return _ClassRange(name=name, start=open_brace, end=close)
     return None
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -245,6 +246,59 @@ def _build_harness(args) -> Harness:
     )
 
 
+def _unconfigured_build_hint(source: Path, include_dirs: list[Path]) -> str | None:
+    """Spot a header the build system generates but has not generated yet.
+
+    A project that ships `config.h.in` and no `config.h` has simply not been
+    configured, and the compiler says so as `use of undeclared identifier
+    YAML_VERSION_STRING` -- true, and no help at all.
+    """
+    # Matched on the raw text: scrub() blanks string literals, which erases
+    # the filename in `#include "config.h"`. (Second time that has bitten --
+    # the same mistake is commented in harness._with_local_includes.)
+    pattern = r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"'
+    search = [source.parent, *include_dirs]
+
+    def includes_of(path: Path) -> list[str]:
+        try:
+            return re.findall(pattern, path.read_text(errors="replace"), re.M)
+        except OSError:
+            return []
+
+    # The missing header is usually one level in: a .c includes the project's
+    # private header, and that is what includes the generated config.
+    names = list(includes_of(source))
+    for name in list(names):
+        found = next((d / name for d in search if (d / name).is_file()), None)
+        if found is not None:
+            names += includes_of(found)
+
+    missing: list[str] = []
+    for name in dict.fromkeys(names):
+        if any((d / name).is_file() for d in search):
+            continue
+        template = next(
+            (
+                d / f"{name}{ext}"
+                for d in [*search, *source.parents[:3],
+                          *(q / "cmake" for q in source.parents[:3])]
+                for ext in (".in", ".cmake")
+                if (d / f"{name}{ext}").is_file()
+            ),
+            None,
+        )
+        if template is not None:
+            missing.append(f"{name} (template at {template})")
+    if not missing:
+        return None
+    return (
+        "note: this project has not been configured -- "
+        + ", ".join(missing)
+        + ".\n  Run its build once (cmake/configure) so the generated headers "
+        "exist, then point veripp at the resulting compile_commands.json."
+    )
+
+
 def _suggest_targets(args, wanted: str) -> None:
     """Point at the names that do exist, rather than only refusing."""
     import difflib
@@ -394,6 +448,11 @@ def _verify(args) -> int:
     )
     if harness and getattr(args, "assume", None):
         report.accepted_preconditions = list(args.assume) + report.accepted_preconditions
+
+    if report.final.outcome is Outcome.PARSE_ERROR:
+        hint = _unconfigured_build_hint(args.source, _include_dirs(args))
+        if hint:
+            print(hint, file=sys.stderr)
 
     if deferred_note and report.final.outcome is Outcome.COUNTEREXAMPLE:
         print(f"note: {deferred_note}", file=sys.stderr)
