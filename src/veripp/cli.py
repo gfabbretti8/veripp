@@ -186,9 +186,13 @@ def main(argv: list[str] | None = None) -> int:
     # Pointing at a directory is an ordinary slip -- `veripp scan .` reads as
     # though it should work. It used to reach read_text() and die with a
     # traceback, which is never an acceptable answer to a plausible mistake.
-    if args.source.is_dir():
-        print(f"error: {args.source} is a directory; veripp works on one "
-              "source file at a time", file=sys.stderr)
+    # `scan` takes a directory; verify and harness target one function in one
+    # file, so a directory there is still a mistake.
+    if args.source.is_dir() and args.command != "scan":
+        print(f"error: {args.source} is a directory; `veripp {args.command}` "
+              "targets one function in one file", file=sys.stderr)
+        print(f"  to scan the whole tree:  veripp scan {args.source}",
+              file=sys.stderr)
         try:
             nearby = sorted(
                 p.name for p in args.source.iterdir()
@@ -205,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
 
     try:
-        if args.source.stat().st_size == 0:
+        if args.source.is_file() and args.source.stat().st_size == 0:
             print(f"error: {args.source} is empty", file=sys.stderr)
             return EXIT_USAGE
     except OSError:
@@ -462,7 +466,144 @@ def _suggest_targets(args, wanted: str) -> None:
     print(f"  or scan them all:  veripp scan {args.source}", file=sys.stderr)
 
 
+#: Extensions worth scanning. Headers are excluded by default: definitions
+#: normally live in the source file, and scanning both doubles the work while
+#: reporting the same functions twice.
+SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx")
+
+#: Directories that are almost never the code someone means to verify. Skipped
+#: unless named directly, in the spirit of ripgrep ignoring .git.
+SKIP_DIRS = {
+    ".git", ".hg", ".svn", "build", "_build", "out", "dist", "node_modules",
+    "third_party", "vendor", "external", "deps", "subprojects", "cmake-build-debug",
+    ".venv", "venv", "__pycache__",
+}
+
+
+def discover_sources(root: Path) -> list[Path]:
+    """The C/C++ files under `root`, in a stable order.
+
+    Deterministic because a scan that reports its findings in a different
+    order each run is impossible to diff between commits.
+    """
+    found: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
+            continue
+        if any(part in SKIP_DIRS or part.startswith(".") for part in path.parts):
+            continue
+        found.append(path)
+    return found
+
+
+def _scan_tree(args) -> int:
+    """Scan every C/C++ file under a directory.
+
+    Operating on a directory is what every neighbouring tool does -- ripgrep,
+    fd, clang-tidy -- and requiring one file at a time is the difference
+    between working on a file and working on a project.
+
+    Each file is scanned independently and the findings are aggregated. Files
+    are reported as they finish rather than at the end, because a tree scan
+    can run for a long time and silence is indistinguishable from a hang.
+    """
+    sources = discover_sources(args.source)
+    if not sources:
+        print(f"error: no C or C++ source files under {args.source}",
+              file=sys.stderr)
+        print(f"  looked for: {', '.join(SOURCE_SUFFIXES)}", file=sys.stderr)
+        print(f"  skipped: {', '.join(sorted(SKIP_DIRS)[:6])}, ... and dotted "
+              "directories", file=sys.stderr)
+        return EXIT_USAGE
+
+    config = _config_for(args)
+    options = _harness_options(args)
+    reports: list = []
+
+    if not args.quiet and not args.json:
+        print(f"scanning {len(sources)} file"
+              f"{'s' if len(sources) != 1 else ''} under {args.source}",
+              file=sys.stderr)
+
+    for index, source in enumerate(sources, 1):
+        if not args.quiet and not args.json:
+            print(f"\n[{index}/{len(sources)}] {source}", file=sys.stderr)
+
+        def progress(done: int, total: int, result, _src=source) -> None:
+            if args.quiet or args.json:
+                return
+            mark = {"verified": "PROVED", "counterexample": "COUNTEREX",
+                    "refused": "skip"}.get(result.outcome, result.outcome)
+            if result.artifact:
+                mark = "artifact"
+            painted = {
+                "PROVED": ("green",), "COUNTEREX": ("red", "bold"),
+            }.get(mark, ("dim",) if mark in ("skip", "artifact") else ("yellow",))
+            print(f"  [{done:4d}/{total}] "
+                  f"{term.style(f'{mark:>10}', *painted, stream=sys.stderr)}  "
+                  f"{result.name}", file=sys.stderr)
+
+        try:
+            reports.append(scan(source, config, options, jobs=args.jobs,
+                                progress=progress, escalations=args.escalations))
+        except Exception as exc:  # one unreadable file must not lose the rest
+            print(f"  skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
+
+    payload = {
+        "root": str(args.source),
+        "files": len(reports),
+        "candidates": sum(r.candidates for r in reports),
+        "proved": sum(len(r.proved) for r in reports),
+        "counterexamples": [
+            {"file": str(r.source), "function": f.name, "property": f.detail}
+            for r in reports for f in r.counterexamples
+        ],
+        "inconclusive": sum(len(r.inconclusive) for r in reports),
+        "artifacts": sum(len(r.artifacts) for r in reports),
+        "per_file": [
+            {"file": str(r.source), "candidates": r.candidates,
+             "proved": len(r.proved), "counterexamples": len(r.counterexamples),
+             "inconclusive": len(r.inconclusive)}
+            for r in reports
+        ],
+    }
+    _emit(args, payload, _tree_summary(args.source, reports))
+    return EXIT_COUNTEREXAMPLE if payload["counterexamples"] else EXIT_VERIFIED
+
+
+def _tree_summary(root: Path, reports: list) -> str:
+    total_cx = sum(len(r.counterexamples) for r in reports)
+    lines = [
+        "",
+        f"Scanned {len(reports)} file{'s' if len(reports) != 1 else ''} under {root}",
+        f"  {sum(r.candidates for r in reports)} function definitions found",
+        "",
+        f"  PROVED           {sum(len(r.proved) for r in reports):4d}",
+        f"  COUNTEREXAMPLE   {total_cx:4d}",
+        f"  INCONCLUSIVE     {sum(len(r.inconclusive) for r in reports):4d}",
+        f"  HARNESS ARTIFACT {sum(len(r.artifacts) for r in reports):4d}",
+    ]
+    if total_cx:
+        lines += ["", "  files with findings:"]
+        for report in reports:
+            if report.counterexamples:
+                names = ", ".join(f.name for f in report.counterexamples[:4])
+                if len(report.counterexamples) > 4:
+                    names += f", and {len(report.counterexamples) - 4} more"
+                lines.append(f"    {report.source}: {names}")
+        first = next(r for r in reports if r.counterexamples)
+        lines += [
+            "",
+            f"  next:  veripp verify {first.source} "
+            f"--function {first.counterexamples[0].name}",
+            "         to see the failing input.",
+        ]
+    return "\n".join(lines)
+
+
 def _scan(args) -> int:
+    if args.source.is_dir():
+        return _scan_tree(args)
     config = _config_for(args)
     options = _harness_options(args)
     seen: list[str] = []

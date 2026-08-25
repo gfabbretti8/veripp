@@ -79,6 +79,10 @@ a hypothesis, not an answer.
 ## Common invocations
 
 ```bash
+# a whole project: every .c/.cc/.cpp/.cxx underneath, skipping build and
+# vendor trees. Prefer this to scanning files one at a time.
+veripp scan src/ --jobs 8
+
 # a whole file, in parallel, machine-readable
 veripp scan src/parser.c --jobs 4 --json
 

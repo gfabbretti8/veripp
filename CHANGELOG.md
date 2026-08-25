@@ -7,6 +7,16 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## Unreleased
+
+### Added
+- `veripp scan DIR` scans every C/C++ file under a directory, which is what
+  every neighbouring tool does (ripgrep, fd, clang-tidy) and the difference
+  between working on a file and working on a project. Build trees, vendored
+  dependencies and dotted directories are skipped; headers are left alone
+  because definitions live in the source file. Findings are grouped by file,
+  and one unreadable file does not discard the work already done.
+
 ## 0.1.1
 
 First contact with the CLI, which is where a tool is judged.

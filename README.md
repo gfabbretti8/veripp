@@ -298,6 +298,19 @@ generates all of that from the signature, and re-checks it. The skill's first
 instruction is that the agent does not write the harness — plus how to read a
 bounded proof, and why a vacuous result is not a pass.
 
+## Scan a whole project
+
+```bash
+veripp scan src/            # every .c/.cc/.cpp/.cxx underneath
+veripp scan . --jobs 8
+```
+
+Build trees, vendored dependencies and dotted directories are skipped
+(`build/`, `node_modules/`, `third_party/`, `.git/`, ...), and headers are
+left alone because definitions live in the source file. The file count is
+printed before the work starts, findings are grouped by file, and the exit
+code is 1 if anything anywhere failed.
+
 ## Scan a whole file
 
 ```bash
