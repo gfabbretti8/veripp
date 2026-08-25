@@ -150,22 +150,20 @@ runs:
         # `-I include -D NDEBUG`.
         report="$RUNNER_TEMP/veripp-report.json"
 
+        # --json-out gives us the machine-readable report AND the readable log
+        # from a single run. Running twice -- once for each -- doubled the
+        # verification cost of every job, which on a real codebase is minutes,
+        # not seconds.
         # shellcheck disable=SC2086
         if [ -n "$VERIPP_FUNCTION" ]; then
           uv run --project "$GITHUB_ACTION_PATH" \
-            veripp verify "$VERIPP_SOURCE" --function "$VERIPP_FUNCTION" $VERIPP_ARGS
-          status=$?
-          uv run --project "$GITHUB_ACTION_PATH" \
-            veripp verify "$VERIPP_SOURCE" --function "$VERIPP_FUNCTION" $VERIPP_ARGS \
-            --json > "$report" 2>/dev/null || true
+            veripp verify "$VERIPP_SOURCE" --function "$VERIPP_FUNCTION" \
+            --json-out "$report" $VERIPP_ARGS
         else
           uv run --project "$GITHUB_ACTION_PATH" \
-            veripp scan "$VERIPP_SOURCE" $VERIPP_ARGS
-          status=$?
-          uv run --project "$GITHUB_ACTION_PATH" \
-            veripp scan "$VERIPP_SOURCE" $VERIPP_ARGS \
-            --json > "$report" 2>/dev/null || true
+            veripp scan "$VERIPP_SOURCE" --json-out "$report" $VERIPP_ARGS
         fi
+        status=$?
         set -e
 
         case "$status" in

@@ -156,3 +156,33 @@ class _FakeTTY:
 class _NotATTY:
     def isatty(self) -> bool:
         return False
+
+
+class TestJsonOut:
+    """--json replaces stdout; --json-out adds a file. CI needs both, and
+    should not have to verify twice to get them."""
+
+    def test_writes_the_report_and_keeps_readable_output(self, tmp_path) -> None:
+        out = tmp_path / "r.json"
+        result = run(
+            "verify", "examples/off_by_one.cpp", "--function", "sum_array",
+            "--json-out", str(out),
+        )
+        assert "Result: counterexample" in result.stdout
+        import json
+
+        assert json.loads(out.read_text())["outcome"]
+
+    def test_works_for_scan_too(self, tmp_path) -> None:
+        out = tmp_path / "s.json"
+        run("scan", "examples/ring_buffer.cpp", "--json-out", str(out))
+        import json
+
+        assert json.loads(out.read_text())["candidates"]
+
+    def test_the_action_verifies_only_once(self) -> None:
+        """Two runs per job doubled the cost of every verification."""
+        action = (ROOT / "action.yml").read_text()
+        block = action[action.index("Run veripp"):]
+        assert block.count("veripp verify") == 1, "veripp verify invoked more than once"
+        assert block.count("veripp scan") == 1, "veripp scan invoked more than once"

@@ -110,6 +110,12 @@ def main(argv: list[str] | None = None) -> int:
         "(self-hosted gateways, vLLM, Azure). Defaults to $VERIPP_LLM_BASE_URL.",
     )
     v.add_argument("--json", action="store_true", help="machine-readable output")
+    v.add_argument(
+        "--json-out",
+        metavar="PATH",
+        help="also write the JSON report here, keeping the readable output "
+             "on stdout (so CI can have both without verifying twice)",
+    )
     v.add_argument("--keep-harness", action="store_true", help="print where the harness was written")
 
     h = sub.add_parser("harness", help="print the generated harness without verifying")
@@ -122,6 +128,12 @@ def main(argv: list[str] | None = None) -> int:
     _add_common_args(s)
     s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
     s.add_argument("--json", action="store_true", help="machine-readable output")
+    s.add_argument(
+        "--json-out",
+        metavar="PATH",
+        help="also write the JSON report here, keeping the readable output "
+             "on stdout (so CI can have both without verifying twice)",
+    )
     s.add_argument("--quiet", "-q", action="store_true", help="summary only, no progress")
     s.add_argument(
         "--escalations",
@@ -401,8 +413,7 @@ def _scan(args) -> int:
     report = scan(args.source, config, options, jobs=args.jobs, progress=progress,
                   escalations=args.escalations)
 
-    if args.json:
-        print(json.dumps({
+    scan_payload = {
             "source": str(report.source),
             "candidates": report.candidates,
             "proved": [r.name for r in report.proved],
@@ -417,10 +428,26 @@ def _scan(args) -> int:
             ],
             "inconclusive": [{"function": r.name, "outcome": r.outcome} for r in report.inconclusive],
             "not_harnessable": report.refusal_reasons(),
-        }, indent=2, default=str))
-    else:
-        print(report.summary())
+    }
+    _emit(args, scan_payload, report.summary())
     return EXIT_VERIFIED if not report.counterexamples else EXIT_COUNTEREXAMPLE
+
+
+def _emit(args, payload: dict, readable: str) -> None:
+    """One run, both representations.
+
+    --json replaces stdout, which is right for a shell pipeline but forces CI
+    to choose between a log a human can read and a report a machine can parse
+    -- or to verify twice to get both. --json-out writes the report to a file
+    and leaves stdout alone, so one run serves both.
+    """
+    if args.json:
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        print(readable)
+    path = getattr(args, "json_out", None)
+    if path:
+        Path(path).write_text(json.dumps(payload, indent=2, default=str))
 
 
 def _config_for(args) -> VerifyConfig:
@@ -526,12 +553,10 @@ def _verify(args) -> int:
         except RuntimeError:
             pass
 
-    if args.json:
-        print(json.dumps(_payload(report, harness), indent=2, default=str))
-    else:
-        print(report.summary())
-        if harness and not args.keep_harness:
-            print(f"(harness kept at {target})")
+    readable = report.summary()
+    if harness and not args.keep_harness:
+        readable += f"\n(harness kept at {target})"
+    _emit(args, _payload(report, harness), readable)
 
     return _exit_code(report)
 

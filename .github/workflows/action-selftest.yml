@@ -36,7 +36,12 @@ jobs:
             echo "::error::veripp passed a file with a known off-by-one"
             exit 1
           fi
-          echo "correctly failed on a known bug"
+          got="${{ steps.run.outputs.outcome }}"
+          if [ "$got" != "counterexample" ]; then
+            echo "::error::expected outcome=counterexample, got '$got'"
+            exit 1
+          fi
+          echo "correctly failed on a known bug, outcome=$got"
 
   proves-a-good-one:
     runs-on: ubuntu-latest
@@ -46,10 +51,28 @@ jobs:
       # A relative path from a subdirectory: the case `--directory` broke.
       - run: mkdir -p nested && cp examples/ring_buffer.cpp nested/
 
-      - uses: ./
+      - id: run
+        uses: ./
         with:
           source: nested/ring_buffer.cpp
           function: push
+
+      # Asserting the job merely passed is too weak: the action exits 0 on an
+      # inconclusive result too, so this would stay green if nothing were ever
+      # proved. Check the verdict itself.
+      - name: It must actually have proved something
+        run: |
+          got="${{ steps.run.outputs.outcome }}"
+          if [ "$got" != "verified" ]; then
+            echo "::error::expected outcome=verified, got '$got'"
+            exit 1
+          fi
+          echo "outcome=$got, exit-code=${{ steps.run.outputs.exit-code }}"
+
+      - name: The JSON report must exist and be parseable
+        run: |
+          python3 -c "import json,sys; d=json.load(open(sys.argv[1])); \
+            print('report outcome:', d['outcome'])" "${{ steps.run.outputs.report }}"
 
   fail-on-never-is-honest:
     runs-on: ubuntu-latest
@@ -57,11 +80,23 @@ jobs:
       - uses: actions/checkout@v4
 
       # Must succeed despite pointing at a file with a known bug.
-      - uses: ./
+      - id: run
+        uses: ./
         with:
           source: examples/off_by_one.cpp
           function: sum_array
           fail-on: never
+
+      # fail-on: never must suppress the failure, not the finding. Reporting
+      # "verified" here would be far worse than a red build.
+      - name: Still reports the counterexample it declined to fail on
+        run: |
+          got="${{ steps.run.outputs.outcome }}"
+          if [ "$got" != "counterexample" ]; then
+            echo "::error::fail-on:never changed the verdict to '$got'"
+            exit 1
+          fi
+          echo "stayed green and still reported: $got"
 
   refuses-a-lying-checker:
     runs-on: ubuntu-latest
