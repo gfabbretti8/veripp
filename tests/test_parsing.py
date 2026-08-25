@@ -1,9 +1,11 @@
 """Parser tests against pinned real ESBMC 8.4 output (tests/golden/)."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from veripp.agent import AgentReport
 from veripp.esbmc import Outcome, VerifyConfig, parse_output
 
 CFG = VerifyConfig()
@@ -293,3 +295,63 @@ class TestPropertySet:
                    if "floating-point" in needle]
         assert reasons, "float overflow has no explanation"
         assert "defined IEEE behaviour" in reasons[0]
+
+
+def _verified():
+    """A minimal VerifyResult standing in for a successful safety run."""
+    return SimpleNamespace(outcome=Outcome.VERIFIED, config=VerifyConfig())
+
+
+class TestTermination:
+    """Termination is a liveness property and never folds into "verified".
+
+    Measured against ESBMC 8.4 on `while (n != 0) n -= 2;`:
+
+        --k-induction               non-terminating -> SUCCESSFUL   <-- trap
+        --k-induction --termination non-terminating -> UNKNOWN
+        --termination               non-terminating -> UNKNOWN
+
+    So a k-induction success says nothing about termination, and the only
+    honest source for the termination field is a run that asked for it.
+    """
+
+    def test_termination_flag_is_forced_not_inherited(self, monkeypatch):
+        from dataclasses import replace
+        import veripp.agent as agent
+
+        seen = {}
+
+        def fake_run(src, config):
+            seen["termination"] = config.termination
+            seen["k_induction"] = config.k_induction
+            return SimpleNamespace(outcome=Outcome.VERIFIED)
+
+        monkeypatch.setattr(agent, "run", fake_run)
+        # k-induction on, termination off: the trap configuration.
+        cfg = replace(VerifyConfig(), k_induction=True, termination=False)
+        agent._check_termination(Path("x.c"), cfg)
+        assert seen["termination"] is True, (
+            "the termination question must force --termination; a k-induction "
+            "SUCCESSFUL alone is measured to hold for non-terminating code"
+        )
+
+    def test_not_proved_is_not_a_claim_of_looping_forever(self):
+        # ESBMC proves termination but does not refute it, so False must read
+        # as "not proved" everywhere it is rendered.
+        assert AgentReport(final=_verified()).terminates is None
+
+    def test_no_loop_means_the_question_is_not_asked(self, tmp_path):
+        import veripp.agent as agent
+
+        src = tmp_path / "straight.c"
+        src.write_text("int f(int x){ return x + 1; }  // no loop here\n")
+        target = SimpleNamespace(source=src, function="f")
+        assert agent._might_not_terminate(target) is False
+
+    def test_a_loop_in_a_comment_does_not_buy_a_run(self, tmp_path):
+        import veripp.agent as agent
+
+        src = tmp_path / "prose.c"
+        src.write_text("/* we loop for each element, conceptually */\nint f(void){return 0;}\n")
+        target = SimpleNamespace(source=src, function="f")
+        assert agent._might_not_terminate(target) is False

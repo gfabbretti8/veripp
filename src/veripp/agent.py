@@ -11,6 +11,7 @@ Design invariants:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -45,6 +46,14 @@ class AgentReport:
     #: True when the harness could not actually be reached under its own
     #: assumptions, which makes any "verified" meaningless.
     vacuous: bool = False
+
+    #: Termination, kept separate from the safety verdict on purpose. It is a
+    #: liveness property, and a safety proof says nothing about it: ESBMC
+    #: reports SUCCESSFUL under k-induction for a function that loops forever,
+    #: because an infinite loop violates no assertion. Folding the two would
+    #: let "verified" mean "terminates" to a reader, which it does not.
+    #: None -> not asked (no loop, or the safety check did not succeed).
+    terminates: bool | None = None
 
     @property
     def verified(self) -> bool:
@@ -101,6 +110,17 @@ class AgentReport:
             lines.append(
                 "  This is a BOUNDED proof: it holds for executions within the "
                 "unwind bound above, not for all executions."
+            )
+        # Termination gets its own line and its own words. "Verified" above
+        # covers safety only; a reader should never have to know that to read
+        # this report correctly.
+        if self.terminates is True:
+            lines.append("  Termination: proved -- this function always finishes.")
+        elif self.terminates is False:
+            lines.append(
+                "  Termination: NOT PROVED. That is not the same as "
+                "'loops forever' -- ESBMC proves termination but cannot refute "
+                "it, so this is an open question, not a bug."
             )
         stubbed = self.final.stubbed_calls
         if stubbed:
@@ -177,6 +197,60 @@ _TIMEOUT_ESCALATIONS = [
 ]
 
 
+_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+
+def _strip_comments(text: str) -> str:
+    """Drop comments before scanning for loop keywords.
+
+    Prose says "for" and "while" constantly ("loop for each element"), and a
+    match there would buy an extra verification run for nothing.
+    """
+    return _COMMENT_RE.sub(" ", text)
+
+
+#: A function with no loop and no recursion terminates trivially, and asking
+#: the checker costs a whole extra verification run. Cheap syntactic test:
+#: only ask when there is something that could fail to terminate.
+_LOOP_RE = re.compile(r"\b(while|for|goto)\b")
+
+
+def _might_not_terminate(target: "TargetInfo | None") -> bool:
+    """Whether termination is worth asking about for this target.
+
+    Scans the original translation unit, not the harness: the harness only
+    `#include`s the source, so its own text has no loop in it even when the
+    code under test loops. Scanning the whole TU over-approximates -- a loop
+    in an unrelated function also triggers the question -- but a callee's loop
+    is just as able to hang the target, and the only cost of guessing yes is
+    one extra run. Guessing no would silently drop the question.
+    """
+    if target is None:
+        return False
+    try:
+        text = target.source.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return bool(_LOOP_RE.search(_strip_comments(text)))
+
+
+def _check_termination(harness: Path, config: VerifyConfig) -> bool | None:
+    """True if termination is proved, False if the checker could not, None if
+    it could not be asked.
+
+    ESBMC proves termination but does not refute it: a function that may loop
+    forever comes back UNKNOWN, not FAILED. So False here means "not proved",
+    never "proved not to terminate", and the reporting says so.
+    """
+    from dataclasses import replace as _replace
+
+    try:
+        result = run(harness, _replace(config, termination=True))
+    except (OSError, RuntimeError):
+        return None
+    return result.outcome is Outcome.VERIFIED
+
+
 def verify_with_agent(
     source: Path,
     base_config: VerifyConfig | None = None,
@@ -215,12 +289,20 @@ def verify_with_agent(
         attempts.append(result)
 
         if result.outcome is Outcome.VERIFIED:
+            # Safety holds. Termination is a separate question, and the tool
+            # asks it rather than making the user find a flag: only when there
+            # is a loop to worry about, and only once safety succeeded, since
+            # proving that buggy code terminates helps nobody.
+            terminates = None
+            if _might_not_terminate(target):
+                terminates = _check_termination(source, config)
             return AgentReport(
                 final=result,
                 attempts=attempts,
                 diagnosis=last_diagnosis,
                 accepted_preconditions=preconditions,
                 vacuous=_is_vacuous(source, config),
+                terminates=terminates,
                 **context,
             )
 

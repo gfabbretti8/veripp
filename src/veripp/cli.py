@@ -1383,6 +1383,10 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "outcome": report.final.outcome.value,
         "bounded": not report.final.config.k_induction,
         "vacuous": report.vacuous,
+        # null = not asked (no loop, or safety did not hold). false =
+        # not proved, which is never the same claim as "loops forever":
+        # ESBMC proves termination but does not refute it.
+        "terminates": report.terminates,
         "config": asdict(report.final.config),
         "assumptions": report.assumptions,
         "accepted_preconditions": report.accepted_preconditions,
