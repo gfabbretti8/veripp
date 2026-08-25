@@ -138,3 +138,60 @@ jobs:
             exit 1
           fi
           echo "correctly refused to verify anything with an unsound checker"
+
+  args-reach-the-checker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The `args` input carries the flags real projects need (-I, -D,
+      # --unwind, --link). It is passed through a shell where word splitting
+      # is deliberate, so it is exactly the kind of thing that breaks quietly.
+      # This fixture cannot compile at all unless BOTH an -I and a -D arrive:
+      # the header is elsewhere, and the bound comes from a macro.
+      - name: A source that needs an include path and a define
+        run: |
+          mkdir -p fixture/include
+          cat > fixture/include/limits_cfg.h <<'EOF'
+          #define CFG_MAX 4
+          EOF
+          cat > fixture/bounded.c <<'EOF'
+          #include "limits_cfg.h"
+          int at(const int *a, int i) {
+            if (i < 0 || i >= CFG_MAX) return 0;
+            return a[i];
+          }
+          EOF
+
+      - id: without
+        continue-on-error: true
+        uses: ./
+        with:
+          source: fixture/bounded.c
+          function: at
+          fail-on: never
+
+      - name: Without the include path it cannot even parse
+        run: |
+          got="${{ steps.without.outputs.outcome }}"
+          if [ "$got" = "verified" ]; then
+            echo "::error::fixture verified without its include path; it is not testing anything"
+            exit 1
+          fi
+          echo "as expected, unusable without args: $got"
+
+      - id: with
+        uses: ./
+        with:
+          source: fixture/bounded.c
+          function: at
+          args: -I fixture/include -D VERIPP_SELFTEST=1
+
+      - name: With them it verifies, so both flags arrived
+        run: |
+          got="${{ steps.with.outputs.outcome }}"
+          if [ "$got" != "verified" ]; then
+            echo "::error::expected verified once -I and -D were passed, got '$got'"
+            exit 1
+          fi
+          echo "args reached the checker: $got"
