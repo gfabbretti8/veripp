@@ -224,3 +224,52 @@ class TestOnlyFilter:
         result = run("scan", str(tmp_path), "--only", "parse_*", cwd=tmp_path)
         assert result.returncode == 0
         assert "Scanned 1 file" in result.stdout, result.stdout[-400:]
+
+
+class TestScanAsksAboutTerminationToo:
+    """`verify` and `scan` must not disagree about a function.
+
+    A bare path dispatches to `scan`, so if termination only appeared in
+    `verify` most people would never see it.
+    """
+
+    def test_a_loop_is_asked_and_a_straight_line_is_not(self, tmp_path):
+        src = tmp_path / "m.c"
+        src.write_text(
+            "unsigned s(unsigned n){ unsigned t=0; "
+            "for(unsigned i=0;i<n&&i<8;i++) t+=i; return t; }\n"
+            "int p(int x){ return x & 0xff; }\n"
+        )
+        from veripp.esbmc import VerifyConfig
+        from veripp.paths import contracts_include_dir
+        from veripp.scan import scan
+        from dataclasses import replace
+
+        inc = [d for d in (contracts_include_dir(),) if d]
+        report = scan(src, replace(VerifyConfig(), include_dirs=inc), jobs=2)
+        by = {r.name: r for r in report.results}
+        assert by["s"].terminates is True
+        assert by["p"].terminates is None, (
+            "a function with no loop should not be charged an extra "
+            "verification run to prove the obvious"
+        )
+
+    def test_body_scan_ignores_loops_in_other_functions(self):
+        # File-wide detection would charge every proved function in a file
+        # for one loop anywhere in it.
+        from veripp.cppsig import scrub
+        from veripp.scan import _body_has_loop
+
+        text = scrub(
+            "int quiet(int x){ return x; }\n"
+            "int busy(int n){ while(n--){} return 0; }\n"
+        )
+        assert _body_has_loop(text, "busy") is True
+        assert _body_has_loop(text, "quiet") is False
+
+    def test_declaration_is_not_mistaken_for_a_definition(self):
+        from veripp.cppsig import scrub
+        from veripp.scan import _body_has_loop
+
+        text = scrub("int f(int);\nint g(int n){ while(n--){} return 0; }\n")
+        assert _body_has_loop(text, "f") is False

@@ -1178,6 +1178,14 @@ def _scan(args) -> int:
                 for r in report.artifacts
             ],
             "inconclusive": [{"function": r.name, "outcome": r.outcome} for r in report.inconclusive],
+            # Termination is reported apart from the outcome buckets on
+            # purpose: it is liveness, and a proved function that could not
+            # be shown to terminate is still proved. "not_proved" is an open
+            # question, never a claim that the function loops forever.
+            "termination": {
+                "proved": [r.name for r in report.terminating],
+                "not_proved": [r.name for r in report.termination_unproved],
+            },
             "not_harnessable": report.refusal_reasons(),
     }
     _write_sarif(args, [report])

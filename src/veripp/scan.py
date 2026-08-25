@@ -12,7 +12,12 @@ from dataclasses import dataclass, field
 import re
 from pathlib import Path
 
-from .cppsig import SignatureError, function_definitions
+from .cppsig import (
+    SignatureError,
+    function_definitions,
+    match_bracket,
+    scrub,
+)
 from dataclasses import replace as _replace
 
 from .esbmc import Outcome, VerifyConfig, run
@@ -39,6 +44,12 @@ class FunctionResult:
     line: int = 0
     column: int = 0
     cwes: list[str] = field(default_factory=list)
+    #: Termination, asked only for proved functions that contain a loop.
+    #: None = not asked. Kept out of `outcome` on purpose: it is a liveness
+    #: property, and `verify` reports it the same way. The two commands
+    #: disagreeing about one function is the bug this file already guards
+    #: against for the unwind ladder.
+    terminates: bool | None = None
 
     @property
     def proved(self) -> bool:
@@ -50,6 +61,17 @@ class ScanReport:
     source: Path
     results: list[FunctionResult] = field(default_factory=list)
     candidates: int = 0
+
+    @property
+    def terminating(self) -> list[FunctionResult]:
+        """Proved functions that were also proved to terminate."""
+        return [r for r in self.results if r.terminates is True]
+
+    @property
+    def termination_unproved(self) -> list[FunctionResult]:
+        """Asked, and the checker could not prove it. Not a claim that they
+        loop forever -- ESBMC proves termination but does not refute it."""
+        return [r for r in self.results if r.terminates is False]
 
     @property
     def proved(self) -> list[FunctionResult]:
@@ -106,8 +128,17 @@ class ScanReport:
             f"({100 * attempted / total:.0f}%)",
             "",
             f"  PROVED           {len(self.proved):4d}  "
-            "no overflow, out-of-bounds, null deref or division by zero, "
-            "within the stated bounds and assumptions",
+            "free of undefined behaviour, within the stated bounds and "
+            "assumptions",
+            *([
+                f"    ...of which    {len(self.terminating):4d}  "
+                "also proved to terminate"
+                + (
+                    f" ({len(self.termination_unproved)} asked, not proved --"
+                    " an open question, not a bug)"
+                    if self.termination_unproved else ""
+                )
+            ] if self.terminating or self.termination_unproved else []),
             f"  COUNTEREXAMPLE   {len(self.counterexamples):4d}  "
             "a property fails for some input -- triage each one",
             f"  HARNESS ARTIFACT {len(self.artifacts):4d}  "
@@ -211,6 +242,41 @@ def _reason(detail: str) -> str:
     return detail[:60]
 
 
+_LOOP_RE = re.compile(r"\b(while|for|goto)\b")
+
+
+def _body_has_loop(scrubbed: str, name: str) -> bool:
+    """Whether `name`'s own body contains something that could not finish.
+
+    `verify` asks this of the whole translation unit, because it runs one
+    function and an extra run costs nothing much. A scan runs hundreds, and
+    a file-wide test would charge every proved function for one loop anywhere
+    in the file, so this looks at the function's own body.
+
+    The narrower test can miss a target whose body is loop-free but whose
+    callee loops. That shows up as termination being *unasked* rather than
+    answered wrongly -- the report says nothing about termination for that
+    function, which is the honest outcome for a question nobody put.
+
+    Takes already-scrubbed source: scrub() removes comments and string
+    literals, so prose about looping "for each element" cannot trigger this.
+    """
+    for m in re.finditer(rf"\b{re.escape(name)}\s*\(", scrubbed):
+        try:
+            rparen = match_bracket(scrubbed, scrubbed.index("(", m.end() - 1))
+        except (SignatureError, ValueError):
+            continue
+        brace = scrubbed.find("{", rparen)
+        if brace == -1 or ";" in scrubbed[rparen + 1 : brace]:
+            continue  # a declaration or a call, not a definition
+        try:
+            end = match_bracket(scrubbed, brace)
+        except SignatureError:
+            continue
+        return bool(_LOOP_RE.search(scrubbed[brace:end]))
+    return False
+
+
 def scan(
     source: Path,
     config: VerifyConfig,
@@ -226,6 +292,7 @@ def scan(
     # `main` is an entry point, not a target: harnessing it would just wrap
     # the program's own main in another one.
     names = only or [n for n in function_definitions(text) if n != "main"]
+    scrubbed = scrub(text)   # once: comments and string literals removed
     report = ScanReport(source=source, candidates=len(names))
     if not names:
         report.implementation_hint = _implementation_hint(source, text)
@@ -256,12 +323,24 @@ def scan(
                 widened = _replace(widened, unwind=widened.unwind * 4)
                 result = run(path, widened)
                 attempt += 1
+            # Same policy as `verify`: only for a function that proved, and
+            # only when there is a loop that could fail to terminate. Costs
+            # one extra run on those, and nothing on the rest.
+            terminates = None
+            if result.outcome is Outcome.VERIFIED and _body_has_loop(
+                scrubbed, name
+            ):
+                terminates = (
+                    run(path, _replace(widened, termination=True)).outcome
+                    is Outcome.VERIFIED
+                )
         except (OSError, RuntimeError) as exc:
             return FunctionResult(name=name, outcome="tool_error",
                                   signature=printable, detail=str(exc))
         prop = result.violated_property
         return FunctionResult(
             name=name,
+            terminates=terminates,
             outcome=result.outcome.value,
             signature=printable,
             detail=(prop.description if prop else (result.error or "")),
