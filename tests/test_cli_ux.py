@@ -241,6 +241,10 @@ class TestCompletions:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="shell completions are for POSIX shells; git-bash on Windows is not where they are used",
+    )
     def test_bash_script_is_valid_and_registers(self, tmp_path) -> None:
         import shutil
         import subprocess as sp
@@ -256,6 +260,10 @@ class TestCompletions:
         )
         assert "_veripp" in loaded.stdout
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="shell completions are for POSIX shells; git-bash on Windows is not where they are used",
+    )
     def test_zsh_script_is_valid(self, tmp_path) -> None:
         import shutil
         import subprocess as sp

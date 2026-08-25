@@ -197,3 +197,56 @@ def test_include_scanning_reads_raw_text():
     text = '#include "config.h"\n#include <yaml.h>\n#include "config.h"\n'
     assert included_names(text) == ["config.h"]
     assert included_names(text, angle=True) == ["config.h", "yaml.h"]
+
+
+class TestDatabasePathsAcrossPlatforms:
+    """A compilation database is generated on the machine that built the
+    project and read wherever the code is checked out — often not the same
+    platform, and increasingly a Linux-generated database read on Windows CI.
+    """
+
+    def test_a_posix_absolute_path_is_absolute_everywhere(self) -> None:
+        """On Windows, Path("/usr/include").is_absolute() is False because it
+        has no drive letter. That made veripp join it onto the database's own
+        directory and produce a path like C:/build/Usersmeprojinclude —
+        garbage, and silently so."""
+        from veripp.compdb import looks_absolute
+
+        assert looks_absolute("/usr/include")
+        assert looks_absolute("/Users/me/proj/include")
+
+    def test_a_windows_absolute_path_is_absolute_everywhere(self) -> None:
+        from veripp.compdb import looks_absolute
+
+        assert looks_absolute(r"C:\proj\include")
+        assert looks_absolute(r"\\server\share\include")
+
+    def test_a_relative_path_is_still_relative(self) -> None:
+        """The join has to keep happening for genuinely relative entries."""
+        from veripp.compdb import looks_absolute
+
+        for relative in ("include", "./inc", "../shared/inc", "sub/dir"):
+            assert not looks_absolute(relative), relative
+
+    def test_include_dirs_from_a_posix_database_are_not_mangled(self, tmp_path) -> None:
+        import json
+
+        from veripp.compdb import entry_for
+
+        source = tmp_path / "a.c"
+        source.write_text("int f(void){return 0;}\n", encoding="utf-8")
+        database = tmp_path / "compile_commands.json"
+        database.write_text(json.dumps([{
+            "directory": "/build",
+            "file": str(source),
+            "command": f"cc -I/usr/local/include -c {source}",
+        }]), encoding="utf-8")
+
+        entry = entry_for(database, source)
+        assert any("usr" in str(d) and "local" in str(d) for d in entry.include_dirs), (
+            f"the absolute include path was mangled: {entry.include_dirs}"
+        )
+        assert not any("build" in str(d) and "usr" in str(d) for d in entry.include_dirs), (
+            f"an absolute path was joined onto the database directory: "
+            f"{entry.include_dirs}"
+        )

@@ -86,6 +86,10 @@ class TestProviderExamples:
 
 
 class TestCompletionSnippet:
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="shell completions are for POSIX shells; git-bash on Windows is not where they are used",
+    )
     def test_the_documented_eval_line_works(self, tmp_path) -> None:
         """README: eval "$(veripp completion bash)"."""
         import shutil

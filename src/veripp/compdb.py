@@ -50,6 +50,24 @@ class CompileEntry:
         return args
 
 
+def looks_absolute(value: str | Path) -> bool:
+    """Whether a compilation database means this path absolutely.
+
+    A database is usually generated on the machine that built the project, and
+    read wherever the code is checked out -- often not the same platform. On
+    Windows, Path("/usr/include").is_absolute() is False, because it has no
+    drive letter, so a POSIX path from a Linux-generated database was joined
+    onto the database's own directory and produced a path like
+    C:/build/UsersmeprojincludeInclude. Garbage, silently.
+    """
+    text = str(value)
+    return (
+        Path(text).is_absolute()
+        or text.startswith(("/", "\\"))
+        or (len(text) > 1 and text[1] == ":")  # C:\... on any platform
+    )
+
+
 def find_database(start: Path) -> Path | None:
     """Nearest compile_commands.json at or above `start`, or in ./build."""
     start = start.resolve()
@@ -76,7 +94,7 @@ def load(database: Path) -> list[dict]:
 def _entry_path(raw: dict, database: Path) -> tuple[Path, Path]:
     directory = Path(raw.get("directory", database.parent))
     candidate = Path(raw.get("file", ""))
-    if not candidate.is_absolute():
+    if not looks_absolute(candidate):
         candidate = directory / candidate
     return directory, candidate
 
@@ -194,14 +212,18 @@ def _parse(raw: dict, directory: Path, source: Path) -> CompileEntry:
 def _absorb(entry: CompileEntry, flag: str, value: str, directory: Path) -> None:
     if flag in ("-I", "-isystem", "-iquote"):
         path = Path(value)
-        entry.include_dirs.append(path if path.is_absolute() else (directory / path).resolve())
+        entry.include_dirs.append(
+            path if looks_absolute(path) else (directory / path).resolve()
+        )
     elif flag == "-D":
         entry.defines.append(value)
     elif flag == "-U":
         entry.undefines.append(value)
     elif flag == "-include":
         path = Path(value)
-        entry.force_includes.append(path if path.is_absolute() else (directory / path).resolve())
+        entry.force_includes.append(
+            path if looks_absolute(path) else (directory / path).resolve()
+        )
 
 
 def sources(database: Path) -> list[Path]:
@@ -210,5 +232,8 @@ def sources(database: Path) -> list[Path]:
     for raw in load(database):
         directory = Path(raw.get("directory", database.parent))
         candidate = Path(raw.get("file", ""))
-        result.append(candidate if candidate.is_absolute() else (directory / candidate).resolve())
+        result.append(
+            candidate if looks_absolute(candidate)
+            else (directory / candidate).resolve()
+        )
     return result
