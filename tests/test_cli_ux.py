@@ -89,6 +89,43 @@ class TestMistakes:
         assert result.stderr.count("\n") <= 4, result.stderr
 
 
+class TestOutputSurvivesTheConsole:
+    """veripp prints em dashes, and echoes identifiers from the user's source,
+    so what it writes is not bounded by ASCII. A console encoding that cannot
+    represent a character must not turn a finished verification into a
+    traceback -- nor into UTF-8 bytes that the platform-default decoder in
+    whatever captured it then chokes on.
+
+    PYTHONIOENCODING reproduces a Windows codepage without a Windows machine.
+    """
+
+    def test_survives_a_codepage_missing_its_characters(self) -> None:
+        import os
+        import subprocess as sp
+        import sys as _sys
+
+        result = sp.run(
+            [_sys.executable, "-m", "veripp.cli", "scan", "examples/ring_buffer.cpp"],
+            capture_output=True, text=True, encoding="cp437", errors="replace",
+            cwd=ROOT, env={**os.environ, "PYTHONIOENCODING": "cp437"}, timeout=1800,
+        )
+        assert "Scanned" in result.stdout, result.stderr[-400:]
+
+    def test_output_is_readable_by_a_platform_default_decoder(self) -> None:
+        """Forcing UTF-8 would fix the crash and break every tool capturing
+        veripp with the platform default, which is the common case."""
+        import os
+        import subprocess as sp
+        import sys as _sys
+
+        result = sp.run(
+            [_sys.executable, "-m", "veripp.cli", "--help"],
+            capture_output=True, text=True, encoding="cp1252",
+            cwd=ROOT, env={**os.environ, "PYTHONIOENCODING": "cp1252"}, timeout=600,
+        )
+        assert "verify" in result.stdout
+
+
 class TestColour:
     """Colour on the verdict line, and nowhere it can leak.
 

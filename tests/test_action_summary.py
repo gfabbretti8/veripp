@@ -32,7 +32,7 @@ def render(status: str, report=None, tmp_path=None) -> subprocess.CompletedProce
         path.write_text(report if isinstance(report, str) else json.dumps(report), encoding="utf-8")
         env["VERIPP_REPORT"] = str(path)
     return subprocess.run(
-        [sys.executable, str(SCRIPT)], capture_output=True, text=True, env=env, timeout=120
+        [sys.executable, str(SCRIPT)], capture_output=True, text=True, encoding="utf-8", env=env, timeout=120
     )
 
 
@@ -131,7 +131,7 @@ class TestNeverBreaksTheStep:
     def test_no_environment_at_all(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8",
             env={k: v for k, v in os.environ.items() if k != "VERIPP_REPORT"},
             timeout=120,
         )

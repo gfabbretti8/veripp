@@ -90,12 +90,18 @@ Full options:  veripp <command> --help
 
 def main(argv: list[str] | None = None) -> int:
     # veripp's output contains characters (em dashes, and whatever a source
-    # file's identifiers hold) that the console's codepage may not cover.
-    # Windows picks a codepage rather than UTF-8, and an unencodable character
-    # turns a finished verification into a traceback at the last moment.
+    # file's identifiers hold) that the console's codepage may not cover, and
+    # an unencodable character turns a finished verification into a traceback
+    # at the last moment.
+    #
+    # Degrade rather than switch encodings. Forcing UTF-8 would fix the crash
+    # and create two new problems: mojibake on a console that is not UTF-8,
+    # and a mismatch for anything capturing the output, which decodes with the
+    # platform default and would then fail on our bytes. errors="replace"
+    # keeps the platform's encoding, never raises, and loses at most a dash.
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8")
+            stream.reconfigure(errors="replace")
         except (AttributeError, OSError):
             pass
 
