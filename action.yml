@@ -15,6 +15,15 @@ inputs:
     description: 'Extra veripp arguments (-I, -D, --link, --unwind, --timeout ...).'
     required: false
     default: ''
+  sarif:
+    description: >-
+      Write findings as SARIF to this path. Upload it with
+      github/codeql-action/upload-sarif and each finding appears as an
+      annotation on the pull request diff rather than in a job log. Findings
+      covered by `baseline` are emitted as suppressed rather than omitted, so
+      code scanning shows them as accepted instead of pretending they are gone.
+    required: false
+    default: ''
   baseline:
     description: >-
       Path to a .veripp-baseline written by `veripp accept`. Findings recorded
@@ -52,6 +61,9 @@ outputs:
   report:
     description: 'Path to the JSON report, for a step that wants the detail.'
     value: ${{ steps.run.outputs.report }}
+  sarif:
+    description: 'Path to the SARIF file, when `sarif` was requested.'
+    value: ${{ steps.run.outputs.sarif }}
 
 runs:
   using: 'composite'
@@ -146,6 +158,7 @@ runs:
         VERIPP_ARGS: ${{ inputs.args }}
         VERIPP_FAIL_ON: ${{ inputs.fail-on }}
         VERIPP_BASELINE: ${{ inputs.baseline }}
+        VERIPP_SARIF: ${{ inputs.sarif }}
       run: |
         set -uo pipefail
         # GitHub runs composite `shell: bash` steps as `bash -e -o pipefail`,
@@ -163,6 +176,8 @@ runs:
         # from a single run. Running twice -- once for each -- doubled the
         # verification cost of every job, which on a real codebase is minutes,
         # not seconds.
+        extra_args=""
+        [ -n "$VERIPP_SARIF" ] && extra_args="--sarif $VERIPP_SARIF"
         baseline_args=""
         if [ -n "$VERIPP_BASELINE" ]; then
           if [ ! -f "$VERIPP_BASELINE" ]; then
@@ -180,7 +195,7 @@ runs:
             --json-out "$report" $VERIPP_ARGS
         else
           uv run --project "$GITHUB_ACTION_PATH" \
-            veripp scan "$VERIPP_SOURCE" --json-out "$report" $baseline_args $VERIPP_ARGS
+            veripp scan "$VERIPP_SOURCE" --json-out "$report" $baseline_args $extra_args $VERIPP_ARGS
         fi
         status=$?
         set -e
@@ -195,6 +210,7 @@ runs:
           echo "outcome=$outcome"
           echo "exit-code=$status"
           echo "report=$report"
+          echo "sarif=$VERIPP_SARIF"
         } >> "$GITHUB_OUTPUT"
 
         # A readable summary on the run page, so nobody has to open the log to

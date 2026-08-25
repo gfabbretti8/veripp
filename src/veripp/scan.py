@@ -32,6 +32,13 @@ class FunctionResult:
     duration_s: float | None = None
     #: Set when the failure follows from the harness's own simplifications.
     artifact: str | None = None
+    #: Where the property fails. Carried from the checker so a finding can be
+    #: reported at a line -- SARIF, and therefore an inline annotation on a
+    #: pull request, is useless without one.
+    file: str = ""
+    line: int = 0
+    column: int = 0
+    cwes: list[str] = field(default_factory=list)
 
     @property
     def proved(self) -> bool:
@@ -262,6 +269,10 @@ def scan(
             stubbed_calls=result.stubbed_calls,
             duration_s=result.duration_s,
             artifact=mechanical_artifact(result, path),
+            file=(prop.loc.file if prop and prop.loc else ""),
+            line=(prop.loc.line if prop and prop.loc else 0),
+            column=(prop.loc.column if prop and prop.loc else 0),
+            cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
         )
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:

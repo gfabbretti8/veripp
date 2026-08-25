@@ -135,6 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
     s.add_argument("--json", action="store_true", help="machine-readable output")
     s.add_argument(
+        "--sarif", type=Path, default=None, metavar="PATH",
+        help="write findings as SARIF, for GitHub code scanning "
+             "(baselined findings are marked suppressed, not dropped)",
+    )
+    s.add_argument(
         "--baseline", type=Path, default=None, metavar="PATH",
         help="findings recorded here are reported but do not fail the run; "
              f"write one with `veripp accept` (default name: {DEFAULT_BASELINE})",
@@ -547,6 +552,44 @@ def _findings_from(reports) -> list:
     return keys
 
 
+def _write_sarif(args, reports) -> None:
+    """Emit SARIF if asked. Never fatal: a reporting format must not cost
+    someone a verification result they already paid for."""
+    destination = getattr(args, "sarif", None)
+    if destination is None:
+        return
+    from . import sarif as sarif_mod
+
+    baseline = _baseline_for(args)
+    suppressed = set()
+    if baseline is not None:
+        for key in baseline.entries:
+            suppressed.add((key.file, key.function, key.property))
+
+    findings = []
+    for report in reports:
+        for result in report.counterexamples:
+            findings.append({
+                "file": result.file or str(report.source),
+                "line": result.line, "column": result.column,
+                "function": result.name, "property": result.detail,
+                "cwes": result.cwes,
+            })
+
+    config = _config_for(args) if not args.source.is_dir() else None
+    bounds = config.describe() if config is not None else ""
+    try:
+        sarif_mod.write(destination, sarif_mod.build(
+            findings, root=Path.cwd(), version=__version__, bounds=bounds,
+            suppressed=suppressed,
+        ))
+        if not args.quiet and not args.json:
+            print(f"  sarif: {destination} ({len(findings)} result"
+                  f"{'s' if len(findings) != 1 else ''})", file=sys.stderr)
+    except OSError as exc:
+        print(f"warning: could not write {destination}: {exc}", file=sys.stderr)
+
+
 def _baseline_for(args):
     """The baseline to apply, or None. An explicitly named one that cannot be
     read is fatal; a default one that is simply absent is not."""
@@ -767,6 +810,7 @@ def _scan_tree(args) -> int:
             for r in reports
         ],
     }
+    _write_sarif(args, reports)
     verdict, extra = _apply_baseline(args, reports)
     payload.update(extra)
     _emit(args, payload,
@@ -837,7 +881,8 @@ def _scan(args) -> int:
             "proved": [r.name for r in report.proved],
             "counterexamples": [
                 {"function": r.name, "signature": r.signature, "property": r.detail,
-                 "assumptions": r.assumptions, "stubbed_calls": r.stubbed_calls}
+                 "assumptions": r.assumptions, "stubbed_calls": r.stubbed_calls,
+                 "file": r.file, "line": r.line, "column": r.column, "cwes": r.cwes}
                 for r in report.counterexamples
             ],
             "artifacts": [
@@ -847,6 +892,7 @@ def _scan(args) -> int:
             "inconclusive": [{"function": r.name, "outcome": r.outcome} for r in report.inconclusive],
             "not_harnessable": report.refusal_reasons(),
     }
+    _write_sarif(args, [report])
     verdict, extra = _apply_baseline(args, [report])
     scan_payload.update(extra)
     _emit(args, scan_payload, report.summary() + _baseline_note(args, [report]))

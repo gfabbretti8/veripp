@@ -241,7 +241,18 @@ veripp accept src/ --baseline .veripp-baseline   # commit this
   with:
     source: src/
     baseline: .veripp-baseline
+    sarif: veripp.sarif
+
+- uses: github/codeql-action/upload-sarif@v3
+  if: always()
+  with:
+    sarif_file: veripp.sarif
 ```
+
+With `sarif:` each finding becomes an annotation on the pull request diff
+instead of a line in a job log. Findings covered by the baseline are uploaded
+as *suppressed* rather than omitted, so code scanning shows them as accepted
+rather than pretending they are gone.
 
 Now the job goes red only on findings that are **not** in the baseline. The
 file is JSON and meant to be reviewed in the pull request that adds it: each

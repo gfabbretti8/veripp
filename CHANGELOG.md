@@ -28,6 +28,12 @@ run, and refuses to back results from one that cannot detect a planted bug.
   resurrect accepted findings. Accepted entries that stop occurring are
   reported, since an entry matching nothing still grants permission to whatever
   matches it later. The GitHub Action takes a `baseline:` input.
+- `veripp scan --sarif PATH` writes SARIF 2.1.0, so the Action can hand results
+  to GitHub code scanning and each finding lands on the pull request diff
+  rather than in a job log. Validated against the published schema. Findings
+  covered by a baseline are emitted as suppressed rather than dropped, so code
+  scanning shows them as accepted instead of pretending they are gone, and
+  fingerprints are keyed like the baseline so a finding survives code moving.
 - `npx veripp-skill` installs the agent skill with nothing but Node.
 
 ## 0.1.3

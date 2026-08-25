@@ -43,7 +43,10 @@ Changelog = "https://github.com/gfabbretti8/veripp/blob/main/CHANGELOG.md"
 # workflows to check they are valid and that the act harness enumerates the
 # same jobs the workflow defines. Without it those tests skip silently, which
 # is how they were never running anywhere -- neither locally nor in CI.
-dev = ["pytest>=8", "pyyaml>=6"]
+# jsonschema validates the SARIF output against the real 2.1.0 schema.
+# GitHub rejects invalid SARIF outright, and without this declared the
+# check skips silently -- the same way the workflow-parsing tests did.
+dev = ["pytest>=8", "pyyaml>=6", "jsonschema>=4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
