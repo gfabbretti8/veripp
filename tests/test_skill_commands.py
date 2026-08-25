@@ -270,3 +270,30 @@ class TestBaselineWorkflowFromTheSkill:
         check(veripp("verify", "m.c", "--function", "f", "--unwind", "64",
                      "--timeout", "300", cwd=tmp_path),
               "veripp verify FILE --unwind N --timeout N")
+
+
+class TestTheEscapeHatchTheSkillDocuments:
+    """SKILL.md tells agents that one flag reaches every ESBMC feature.
+
+    If that stops being true the skill is teaching a lie, so the documented
+    invocation is run here rather than trusted.
+    """
+
+    def test_esbmc_arg_reaches_the_checker(self, tmp_path):
+        src = tmp_path / "ok.c"
+        src.write_text("unsigned twice(unsigned x){ return x / 2u; }\n")
+        result = veripp(
+            "verify", str(src), "--function", "twice",
+            "--esbmc-arg", "--struct-fields-check", "--no-llm",
+        )
+        check(result, "verify with --esbmc-arg")
+        combined = result.stdout + result.stderr
+        assert "--struct-fields-check" in combined, (
+            "a raw ESBMC flag must be named in the result, or a weakened "
+            "proof reads the same as a real one"
+        )
+
+    def test_help_all_reveals_what_help_hides(self):
+        shown = veripp("verify", "--help").stdout
+        every = veripp("verify", "--help-all").stdout
+        assert "--unwind" not in shown and "--unwind" in every

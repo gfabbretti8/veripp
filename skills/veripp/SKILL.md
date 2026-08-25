@@ -1,7 +1,7 @@
 ---
 name: veripp
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/install.sh)
-description: Prove a C or C++ function cannot overflow, read or write out of bounds, divide by zero, or dereference null - or get a concrete input that makes it happen. Use when the user asks to verify, prove, formally check, model-check, or find memory-safety and arithmetic bugs in C/C++ code, when reviewing security-sensitive parsing or buffer code, or when a fuzzer found nothing and they want a stronger guarantee than testing.
+description: Prove a C or C++ function free of undefined behaviour - overflow, out-of-bounds access, null and invalid pointers, division by zero, memory leaks, uninitialised reads, undefined shifts, NaN - and whether it terminates, or get a concrete input that breaks it. Use when the user asks to verify, prove, formally check, model-check, or find memory-safety and arithmetic bugs in C/C++ code, when reviewing security-sensitive parsing or buffer code, or when a fuzzer found nothing and they want a stronger guarantee than testing.
 ---
 
 # veripp
@@ -37,6 +37,34 @@ and checks the installed ESBMC actually finds them. The published ESBMC 8.4
 release silently misses out-of-bounds writes to a member array
 (esbmc/esbmc#6508), so a "verified" from that build is not worth having, and
 doctor is what tells you.
+
+## You do not pick the checks either
+
+veripp decides what to check and how hard to look. It checks all eight
+undefined-behaviour properties by default, widens the unwind bound when a
+result is inconclusive, and finally switches to k-induction to escape
+boundedness entirely. Do not go looking for flags to turn checks on.
+
+Two things follow from that:
+
+* **Read the second line of every result.** It names the checks that ran, the
+  mode (bounded / k-induction), and any raw flags in play. That line is what
+  makes a "verified" mean something specific. Quote it to the user.
+* **Termination is asked separately** for functions with loops, and reported
+  on its own line. It is never folded into "verified", because a safety proof
+  says nothing about whether the function finishes. "Not proved" is an open
+  question, not a bug: ESBMC proves termination but cannot refute it.
+
+If you genuinely need an ESBMC feature veripp does not surface, one flag
+reaches all of them:
+
+```bash
+veripp verify file.c --function f --esbmc-arg --struct-fields-check
+```
+
+Anything passed that way is named in the result line, because a raw flag can
+weaken a proof as easily as strengthen it. `veripp <command> --help-all` lists
+the tuning knobs kept out of the default help.
 
 ## Reading the result
 
