@@ -49,14 +49,25 @@ def main() -> int:
         return 0
 
     if "candidates" in report:  # a scan
-        # These arrive as lists of function names (not_harnessable as a dict
-        # keyed by reason), so count them rather than printing them.
+        # Two shapes reach here. A single-file scan reports lists of function
+        # names (not_harnessable as a dict keyed by reason); a directory scan
+        # has already aggregated them into counts. Counting a list and reading
+        # an int are both correct answers to "how many" -- treating an int as
+        # uncountable silently reported zero for every proof in a tree scan.
         def size(key: str) -> int:
             value = report.get(key)
-            return len(value) if isinstance(value, (list, dict)) else 0
+            if isinstance(value, bool) or value is None:
+                return 0
+            if isinstance(value, int):
+                return value
+            if isinstance(value, (list, dict)):
+                return len(value)
+            return 0
 
+        where = report.get("root") or report.get("source") or "file"
+        scope = f" across {report['files']} files" if report.get("files") else ""
         out += [
-            f"**{report.get('source', 'file')}** — "
+            f"**{where}**{scope} — "
             f"{report.get('candidates', '?')} functions",
             "",
             "| Outcome | Count |",
@@ -72,9 +83,14 @@ def main() -> int:
         if found:
             out += ["<details><summary>Counterexamples — each needs triage</summary>", ""]
             for item in found[:20]:
-                name = item.get("function", item) if isinstance(item, dict) else item
-                why = item.get("reason", "") if isinstance(item, dict) else ""
-                out += [f"- `{name}`" + (f" — {why}" if why else "")]
+                if isinstance(item, dict):
+                    name = item.get("function", "?")
+                    where_file = item.get("file")
+                    why = item.get("reason") or item.get("property") or ""
+                    label = f"`{where_file}` → `{name}`" if where_file else f"`{name}`"
+                else:
+                    label, why = f"`{item}`", ""
+                out += [f"- {label}" + (f" — {why}" if why else "")]
             if len(found) > 20:
                 out += [f"- …and {len(found) - 20} more"]
             out += ["", "</details>", ""]

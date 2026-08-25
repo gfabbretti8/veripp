@@ -134,3 +134,54 @@ class TestNeverBreaksTheStep:
         for junk in ([], "a string", {"candidates": None}, {"violated_property": 42}):
             result = render("1", junk, tmp_path)
             assert result.returncode == 0, junk
+
+
+class TestTreeScanReport:
+    """A directory scan aggregates into counts; a single-file scan reports
+    lists of names. Both reach this renderer, and it must count either."""
+
+    REPORT = {
+        "root": "src",
+        "files": 3,
+        "candidates": 40,
+        "proved": 22,
+        "counterexamples": [
+            {"file": "src/parse.c", "function": "boom", "property": "array bounds violated"}
+        ],
+        "inconclusive": 17,
+        "artifacts": 0,
+    }
+
+    def test_integer_counts_are_not_reported_as_zero(self, tmp_path) -> None:
+        """size() counted only lists, so every proof in a tree scan rendered
+        as 0 -- a silent, plausible-looking wrong answer."""
+        out = render("1", self.REPORT, tmp_path).stdout
+        assert "| ✅ Proved | 22 |" in out, out
+        assert "| ⏱️ Inconclusive | 17 |" in out
+
+    def test_names_the_directory_and_the_file_count(self, tmp_path) -> None:
+        """A tree report has `root`, not `source`; reading only `source` fell
+        back to the literal word "file"."""
+        out = render("1", self.REPORT, tmp_path).stdout
+        assert "**src**" in out and "across 3 files" in out
+        assert "**file**" not in out
+
+    def test_findings_say_which_file(self, tmp_path) -> None:
+        out = render("1", self.REPORT, tmp_path).stdout
+        assert "src/parse.c" in out and "boom" in out
+        assert "array bounds violated" in out
+
+    def test_the_single_file_shape_still_renders(self, tmp_path) -> None:
+        single = {
+            "source": "a.c", "candidates": 3,
+            "proved": ["f", "g", "h"], "counterexamples": [],
+            "inconclusive": [], "artifacts": [], "not_harnessable": {},
+        }
+        out = render("0", single, tmp_path).stdout
+        assert "| ✅ Proved | 3 |" in out
+        assert "**a.c**" in out and "across" not in out
+
+    def test_a_boolean_is_not_counted_as_one(self, tmp_path) -> None:
+        """bool is a subclass of int; True must not read as a count of 1."""
+        out = render("0", dict(self.REPORT, artifacts=True), tmp_path).stdout
+        assert "| 🔧 Harness artifacts | 0 |" in out
