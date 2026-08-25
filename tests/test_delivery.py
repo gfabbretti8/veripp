@@ -708,3 +708,54 @@ class TestChangelog:
         )
         assert result.returncode != 0
         assert "no section" in result.stderr
+
+
+class TestSkillBundledScript:
+    """A skill's own files must be addressed by a path that resolves wherever
+    the skill is installed -- personal, project, or plugin."""
+
+    PATH = "skills/veripp/SKILL.md"
+
+    def test_uses_the_documented_skill_dir_variable(self) -> None:
+        """`./install.sh` only resolves if the agent's working directory is
+        the skill directory, which it is not: it is the user's project."""
+        text = read(self.PATH)
+        assert "${CLAUDE_SKILL_DIR}/install.sh" in text
+        code_lines = [
+            line for line in text.splitlines()
+            if line.strip().endswith("install.sh")
+        ]
+        for line in code_lines:
+            assert "CLAUDE_SKILL_DIR" in line, f"unqualified path: {line!r}"
+
+    def test_permits_the_dry_run_but_not_the_install(self) -> None:
+        """The dry report changes nothing and should not need a prompt. The
+        --yes form downloads hundreds of MB or starts a source build, and
+        should. Allowing the bare path but not `*` draws exactly that line."""
+        front = read(self.PATH).split("---", 2)[1]
+        allowed = re.search(r"^allowed-tools: (.+)$", front, re.M)
+        assert allowed, "no allowed-tools entry"
+        rule = allowed.group(1).strip()
+        assert rule == "Bash(${CLAUDE_SKILL_DIR}/install.sh)", rule
+        assert "*" not in rule, (
+            "a wildcard here would pre-authorise `--yes`, which is the one "
+            "form that must be confirmed"
+        )
+
+
+class TestInstallerHonesty:
+    """The installer reports what it observed, not what it guessed."""
+
+    PATH = "skills/veripp/install.sh"
+
+    def test_does_not_claim_an_image_is_unpublished(self) -> None:
+        """Without credentials a private package is indistinguishable from a
+        missing one, so "not published yet" is a guess presented as fact."""
+        code = "\n".join(
+            line for line in read(self.PATH).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "not published yet" not in code
+        assert "docker login" in code, (
+            "the likely cause of a failed read is missing credentials; say so"
+        )

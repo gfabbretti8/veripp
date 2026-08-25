@@ -1,5 +1,6 @@
 ---
 name: veripp
+allowed-tools: Bash(${CLAUDE_SKILL_DIR}/install.sh)
 description: Prove a C or C++ function cannot overflow, read or write out of bounds, divide by zero, or dereference null - or get a concrete input that makes it happen. Use when the user asks to verify, prove, formally check, model-check, or find memory-safety and arithmetic bugs in C/C++ code, when reviewing security-sensitive parsing or buffer code, or when a fuzzer found nothing and they want a stronger guarantee than testing.
 ---
 
@@ -114,10 +115,15 @@ Run the bundled script to find out what this machine needs. It changes
 nothing and prints the plan and its cost:
 
 ```bash
-./install.sh
+${CLAUDE_SKILL_DIR}/install.sh
 ```
 
-**Show the user that plan and get agreement before running `./install.sh --yes`.**
+`${CLAUDE_SKILL_DIR}` resolves wherever the skill is installed; a bare
+`./install.sh` only works if you happen to be sitting in the skill directory,
+which you will not be.
+
+**Show the user that plan and get agreement before running it with `--yes`.**
+The dry report above needs no permission; the `--yes` form deliberately does.
 Every route is expensive in a way worth consenting to: the image is a
 450-540 MB pull, the Linux x86_64 ESBMC is a 235 MB download, and on macOS
 `brew install --HEAD esbmc` is a source build measured in tens of minutes that

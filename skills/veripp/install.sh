@@ -46,7 +46,11 @@ if command -v docker >/dev/null 2>&1; then
     [ "$DO_IT" = "1" ] && { say "Pulling..."; docker pull "$IMAGE"; exit $?; }
     exit 0
   fi
-  say "note: $IMAGE is not published yet, so the container route is unavailable."
+  # A failed manifest read means "cannot see it", not "does not exist": a
+  # private package looks identical to a missing one without credentials.
+  say "note: could not read $IMAGE. It may be private (try"
+  say "      'docker login ghcr.io'), or not published for your platform."
+  say "      Falling back to installing on the host."
   say ""
 fi
 
