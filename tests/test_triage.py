@@ -154,3 +154,58 @@ class TestProposeCheckLoop:
         assert report.final.outcome is Outcome.COUNTEREXAMPLE
         assert report.diagnosis.kind == "real_bug"
         assert len(report.attempts) == 1  # no regeneration happened
+
+
+class TestAlignmentArtifact:
+    """Allocation through a function pointer produces a false alignment
+    failure, and it dominated cJSON's findings: 14 of 33 counterexamples were
+    this one pattern, every one about the allocator being opaque to the
+    checker rather than about the library.
+
+    Reproduced minimally: a struct allocated via `global.allocate(...)` fails,
+    while the identical code calling malloc directly verifies.
+    """
+
+    @staticmethod
+    def _result(description: str):
+        """`violated_property` is derived from `properties`, not a field."""
+        from veripp.esbmc import (
+            Outcome, SourceLoc, VerifyConfig, VerifyResult, ViolatedProperty,
+        )
+
+        return VerifyResult(
+            outcome=Outcome.COUNTEREXAMPLE,
+            config=VerifyConfig(),
+            properties=[ViolatedProperty(
+                loc=SourceLoc(file="lib.c", line=7, column=9, function="f"),
+                description=description,
+                expression="",
+                cwes=[],
+            )],
+        )
+
+    def test_it_is_classified_as_an_artifact(self, tmp_path) -> None:
+        from veripp.triage import mechanical_artifact
+
+        why = mechanical_artifact(
+            self._result("dereference failure: Incorrect alignment when accessing data object"),
+            tmp_path / "harness.c",
+        )
+        assert why is not None
+        assert "allocator" in why
+
+    def test_the_reason_says_how_to_check_it_properly(self) -> None:
+        """An artifact note that does not say what to do instead just moves
+        the finding to a quieter column."""
+        from veripp.triage import _MECHANICAL_ARTIFACTS
+
+        why = next(w for n, w in _MECHANICAL_ARTIFACTS if "alignment" in n)
+        assert "--link" in why or "compile_commands" in why
+
+    def test_a_real_failure_is_still_a_finding(self, tmp_path) -> None:
+        from veripp.triage import mechanical_artifact
+
+        for real in ("arithmetic overflow on add",
+                     "array bounds violated: array `t' upper bound",
+                     "division by zero"):
+            assert mechanical_artifact(self._result(real), tmp_path / "h.c") is None, real

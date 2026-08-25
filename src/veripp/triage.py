@@ -36,6 +36,20 @@ _MECHANICAL_ARTIFACTS: tuple[tuple[str, str], ...] = (
         "the harness supplies this pointer, so the offset it is freed at is "
         "the harness's doing, not the library's",
     ),
+    (
+        # Reproduced in eight lines: allocating through a function pointer
+        # yields this, while the same code calling malloc directly verifies.
+        # The checker cannot establish the alignment of a pointer returned by
+        # a call it could not resolve, so it assumes the worst. In cJSON this
+        # one pattern accounted for 14 of 33 counterexamples -- every one of
+        # them about the allocator being opaque, none about the library.
+        "Incorrect alignment when accessing data object",
+        "the pointer comes from an allocator the checker could not resolve "
+        "(commonly an indirect call through a hooks struct), so it cannot "
+        "establish the alignment and assumes the worst. Real allocators "
+        "return suitably aligned memory. Link the allocator with --link, or "
+        "point veripp at compile_commands.json, to check this properly",
+    ),
 )
 
 
