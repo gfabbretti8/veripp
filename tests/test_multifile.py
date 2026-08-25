@@ -40,9 +40,9 @@ def project(tmp_path):
     (tmp_path / "include").mkdir()
     (tmp_path / "src").mkdir()
     (tmp_path / "build").mkdir()
-    (tmp_path / "include" / "geom.h").write_text(HEADER)
-    (tmp_path / "src" / "helper.cpp").write_text(HELPER)
-    (tmp_path / "src" / "area.cpp").write_text(AREA)
+    (tmp_path / "include" / "geom.h").write_text(HEADER, encoding="utf-8")
+    (tmp_path / "src" / "helper.cpp").write_text(HELPER, encoding="utf-8")
+    (tmp_path / "src" / "area.cpp").write_text(AREA, encoding="utf-8")
     db = [
         {
             "directory": str(tmp_path),
@@ -54,7 +54,7 @@ def project(tmp_path):
         }
         for f in ("area.cpp", "helper.cpp")
     ]
-    (tmp_path / "build" / "compile_commands.json").write_text(json.dumps(db))
+    (tmp_path / "build" / "compile_commands.json").write_text(json.dumps(db), encoding="utf-8")
     return tmp_path
 
 
@@ -76,7 +76,7 @@ class TestCompilationDatabase:
     def test_arguments_form_is_supported(self, tmp_path):
         db = tmp_path / "compile_commands.json"
         src = tmp_path / "a.c"
-        src.write_text("int main(void){return 0;}")
+        src.write_text("int main(void){return 0;}", encoding="utf-8")
         db.write_text(json.dumps([{
             "directory": str(tmp_path), "file": "a.c",
             "arguments": ["cc", "-std=c11", "-I./inc", "-DX=2", "-c", "a.c"],
@@ -150,10 +150,10 @@ class TestUnconfiguredBuild:
     def _project(self, tmp_path):
         (tmp_path / "src").mkdir()
         (tmp_path / "cmake").mkdir()
-        (tmp_path / "cmake" / "config.h.in").write_text("#define VERSION \"@VER@\"\n")
-        (tmp_path / "src" / "private.h").write_text('#include "config.h"\n')
+        (tmp_path / "cmake" / "config.h.in").write_text("#define VERSION \"@VER@\"\n", encoding="utf-8")
+        (tmp_path / "src" / "private.h").write_text('#include "config.h"\n', encoding="utf-8")
         source = tmp_path / "src" / "api.c"
-        source.write_text('#include "private.h"\nconst char* ver(void) { return VERSION; }\n')
+        source.write_text('#include "private.h"\nconst char* ver(void) { return VERSION; }\n', encoding="utf-8")
         return source
 
     def test_the_missing_generated_header_is_named(self, tmp_path):
@@ -175,7 +175,7 @@ class TestUnconfiguredBuild:
         from veripp.cli import _unconfigured_build_hint
 
         source = self._project(tmp_path)
-        (tmp_path / "src" / "config.h").write_text('#define VERSION "1.0"\n')
+        (tmp_path / "src" / "config.h").write_text('#define VERSION "1.0"\n', encoding="utf-8")
         assert _unconfigured_build_hint(source, []) is None
 
     def test_a_missing_header_with_no_template_is_not_blamed_on_configuration(
@@ -184,7 +184,7 @@ class TestUnconfiguredBuild:
         from veripp.cli import _unconfigured_build_hint
 
         source = tmp_path / "a.c"
-        source.write_text('#include "nowhere.h"\nint f(void) { return 0; }\n')
+        source.write_text('#include "nowhere.h"\nint f(void) { return 0; }\n', encoding="utf-8")
         assert _unconfigured_build_hint(source, []) is None
 
 

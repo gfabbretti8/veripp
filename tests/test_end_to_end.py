@@ -80,7 +80,7 @@ def test_a_precondition_turns_a_counterexample_into_a_proof(capsys, tmp_path):
         "    VERIPP_REQUIRES(count > 0);\n"
         "    return total / count;\n"
         "}\n"
-    )
+    , encoding="utf-8")
     bug_code, bug_out = run_cli(capsys, str(src), "--function", "average")
     assert bug_code == EXIT_COUNTEREXAMPLE
     assert "division by zero" in bug_out

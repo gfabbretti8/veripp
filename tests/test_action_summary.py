@@ -23,7 +23,7 @@ def render(status: str, report=None, tmp_path=None) -> subprocess.CompletedProce
     env = {"VERIPP_STATUS": status, "PATH": "/usr/bin:/bin"}
     if report is not None:
         path = tmp_path / "report.json"
-        path.write_text(report if isinstance(report, str) else json.dumps(report))
+        path.write_text(report if isinstance(report, str) else json.dumps(report), encoding="utf-8")
         env["VERIPP_REPORT"] = str(path)
     return subprocess.run(
         [sys.executable, str(SCRIPT)], capture_output=True, text=True, env=env, timeout=120

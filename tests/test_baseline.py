@@ -57,7 +57,7 @@ class TestExitCodes:
 
     @staticmethod
     def _project(tmp_path, body=BUGGY):
-        (tmp_path / "m.c").write_text(body)
+        (tmp_path / "m.c").write_text(body, encoding="utf-8")
         return tmp_path
 
     def test_without_a_baseline_a_finding_fails(self, tmp_path) -> None:
@@ -73,7 +73,7 @@ class TestExitCodes:
     def test_a_new_finding_fails_and_is_named(self, tmp_path) -> None:
         project = self._project(tmp_path)
         veripp("accept", "m.c", cwd=project)
-        (project / "m.c").write_text(BUGGY + "int fresh(int a,int b){ return a*b; }\n")
+        (project / "m.c").write_text(BUGGY + "int fresh(int a,int b){ return a*b; }\n", encoding="utf-8")
         result = veripp("scan", "m.c", "--baseline", ".veripp-baseline", cwd=project)
         assert result.returncode == 1
         assert "NEW finding" in result.stdout and "fresh" in result.stdout
@@ -83,7 +83,7 @@ class TestExitCodes:
         above a function must not turn its accepted finding into a new one."""
         project = self._project(tmp_path)
         veripp("accept", "m.c", cwd=project)
-        (project / "m.c").write_text("/* a new comment */\n\n\n" + BUGGY)
+        (project / "m.c").write_text("/* a new comment */\n\n\n" + BUGGY, encoding="utf-8")
         result = veripp("scan", "m.c", "--baseline", ".veripp-baseline", cwd=project)
         assert result.returncode == 0, (
             "shifting a function down the file resurrected its accepted finding:\n"
@@ -102,9 +102,9 @@ class TestStaleEntries:
     def test_an_entry_that_no_longer_matches_is_reported(self, tmp_path) -> None:
         """An entry matching nothing still grants permission, and will go on
         granting it to whatever matches later."""
-        (tmp_path / "m.c").write_text(BUGGY)
+        (tmp_path / "m.c").write_text(BUGGY, encoding="utf-8")
         veripp("accept", "m.c", cwd=tmp_path)
-        (tmp_path / "m.c").write_text(CLEAN)
+        (tmp_path / "m.c").write_text(CLEAN, encoding="utf-8")
         result = veripp("scan", "m.c", "--baseline", ".veripp-baseline", cwd=tmp_path)
         assert "no longer occur" in result.stdout, result.stdout[-600:]
 
@@ -114,30 +114,30 @@ class TestFileHandling:
     read one is loud."""
 
     def test_a_missing_baseline_is_an_error(self, tmp_path) -> None:
-        (tmp_path / "m.c").write_text(CLEAN)
+        (tmp_path / "m.c").write_text(CLEAN, encoding="utf-8")
         result = veripp("scan", "m.c", "--baseline", "nope.json", cwd=tmp_path)
         assert result.returncode == 2
         assert "not found" in result.stderr
 
     def test_malformed_json_is_an_error(self, tmp_path) -> None:
-        (tmp_path / "m.c").write_text(CLEAN)
-        (tmp_path / "b.json").write_text("{not json")
+        (tmp_path / "m.c").write_text(CLEAN, encoding="utf-8")
+        (tmp_path / "b.json").write_text("{not json", encoding="utf-8")
         result = veripp("scan", "m.c", "--baseline", "b.json", cwd=tmp_path)
         assert result.returncode == 2
         assert "not valid JSON" in result.stderr
 
     def test_an_unknown_version_is_refused_not_guessed(self, tmp_path) -> None:
-        (tmp_path / "m.c").write_text(CLEAN)
-        (tmp_path / "b.json").write_text(json.dumps({"version": 99, "findings": []}))
+        (tmp_path / "m.c").write_text(CLEAN, encoding="utf-8")
+        (tmp_path / "b.json").write_text(json.dumps({"version": 99, "findings": []}), encoding="utf-8")
         result = veripp("scan", "m.c", "--baseline", "b.json", cwd=tmp_path)
         assert result.returncode == 2
         assert "version" in result.stderr
 
     def test_a_malformed_entry_is_refused(self, tmp_path) -> None:
-        (tmp_path / "m.c").write_text(CLEAN)
+        (tmp_path / "m.c").write_text(CLEAN, encoding="utf-8")
         (tmp_path / "b.json").write_text(
             json.dumps({"version": 1, "findings": [{"file": "a.c"}]})
-        )
+        , encoding="utf-8")
         result = veripp("scan", "m.c", "--baseline", "b.json", cwd=tmp_path)
         assert result.returncode == 2
 
@@ -150,7 +150,7 @@ class TestFileHandling:
             baseline.entries[key] = Entry(key=key)
         out = tmp_path / "b.json"
         baseline.save(out)
-        names = [f["function"] for f in json.loads(out.read_text())["findings"]]
+        names = [f["function"] for f in json.loads(out.read_text(encoding="utf-8"))["findings"]]
         assert names == sorted(names)
 
     def test_it_round_trips(self, tmp_path) -> None:

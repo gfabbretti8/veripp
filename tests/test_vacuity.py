@@ -20,7 +20,7 @@ int div_it(int a, int b) { return a / b; }
 @pytest.fixture
 def src(tmp_path):
     p = tmp_path / "v.cpp"
-    p.write_text(SOURCE)
+    p.write_text(SOURCE, encoding="utf-8")
     return p
 
 
@@ -59,7 +59,7 @@ class TestVacuityEndToEnd:
     def test_a_harness_with_no_assumptions_skips_the_extra_run(self, capsys, tmp_path):
         # Nothing to contradict, so no probe is needed and none is reported.
         p = tmp_path / "n.cpp"
-        p.write_text('#include "veripp/contracts.hpp"\nint id(int x) { return x; }\n')
+        p.write_text('#include "veripp/contracts.hpp"\nint id(int x) { return x; }\n', encoding="utf-8")
         code = main(["verify", str(p), "--function", "id", "--no-llm", "--timeout", "120"])
         assert code == EXIT_VERIFIED
         assert "VACUOUS" not in capsys.readouterr().out

@@ -104,7 +104,7 @@ def build_context(
     call_sites: list[str] = []
 
     if target is not None:
-        text = target.source.read_text()
+        text = target.source.read_text(encoding="utf-8")
         try:
             sig = find_function(text, target.function)
             function = sig.qualified_name
@@ -117,7 +117,7 @@ def build_context(
             function = target.function
 
     try:
-        harness_code = harness_path.read_text()
+        harness_code = harness_path.read_text(encoding="utf-8")
     except OSError:
         harness_code = ""
 

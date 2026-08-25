@@ -32,7 +32,7 @@ def test_include_dir_resolves_to_the_packaged_copy():
 
 
 def test_the_header_defines_what_generated_harnesses_use():
-    header = (contracts_include_dir() / "veripp" / "contracts.hpp").read_text()
+    header = (contracts_include_dir() / "veripp" / "contracts.hpp").read_text(encoding="utf-8")
     for macro in (
         "VERIPP_REQUIRES", "VERIPP_ENSURES", "VERIPP_ASSERT", "VERIPP_ASSUME",
         "VERIPP_NONDET_INT", "VERIPP_NONDET_UINT", "VERIPP_NONDET_LONG",
@@ -64,7 +64,7 @@ class TestPyPIPage:
         import re
         from pathlib import Path
 
-        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
         # Markdown links whose target is neither absolute nor an anchor.
         relative = [
             target
@@ -82,7 +82,7 @@ class TestPyPIPage:
 
         pyproject = (
             Path(__file__).resolve().parent.parent / "pyproject.toml"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         for field in ("Homepage", "Repository", "Issues", "Changelog"):
             assert re.search(rf'^{field} = "https://', pyproject, re.M), (
                 f"[project.urls] {field} is missing or not absolute"
@@ -93,6 +93,6 @@ class TestPyPIPage:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        pyproject = (root / "pyproject.toml").read_text()
+        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
         assert "CHANGELOG.md" in pyproject
         assert (root / "CHANGELOG.md").is_file()

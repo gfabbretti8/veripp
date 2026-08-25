@@ -42,7 +42,7 @@ static void inclusive(unsigned* p) { for (unsigned i = 0; i <= 7; i++) p[i] = i;
 @pytest.fixture
 def src(tmp_path):
     p = tmp_path / "s.c"
-    p.write_text(SOURCE)
+    p.write_text(SOURCE, encoding="utf-8")
     return p
 
 
@@ -114,7 +114,7 @@ class TestMechanicalArtifacts:
             explain = propose_precondition = classify
 
         harness = tmp_path / "veripp_harness_f.cpp"
-        harness.write_text("int main() { return 0; }")
+        harness.write_text("int main() { return 0; }", encoding="utf-8")
         diagnosis = triage_counterexample(
             None, harness,
             self._result("dereference failure: free() of non-dynamic memory"),

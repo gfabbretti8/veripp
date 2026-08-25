@@ -313,14 +313,14 @@ def _is_vacuous(harness: Path, config: VerifyConfig) -> bool:
     extra run is skipped when there are none.
     """
     try:
-        code = harness.read_text()
+        code = harness.read_text(encoding="utf-8")
     except OSError:
         return False
     if "VERIPP_ASSUME" not in code and "VERIPP_REQUIRES" not in code:
         return False
     probe = harness.with_name(f"{harness.stem}.reachable{harness.suffix}")
     try:
-        probe.write_text(reachability_variant(code))
+        probe.write_text(reachability_variant(code), encoding="utf-8")
         result = run(probe, config)
     except (OSError, RuntimeError):
         return False

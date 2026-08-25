@@ -65,7 +65,7 @@ def find_database(start: Path) -> Path | None:
 
 def load(database: Path) -> list[dict]:
     try:
-        entries = json.loads(database.read_text())
+        entries = json.loads(database.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise CompDBError(f"could not read {database}: {exc}") from exc
     if not isinstance(entries, list):

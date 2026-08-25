@@ -73,7 +73,7 @@ class TestSignature:
 class TestHarness:
     def test_buffer_paired_with_its_length(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text(SOURCE)
+        src.write_text(SOURCE, encoding="utf-8")
         harness = generate(src, "sum_array", HarnessOptions(max_array_len=3))
 
         assert "unsigned n = VERIPP_NONDET_UINT();" in harness.code
@@ -86,21 +86,21 @@ class TestHarness:
 
     def test_preconditions_over_parameters_are_hoisted(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text(SOURCE)
+        src.write_text(SOURCE, encoding="utf-8")
         code = generate(src, "sum_array").code
         assert "VERIPP_ASSUME(n > 0);" in code
 
     def test_preconditions_over_members_are_left_alone(self, tmp_path):
         """`count_ < limit` does not exist in main(); hoisting it would not compile."""
         src = tmp_path / "s.cpp"
-        src.write_text(SOURCE)
+        src.write_text(SOURCE, encoding="utf-8")
         code = generate(src, "add").code
         assert "VERIPP_ASSUME(v >= 0);" in code
         assert "count_" not in code
 
     def test_member_call_uses_a_default_constructed_receiver(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text(SOURCE)
+        src.write_text(SOURCE, encoding="utf-8")
         harness = generate(src, "add")
         assert "Widget veripp_obj;" in harness.code
         assert "veripp_obj.add(v, weight)" in harness.code
@@ -108,21 +108,21 @@ class TestHarness:
 
     def test_static_member_is_called_on_the_class(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text(SOURCE)
+        src.write_text(SOURCE, encoding="utf-8")
         code = generate(src, "clamp").code
         assert "(void)Widget::clamp(v);" in code
         assert "veripp_obj" not in code
 
     def test_void_return_is_not_cast(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text(SOURCE)
+        src.write_text(SOURCE, encoding="utf-8")
         code = generate(src, "fill").code
         assert "fill(out, out_len);" in code
         assert "(void)fill" not in code
 
     def test_assumptions_are_written_into_the_harness_header(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text(SOURCE)
+        src.write_text(SOURCE, encoding="utf-8")
         harness = generate(src, "sum_array")
         header = harness.code.split("int main()")[0]
         for assumption in harness.assumptions:
@@ -130,13 +130,13 @@ class TestHarness:
 
     def test_unmodellable_parameter_is_refused(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text("#include <string>\nint f(std::string s) { return 0; }")
+        src.write_text("#include <string>\nint f(std::string s) { return 0; }", encoding="utf-8")
         with pytest.raises(HarnessError, match="cannot build a nondeterministic value"):
             generate(src, "f")
 
     def test_unguarded_main_is_refused(self, tmp_path):
         src = tmp_path / "s.cpp"
-        src.write_text("int f(int x) { return x; }\nint main() { return f(1); }")
+        src.write_text("int f(int x) { return x; }\nint main() { return f(1); }", encoding="utf-8")
         with pytest.raises(HarnessError, match="defines main\\(\\) unguarded"):
             generate(src, "f")
 
@@ -224,7 +224,7 @@ class TestOutOfLineDefinitions:
             '#include "veripp/contracts.hpp"\n'
             "class Counter { int n_; public:\n  Counter() : n_(0) {}\n  void bump(int by);\n};\n"
             "void Counter::bump(int by) {\n    VERIPP_REQUIRES(by >= 0);\n    n_ += by;\n}\n"
-        )
+        , encoding="utf-8")
         code = generate(src, "bump").code
         assert "Counter veripp_obj;" in code
         assert "veripp_obj.bump(by);" in code
@@ -291,7 +291,7 @@ class TestCIdioms:
             '#include "veripp/contracts.hpp"\n'
             "typedef struct { int n; } item_t;\n"
             "static int peek(item_t * const it) { return it->n; }\n"
-        )
+        , encoding="utf-8")
         assert "it_obj" in generate(p, "peek").code
 
 
@@ -309,12 +309,12 @@ class TestRealWorldCPreprocessor:
             "#ifdef MAKECRCH\n"
             "int main(void) { return 0; }\n"
             "#endif\n"
-        )
+        , encoding="utf-8")
         assert "useful(x)" in generate(p, "useful").code
 
     def test_an_unguarded_main_is_still_refused(self, tmp_path):
         p = tmp_path / "s.c"
-        p.write_text("int f(int x) { return x; }\nint main(void) { return f(1); }\n")
+        p.write_text("int f(int x) { return x; }\nint main(void) { return f(1); }\n", encoding="utf-8")
         with pytest.raises(HarnessError, match="defines main"):
             generate(p, "f")
 
@@ -337,12 +337,12 @@ class TestRealWorldCPreprocessor:
         from veripp.cppsig import collect_scalar_typedefs
         from veripp.harness import _with_local_includes
 
-        (tmp_path / "level3.h").write_text("typedef unsigned long deep_t;\n")
-        (tmp_path / "level2.h").write_text('#include "level3.h"\n')
-        (tmp_path / "level1.h").write_text('#include "level2.h"\n')
+        (tmp_path / "level3.h").write_text("typedef unsigned long deep_t;\n", encoding="utf-8")
+        (tmp_path / "level2.h").write_text('#include "level3.h"\n', encoding="utf-8")
+        (tmp_path / "level1.h").write_text('#include "level2.h"\n', encoding="utf-8")
         src = tmp_path / "a.c"
-        src.write_text('#include "level1.h"\nint f(deep_t x) { return (int)x; }\n')
-        expanded = _with_local_includes(src, src.read_text(), [tmp_path])
+        src.write_text('#include "level1.h"\nint f(deep_t x) { return (int)x; }\n', encoding="utf-8")
+        expanded = _with_local_includes(src, src.read_text(encoding="utf-8"), [tmp_path])
         assert collect_scalar_typedefs(expanded).get("deep_t") == "unsigned long"
 
 
@@ -359,7 +359,7 @@ class TestTypeAliasChains:
             "typedef struct z_stream_s { int avail; } z_stream;\n"
             "typedef z_stream FAR *z_streamp;\n"
             "static int avail(z_streamp s) { return s->avail; }\n"
-        )
+        , encoding="utf-8")
         code = generate(p, "avail").code
         assert "z_stream s_obj;" in code
         assert "s_obj.avail = VERIPP_NONDET_INT();" in code

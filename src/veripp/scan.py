@@ -222,7 +222,7 @@ def scan(
 ) -> ScanReport:
     """Harness and verify every function in `source` that veripp can model."""
     options = options or HarnessOptions()
-    text = source.read_text(errors="replace")
+    text = source.read_text(encoding="utf-8", errors="replace")
     # `main` is an entry point, not a target: harnessing it would just wrap
     # the program's own main in another one.
     names = only or [n for n in function_definitions(text) if n != "main"]

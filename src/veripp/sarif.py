@@ -172,4 +172,4 @@ def build(findings: list[dict], *, root: Path, version: str,
 
 
 def write(path: Path, log: dict) -> None:
-    path.write_text(json.dumps(log, indent=2) + "\n")
+    path.write_text(json.dumps(log, indent=2) + "\n", encoding="utf-8")

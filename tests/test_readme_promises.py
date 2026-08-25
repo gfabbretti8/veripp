@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-README = (ROOT / "README.md").read_text()
+README = (ROOT / "README.md").read_text(encoding="utf-8")
 
 EXIT_VERIFIED, EXIT_COUNTEREXAMPLE, EXIT_USAGE = 0, 1, 2
 
@@ -93,7 +93,7 @@ class TestCompletionSnippet:
         if not shutil.which("bash"):
             pytest.skip("bash")
         script = tmp_path / "c.bash"
-        script.write_text(veripp("completion", "bash").stdout)
+        script.write_text(veripp("completion", "bash").stdout, encoding="utf-8")
         loaded = subprocess.run(
             ["bash", "-c", f'source "{script}" && complete -p veripp'],
             capture_output=True, text=True,

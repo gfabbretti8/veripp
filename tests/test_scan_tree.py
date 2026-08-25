@@ -70,8 +70,8 @@ class TestTreeScan:
     def test_aggregates_across_files(self, tmp_path) -> None:
         (tmp_path / "good.c").write_text(
             "int clamp(int x){ if(x<0) return 0; if(x>100) return 100; return x; }\n"
-        )
-        (tmp_path / "bad.c").write_text("int mean(int a,int b){ return (a+b)/2; }\n")
+        , encoding="utf-8")
+        (tmp_path / "bad.c").write_text("int mean(int a,int b){ return (a+b)/2; }\n", encoding="utf-8")
         result = run("scan", str(tmp_path))
         assert result.returncode == 1, "a tree containing a finding must exit 1"
         assert "Scanned 2 files" in result.stdout
@@ -81,19 +81,19 @@ class TestTreeScan:
     def test_a_clean_tree_exits_zero(self, tmp_path) -> None:
         (tmp_path / "good.c").write_text(
             "int clamp(int x){ if(x<0) return 0; if(x>100) return 100; return x; }\n"
-        )
+        , encoding="utf-8")
         assert run("scan", str(tmp_path)).returncode == 0
 
     @pytest.mark.esbmc
     def test_json_reports_every_file(self, tmp_path) -> None:
-        (tmp_path / "a.c").write_text("int f(int x){ return x; }\n")
-        (tmp_path / "b.c").write_text("int g(int x){ return x; }\n")
+        (tmp_path / "a.c").write_text("int f(int x){ return x; }\n", encoding="utf-8")
+        (tmp_path / "b.c").write_text("int g(int x){ return x; }\n", encoding="utf-8")
         payload = json.loads(run("scan", str(tmp_path), "--json").stdout)
         assert payload["files"] == 2
         assert {Path(e["file"]).name for e in payload["per_file"]} == {"a.c", "b.c"}
 
     def test_an_empty_tree_explains_itself(self, tmp_path) -> None:
-        (tmp_path / "notes.txt").write_text("nothing to verify here\n")
+        (tmp_path / "notes.txt").write_text("nothing to verify here\n", encoding="utf-8")
         result = run("scan", str(tmp_path))
         assert result.returncode == 2
         assert "no C or C++ source files" in result.stderr
@@ -103,7 +103,7 @@ class TestTreeScan:
     def test_one_bad_file_does_not_lose_the_others(self, tmp_path) -> None:
         """A tree scan that aborts on the first unreadable file wastes
         everything it had already done."""
-        (tmp_path / "ok.c").write_text("int f(int x){ return x; }\n")
+        (tmp_path / "ok.c").write_text("int f(int x){ return x; }\n", encoding="utf-8")
         broken = tmp_path / "broken.c"
         broken.write_bytes(b"\xff\xfe\x00 not really source \x00")
         result = run("scan", str(tmp_path))
@@ -131,11 +131,11 @@ class TestTreeWithCompilationDatabase:
         (tmp_path / "src").mkdir()
         (tmp_path / "inc").mkdir()
         (tmp_path / "build").mkdir()
-        (tmp_path / "inc" / "cfg.h").write_text("#define LIMIT 4\n")
+        (tmp_path / "inc" / "cfg.h").write_text("#define LIMIT 4\n", encoding="utf-8")
         (tmp_path / "src" / "a.c").write_text(
             '#include "cfg.h"\n'
             "int at(const int*a,int i){ if(i<0||i>=LIMIT) return 0; return a[i]; }\n"
-        )
+        , encoding="utf-8")
         (tmp_path / "build" / "compile_commands.json").write_text(json.dumps([{
             "directory": str(tmp_path / "build"),
             "file": str(tmp_path / "src" / "a.c"),
@@ -160,7 +160,7 @@ class TestTreeWithCompilationDatabase:
         project = self._project(tmp_path)
         (project / "src" / "extra.c").write_text(
             "int helper(int x){ if(x<0) return 0; return x; }\n"
-        )
+        , encoding="utf-8")
         result = run("scan", "src", "--compile-commands",
                      "build/compile_commands.json", cwd=project)
         assert result.returncode == 0, result.stderr[-800:]
@@ -170,7 +170,7 @@ class TestTreeWithCompilationDatabase:
         """Skipping is right for one file inside a tree, not for the single
         file someone explicitly named."""
         project = self._project(tmp_path)
-        (project / "src" / "extra.c").write_text("int helper(int x){ return x; }\n")
+        (project / "src" / "extra.c").write_text("int helper(int x){ return x; }\n", encoding="utf-8")
         result = run("verify", "src/extra.c", "--function", "helper",
                      "--compile-commands", "build/compile_commands.json", cwd=project)
         assert result.returncode == 2
@@ -187,7 +187,7 @@ class TestOnlyFilter:
             "int parse_header(int x){ return x; }\n"
             "int parse_body(int x){ return x; }\n"
             "int write_out(int x){ return x; }\n"
-        )
+        , encoding="utf-8")
         return tmp_path
 
     @pytest.mark.esbmc
@@ -219,8 +219,8 @@ class TestOnlyFilter:
     def test_across_a_tree_a_file_with_no_match_is_skipped(self, tmp_path) -> None:
         """Not an error there: most files in a tree legitimately contain
         nothing matching."""
-        (tmp_path / "a.c").write_text("int parse_one(int x){ return x; }\n")
-        (tmp_path / "b.c").write_text("int unrelated(int x){ return x; }\n")
+        (tmp_path / "a.c").write_text("int parse_one(int x){ return x; }\n", encoding="utf-8")
+        (tmp_path / "b.c").write_text("int unrelated(int x){ return x; }\n", encoding="utf-8")
         result = run("scan", str(tmp_path), "--only", "parse_*", cwd=tmp_path)
         assert result.returncode == 0
         assert "Scanned 1 file" in result.stdout, result.stdout[-400:]

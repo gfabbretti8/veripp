@@ -443,7 +443,7 @@ def _unconfigured_build_hint(source: Path, include_dirs: list[Path]) -> str | No
 
     def includes_of(path: Path) -> list[str]:
         try:
-            return included_names(path.read_text(errors="replace"))
+            return included_names(path.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             return []
 
@@ -493,7 +493,7 @@ def _suggest_targets(args, wanted: str) -> None:
     if getattr(args, "cls", None):
         try:
             classes = sorted({
-                c.name for c in find_class_ranges(scrub(args.source.read_text(errors="replace")))
+                c.name for c in find_class_ranges(scrub(args.source.read_text(encoding="utf-8", errors="replace")))
             })
         except OSError:
             return
@@ -503,7 +503,7 @@ def _suggest_targets(args, wanted: str) -> None:
         return
 
     try:
-        names = [n for n in function_definitions(args.source.read_text(errors="replace"))
+        names = [n for n in function_definitions(args.source.read_text(encoding="utf-8", errors="replace"))
                  if n != "main"]
     except OSError:
         return
@@ -585,7 +585,7 @@ def _cache_key(args, source: Path, config, options) -> str:
     # this file's verdict without touching it.
     extra: list[Path] = [Path(p).resolve() for p in getattr(args, "link", [])]
     try:
-        for name in included_names(source.read_text(errors="replace")):
+        for name in included_names(source.read_text(encoding="utf-8", errors="replace")):
             for directory in [source.parent, *getattr(args, "include", [])]:
                 candidate = Path(directory) / name
                 if candidate.is_file():
@@ -636,7 +636,7 @@ def _selected_names(args, source: Path) -> list[str] | None:
     from .cppsig import function_definitions
 
     try:
-        defined = [n for n in function_definitions(source.read_text(errors="replace"))
+        defined = [n for n in function_definitions(source.read_text(encoding="utf-8", errors="replace"))
                    if n != "main"]
     except OSError:
         return None
@@ -1048,7 +1048,7 @@ def _emit(args, payload: dict, readable: str) -> None:
         print(readable)
     path = getattr(args, "json_out", None)
     if path:
-        Path(path).write_text(json.dumps(payload, indent=2, default=str))
+        Path(path).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
 
 def _completion_script(shell: str, sub) -> str:

@@ -36,7 +36,7 @@ int declared_elsewhere(int x);
 @pytest.fixture
 def src(tmp_path):
     p = tmp_path / "s.c"
-    p.write_text(SOURCE)
+    p.write_text(SOURCE, encoding="utf-8")
     return p
 
 
@@ -67,7 +67,7 @@ class TestAssumptionRendering:
             '#include "veripp/contracts.hpp"\n'
             "struct S { int /* multi\nline */ n; };\n"
             "static int f(struct S* s) { return s->n; }\n"
-        )
+        , encoding="utf-8")
         header = generate(p, "f").code.split("int main")[0]
         for line in header.splitlines():
             assert line == "" or line.startswith(("//", "#", "int", "struct")) or "#" in line
@@ -104,7 +104,7 @@ class TestScanEndToEnd:
 
     def test_main_is_not_a_target(self, tmp_path):
         p = tmp_path / "m.c"
-        p.write_text("int main(void) { return 0; }\nstatic int f(int x) { return x; }\n")
+        p.write_text("int main(void) { return 0; }\nstatic int f(int x) { return x; }\n", encoding="utf-8")
         assert "main" not in {r.name for r in self._scan(p).results}
 
 
@@ -153,7 +153,7 @@ class TestScanEscalation:
         from veripp.scan import scan
 
         p = tmp_path / "s.c"
-        p.write_text(self.SRC)
+        p.write_text(self.SRC, encoding="utf-8")
         config = VerifyConfig(
             timeout_s=90, unwind=2,
             include_dirs=[contracts_include_dir(), p.parent],
@@ -218,7 +218,7 @@ class TestHarnessLanguage:
         from veripp.harness import generate
 
         p = tmp_path / "s.cpp"
-        p.write_text('#include "veripp/contracts.hpp"\nint f(int x) { return x; }\n')
+        p.write_text('#include "veripp/contracts.hpp"\nint f(int x) { return x; }\n', encoding="utf-8")
         assert generate(p, "f").write(tmp_path / "out").suffix == ".cpp"
 
     def test_the_standard_follows_the_harness_language(self):
@@ -236,7 +236,7 @@ def test_contracts_header_is_usable_from_c():
     have to be guarded."""
     from veripp.paths import contracts_include_dir
 
-    text = (contracts_include_dir() / "veripp" / "contracts.hpp").read_text()
+    text = (contracts_include_dir() / "veripp" / "contracts.hpp").read_text(encoding="utf-8")
     assert "#if defined(__cplusplus)" in text
     assert "_Bool" in text
     # the brace must be inside the guard, not produced by a macro
@@ -259,7 +259,7 @@ class TestGeneratedCIsValidC:
             '#include "veripp/contracts.hpp"\n'
             "typedef struct node { struct node* next; char* label; int n; } node;\n"
             "static int depth(node* r) { return r->next ? r->n : 0; }\n"
-        )
+        , encoding="utf-8")
         for line in generate(p, "depth").code.splitlines():
             stripped = line.strip()
             if stripped.startswith("static ") and "=" in stripped:
@@ -275,7 +275,7 @@ class TestGeneratedCIsValidC:
             '#include "veripp/contracts.hpp"\n'
             "typedef struct { char* label; } item;\n"
             "static int len(item* i) { return i->label ? 1 : 0; }\n"
-        )
+        , encoding="utf-8")
         code = generate(p, "len").code
         assert "i_obj.label = &" in code
 
@@ -291,7 +291,7 @@ class TestEmptyScan:
         from veripp.scan import scan
 
         p = tmp_path / "decls.h"
-        p.write_text("int f(int);\nint g(void);\n")
+        p.write_text("int f(int);\nint g(void);\n", encoding="utf-8")
         report = scan(p, VerifyConfig(), HarnessOptions(), jobs=1)
         assert report.candidates == 0
         assert "no function definitions found" in report.summary()
@@ -301,9 +301,9 @@ class TestEmptyScan:
         from veripp.harness import HarnessOptions
         from veripp.scan import scan
 
-        (tmp_path / "xxhash.h").write_text("int hash(int x) { return x; }\n")
+        (tmp_path / "xxhash.h").write_text("int hash(int x) { return x; }\n", encoding="utf-8")
         wrapper = tmp_path / "xxhash.c"
-        wrapper.write_text("#define XXH_IMPLEMENTATION\n#include \"xxhash.h\"\n")
+        wrapper.write_text("#define XXH_IMPLEMENTATION\n#include \"xxhash.h\"\n", encoding="utf-8")
         summary = scan(wrapper, VerifyConfig(), HarnessOptions(), jobs=1).summary()
         assert "The code is in the header" in summary
         assert "xxhash.h" in summary
@@ -315,5 +315,5 @@ class TestEmptyScan:
         from veripp.scan import scan
 
         p = tmp_path / "api.h"
-        p.write_text("int f(int);\n")
+        p.write_text("int f(int);\n", encoding="utf-8")
         assert "scan the .c/.cpp" in scan(p, VerifyConfig(), HarnessOptions(), jobs=1).summary()

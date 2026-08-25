@@ -22,7 +22,7 @@ def golden():
     """Read a pinned ESBMC transcript captured by tests/golden/capture.sh."""
 
     def _read(name: str) -> str:
-        return (GOLDEN / f"{name}.txt").read_text()
+        return (GOLDEN / f"{name}.txt").read_text(encoding="utf-8")
 
     return _read
 

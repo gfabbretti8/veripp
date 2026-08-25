@@ -58,13 +58,13 @@ class ScriptedLLM:
 @pytest.fixture
 def target(tmp_path):
     src = tmp_path / "scale.cpp"
-    src.write_text(SRC)
+    src.write_text(SRC, encoding="utf-8")
     return TargetInfo(source=src, function="scale")
 
 
 class TestContext:
     def test_call_sites_found_and_definition_excluded(self, target):
-        sites = find_call_sites(target.source.read_text(), "scale")
+        sites = find_call_sites(target.source.read_text(encoding="utf-8"), "scale")
         assert len(sites) == 2
         assert any("scale(3, 2)" in s for s in sites)
         assert not any("int scale(int value" in s for s in sites)

@@ -91,8 +91,8 @@ class TestDocumentedInvocations:
         scanning files one at a time, so that form has to work."""
         src = tmp_path / "src"
         (src / "sub").mkdir(parents=True)
-        (src / "a.c").write_text("int f(int x){ return x; }\n")
-        (src / "sub" / "b.c").write_text("int g(int x){ return x; }\n")
+        (src / "a.c").write_text("int f(int x){ return x; }\n", encoding="utf-8")
+        (src / "sub" / "b.c").write_text("int g(int x){ return x; }\n", encoding="utf-8")
         result = veripp("scan", str(src), "--jobs", "8")
         check(result, "veripp scan DIR --jobs N")
         assert "2 files" in result.stdout, result.stdout[-500:]
@@ -102,14 +102,14 @@ class TestDocumentedInvocations:
         result = veripp("scan", "examples/ring_buffer.cpp", "--json-out", str(report))
         check(result, "veripp scan FILE --json-out PATH")
         assert "Scanned" in result.stdout, "readable output was replaced, not kept"
-        assert json.loads(report.read_text())["candidates"]
+        assert json.loads(report.read_text(encoding="utf-8"))["candidates"]
 
     def test_compile_commands(self, tmp_path) -> None:
         """The skill shows --compile-commands; make sure the flag works with a
         database, including one written for a different absolute root."""
         src = tmp_path / "src"
         src.mkdir()
-        (src / "a.c").write_text("int scale(int x){ return x * 2; }\n")
+        (src / "a.c").write_text("int scale(int x){ return x * 2; }\n", encoding="utf-8")
         db = tmp_path / "build"
         db.mkdir()
         (db / "compile_commands.json").write_text(json.dumps([{
@@ -132,7 +132,7 @@ class TestSkillStaysTrue:
         """
         import inspect
 
-        blocks = re.findall(r"```bash\n(.*?)```", SKILL.read_text(), re.S)
+        blocks = re.findall(r"```bash\n(.*?)```", SKILL.read_text(encoding="utf-8"), re.S)
         documented = {
             flag
             for block in blocks
@@ -154,7 +154,7 @@ class TestSkillStaysTrue:
         no new flag, so the flag guard above would not have noticed it."""
         import inspect
 
-        blocks = re.findall(r"```bash\n(.*?)```", SKILL.read_text(), re.S)
+        blocks = re.findall(r"```bash\n(.*?)```", SKILL.read_text(encoding="utf-8"), re.S)
         documented = {
             line.strip().split()[1]
             for block in blocks

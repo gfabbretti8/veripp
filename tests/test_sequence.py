@@ -46,7 +46,7 @@ struct Counter {
 @pytest.fixture
 def src(tmp_path):
     p = tmp_path / "s.cpp"
-    p.write_text(SOURCE)
+    p.write_text(SOURCE, encoding="utf-8")
     return p
 
 
@@ -103,7 +103,7 @@ class TestSequenceHarness:
             "  void ok(int v) { (void)v; }\n"
             "  void hard(std::string s) { (void)s; }\n"
             "};\n"
-        )
+        , encoding="utf-8")
         harness = generate_sequence(p, "C")
         assert "veripp_obj.ok(" in harness.code
         assert "veripp_obj.hard(" not in harness.code
@@ -111,7 +111,7 @@ class TestSequenceHarness:
 
     def test_class_with_no_drivable_method_is_refused(self, tmp_path):
         p = tmp_path / "s.cpp"
-        p.write_text("#include <string>\nclass C { public: void f(std::string s) { (void)s; } };\n")
+        p.write_text("#include <string>\nclass C { public: void f(std::string s) { (void)s; } };\n", encoding="utf-8")
         with pytest.raises(HarnessError, match="no public method"):
             generate_sequence(p, "C")
 

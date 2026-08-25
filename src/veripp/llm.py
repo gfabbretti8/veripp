@@ -194,7 +194,7 @@ class PromptedLLM:
                 "file in one code block. Do not change program semantics."
             ),
             user=f"Verifier output (truncated):\n{result.raw_output[-4000:]}\n\n"
-            f"Source:\n```cpp\n{source.read_text()}\n```",
+            f"Source:\n```cpp\n{source.read_text(encoding="utf-8")}\n```",
         )
         code = self._extract_code(reply)
         return self._write_variant(source, code, "inv") if code else None
@@ -208,7 +208,7 @@ class PromptedLLM:
                 "file in one code block."
             ),
             user=f"Frontend errors:\n{result.raw_output[-4000:]}\n\n"
-            f"Source:\n```cpp\n{source.read_text()}\n```",
+            f"Source:\n```cpp\n{source.read_text(encoding="utf-8")}\n```",
         )
         code = self._extract_code(reply)
         return self._write_variant(source, code, "fix") if code else None
@@ -222,7 +222,7 @@ class PromptedLLM:
 
     def _write_variant(self, source: Path, code: str, tag: str) -> Path:
         out = source.with_name(f"{source.stem}.{tag}{source.suffix}")
-        out.write_text(code)
+        out.write_text(code, encoding="utf-8")
         return out
 
 

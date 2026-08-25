@@ -33,7 +33,7 @@ int byref(Widget& w)  { return w.count; }
 @pytest.fixture
 def src(tmp_path):
     p = tmp_path / "s.cpp"
-    p.write_text(SOURCE)
+    p.write_text(SOURCE, encoding="utf-8")
     return p
 
 
@@ -145,7 +145,7 @@ class TestFieldTypeHygiene:
             "typedef enum Mode { OFF = 0, ON = 1 } Mode;\n"
             "struct Cfg { Mode mode; int n; };\n"
             "int use(Cfg* c) { return c->mode == ON ? c->n : 0; }\n"
-        )
+        , encoding="utf-8")
         code = generate(p, "use").code
         assert "c_obj.mode = (Mode)VERIPP_NONDET_INT();" in code
         assert "left uninitialised" not in code
@@ -163,7 +163,7 @@ def test_struct_pointer_next_to_a_size_is_one_object_not_an_array(tmp_path):
         "static int reserve(vec_t* v, size_t size) { return v->size < size; }\n"
         "static int total(const int* items, size_t size) {\n"
         "    int s = 0; for (size_t i = 0; i < size; ++i) s += items[i]; return s; }\n"
-    )
+    , encoding="utf-8")
     struct_harness = generate(p, "reserve")
     assert "vec_t v_obj;" in struct_harness.code
     assert "v_buf" not in struct_harness.code          # not treated as an array
@@ -196,7 +196,7 @@ class TestCountedPointerFields:
 
     def _code(self, tmp_path):
         p = tmp_path / "s.c"
-        p.write_text(self.SRC)
+        p.write_text(self.SRC, encoding="utf-8")
         return generate(p, "walk").code
 
     def test_the_buffer_gets_real_elements(self, tmp_path):
@@ -227,7 +227,7 @@ class TestCountedPointerFields:
             '#include "veripp/contracts.hpp"\n'
             "typedef struct Node { int count; struct Node* next; } Node;\n"
             "static int walk(Node* n) { return n->next ? n->next->count : 0; }\n"
-        )
+        , encoding="utf-8")
         code = generate(p, "walk").code
         assert "_target" in code          # the chain is followed
         assert "_next_items" not in code  # not turned into an array
@@ -285,7 +285,7 @@ class TestLibraryInitializers:
 
     def _harness(self, tmp_path, **kw):
         p = tmp_path / "s.c"
-        p.write_text(self.SRC)
+        p.write_text(self.SRC, encoding="utf-8")
         return generate(p, "vec_size", HarnessOptions(**kw))
 
     def test_the_initializer_is_called(self, tmp_path):
@@ -306,7 +306,7 @@ class TestLibraryInitializers:
     def test_an_initializer_is_not_called_on_itself(self, tmp_path):
         """Verifying vec_init must not begin by calling vec_init."""
         p = tmp_path / "s.c"
-        p.write_text(self.SRC)
+        p.write_text(self.SRC, encoding="utf-8")
         assert "vec_init(&v_obj);" not in generate(p, "vec_init").code
 
     def test_an_initializer_needing_more_arguments_is_not_a_drop_in(self, tmp_path):
@@ -316,7 +316,7 @@ class TestLibraryInitializers:
             "typedef struct { int n; } box_t;\n"
             "static void box_init(box_t* b, int n) { b->n = n; }\n"
             "static int box_get(box_t* b) { return b->n; }\n"
-        )
+        , encoding="utf-8")
         code = generate(p, "box_get").code
         assert "box_init" not in code
         assert "b_obj.n = VERIPP_NONDET_INT();" in code
@@ -358,7 +358,7 @@ class TestStructAliases:
     def test_an_aliased_parameter_can_be_harnessed(self, tmp_path):
         p = tmp_path / "s.c"
         p.write_text('#include "veripp/contracts.hpp"\n' + self.SRC +
-                     "static int kind(JSON_Value* v) { return v->type; }\n")
+                     "static int kind(JSON_Value* v) { return v->type; }\n", encoding="utf-8")
         code = generate(p, "kind").code
         assert "v_obj.type = VERIPP_NONDET_INT();" in code
 
@@ -389,7 +389,7 @@ class TestUnions:
         at once."""
         p = tmp_path / "s.c"
         p.write_text('#include "veripp/contracts.hpp"\n' + self.SRC +
-                     "static int use(LZ4_stream_t* s) { return s->p ? 1 : 0; }\n")
+                     "static int use(LZ4_stream_t* s) { return s->p ? 1 : 0; }\n", encoding="utf-8")
         harness = generate(p, "use")
         assert "s_obj.table" not in harness.code
         assert "s_obj.p =" not in harness.code

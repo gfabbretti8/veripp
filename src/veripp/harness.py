@@ -129,7 +129,7 @@ class Harness:
         directory.mkdir(parents=True, exist_ok=True)
         suffix = f".{tag}" if tag else ""
         out = directory / f"veripp_harness_{self.signature.name}{suffix}{self.language_suffix}"
-        out.write_text(self.code)
+        out.write_text(self.code, encoding="utf-8")
         return out
 
 
@@ -204,7 +204,7 @@ def generate(
     "verified" under them is conditional on real callers satisfying them.
     """
     options = options or HarnessOptions()
-    text = source.read_text()
+    text = source.read_text(encoding="utf-8")
     signature = find_function(text, function)
     # Struct definitions usually live in the library's own header, not the .cpp
     # being targeted, so resolve types against both.
@@ -282,7 +282,7 @@ def _linked_text(options: HarnessOptions) -> list[str]:
     parts: list[str] = []
     for path in options.link_sources:
         try:
-            parts.append(path.read_text(errors="replace"))
+            parts.append(path.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             continue
     return parts
@@ -338,7 +338,7 @@ def _with_local_includes(
                     break
                 seen.add(resolved)
                 try:
-                    absorb(candidate, candidate.read_text(errors="replace"), remaining - 1)
+                    absorb(candidate, candidate.read_text(encoding="utf-8", errors="replace"), remaining - 1)
                 except OSError:
                     pass
                 break
@@ -806,7 +806,7 @@ def generate_sequence(
     is explored, not just the initial one.
     """
     options = options or HarnessOptions()
-    text = source.read_text()
+    text = source.read_text(encoding="utf-8")
     info = find_class(text, class_name)
     expanded = _with_local_includes(source, text, options.include_dirs)
     # Linked TUs resolve callees, so their definitions must be visible

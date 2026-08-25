@@ -130,15 +130,15 @@ class TestSuppression:
 @pytest.mark.esbmc
 class TestEndToEnd:
     def test_scan_writes_valid_sarif(self, tmp_path) -> None:
-        (tmp_path / "m.c").write_text(BUGGY)
+        (tmp_path / "m.c").write_text(BUGGY, encoding="utf-8")
         out = tmp_path / "r.sarif"
         veripp("scan", "m.c", "--sarif", str(out), cwd=tmp_path)
-        log = json.loads(out.read_text())
+        log = json.loads(out.read_text(encoding="utf-8"))
         assert log["runs"][0]["results"], "no results written"
 
     def test_sarif_failure_does_not_lose_the_verification(self, tmp_path) -> None:
         """A reporting format must not cost someone a result they paid for."""
-        (tmp_path / "m.c").write_text(BUGGY)
+        (tmp_path / "m.c").write_text(BUGGY, encoding="utf-8")
         result = veripp("scan", "m.c", "--sarif", "/nonexistent/dir/r.sarif",
                         cwd=tmp_path)
         assert result.returncode == 1, "the counterexample verdict was lost"

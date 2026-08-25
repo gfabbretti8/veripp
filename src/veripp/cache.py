@@ -102,7 +102,7 @@ class Cache:
 
     def get(self, key: str) -> dict | None:
         try:
-            payload = json.loads(self.path_for(key).read_text())
+            payload = json.loads(self.path_for(key).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
         # A cache written by another version is not readable, not wrong: drop
@@ -119,7 +119,7 @@ class Cache:
             # Write then move, so an interrupted run cannot leave a truncated
             # entry that later reads as a verdict.
             temporary = self.path_for(key).with_suffix(".tmp")
-            temporary.write_text(json.dumps(body, indent=2, default=str))
+            temporary.write_text(json.dumps(body, indent=2, default=str), encoding="utf-8")
             temporary.replace(self.path_for(key))
         except OSError:
             # A cache that cannot be written must not cost anyone a result.

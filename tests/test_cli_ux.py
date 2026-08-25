@@ -62,7 +62,7 @@ class TestVersion:
     def test_matches_pyproject(self) -> None:
         """__init__ once hard-coded 0.0.1 while pyproject said 0.1.0."""
         declared = re.search(
-            r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.M
+            r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M
         ).group(1)
         assert declared in run("--version").stdout
 
@@ -171,18 +171,18 @@ class TestJsonOut:
         assert "Result: counterexample" in result.stdout
         import json
 
-        assert json.loads(out.read_text())["outcome"]
+        assert json.loads(out.read_text(encoding="utf-8"))["outcome"]
 
     def test_works_for_scan_too(self, tmp_path) -> None:
         out = tmp_path / "s.json"
         run("scan", "examples/ring_buffer.cpp", "--json-out", str(out))
         import json
 
-        assert json.loads(out.read_text())["candidates"]
+        assert json.loads(out.read_text(encoding="utf-8"))["candidates"]
 
     def test_the_action_verifies_only_once(self) -> None:
         """Two runs per job doubled the cost of every verification."""
-        action = (ROOT / "action.yml").read_text()
+        action = (ROOT / "action.yml").read_text(encoding="utf-8")
         block = action[action.index("Run veripp"):]
         assert block.count("veripp verify") == 1, "veripp verify invoked more than once"
         assert block.count("veripp scan") == 1, "veripp scan invoked more than once"
@@ -208,7 +208,7 @@ class TestCompletions:
         if not shutil.which("bash"):
             pytest.skip("bash")
         path = tmp_path / "c.bash"
-        path.write_text(run("completion", "bash").stdout)
+        path.write_text(run("completion", "bash").stdout, encoding="utf-8")
         assert sp.run(["bash", "-n", str(path)], capture_output=True).returncode == 0
         loaded = sp.run(
             ["bash", "-c", f"source {path} && complete -p veripp"],
@@ -223,7 +223,7 @@ class TestCompletions:
         if not shutil.which("zsh"):
             pytest.skip("zsh")
         path = tmp_path / "c.zsh"
-        path.write_text(run("completion", "zsh").stdout)
+        path.write_text(run("completion", "zsh").stdout, encoding="utf-8")
         result = sp.run(["zsh", "-n", str(path)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
 
@@ -281,14 +281,14 @@ class TestRoughInput:
 
     def test_a_directory_does_not_crash(self, tmp_path) -> None:
         """`veripp verify .` used to raise IsADirectoryError and exit 1."""
-        (tmp_path / "a.c").write_text("int f(int x){return x;}\n")
+        (tmp_path / "a.c").write_text("int f(int x){return x;}\n", encoding="utf-8")
         result = run("verify", str(tmp_path), "--function", "f")
         assert "Traceback" not in result.stderr, result.stderr
         assert result.returncode == 2
         assert "is a directory" in result.stderr
 
     def test_a_directory_points_at_a_file_inside_it(self, tmp_path) -> None:
-        (tmp_path / "parser.c").write_text("int f(int x){return x;}\n")
+        (tmp_path / "parser.c").write_text("int f(int x){return x;}\n", encoding="utf-8")
         result = run("scan", str(tmp_path))
         assert "parser.c" in result.stderr
 
@@ -301,7 +301,7 @@ class TestRoughInput:
 
     def test_a_non_c_file_says_so(self, tmp_path) -> None:
         script = tmp_path / "script.py"
-        script.write_text("def f(x):\n    return x\n")
+        script.write_text("def f(x):\n    return x\n", encoding="utf-8")
         result = run("verify", str(script), "--function", "f")
         assert result.returncode == 2
         assert "does not look like a C or C++ source file" in result.stderr
@@ -310,7 +310,7 @@ class TestRoughInput:
         self, tmp_path
     ) -> None:
         header = tmp_path / "decls.h"
-        header.write_text("int f(int x);\nint g(void);\n")
+        header.write_text("int f(int x);\nint g(void);\n", encoding="utf-8")
         result = run("verify", str(header), "--function", "f")
         assert "does not look like" not in result.stderr
         assert "no C or C++ function definitions" in result.stderr
@@ -328,7 +328,7 @@ class TestScanNextStep:
 
     def _scan(self, tmp_path, body: str):
         src = tmp_path / "m.c"
-        src.write_text(body)
+        src.write_text(body, encoding="utf-8")
         return run("scan", str(src))
 
     @pytest.mark.esbmc

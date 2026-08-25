@@ -567,7 +567,7 @@ def check_soundness(esbmc_bin: str | None = None, timeout_s: int = 60) -> dict[s
     with tempfile.TemporaryDirectory() as tmp:
         for name, (code, std) in SOUNDNESS_PROBES.items():
             path = Path(tmp) / "probe.c"
-            path.write_text(code)
+            path.write_text(code, encoding="utf-8")
             try:
                 proc = subprocess.run(
                     [binary, str(path), "--std", std, "--unwind", "8"],

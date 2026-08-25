@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def read(name: str) -> str:
-    return (ROOT / name).read_text()
+    return (ROOT / name).read_text(encoding="utf-8")
 
 
 class TestAction:
@@ -249,7 +249,7 @@ class TestPluginPackaging:
             assert source.startswith("./"), source
             manifest = ROOT / source / ".claude-plugin/plugin.json"
             assert manifest.is_file(), f"{source} has no plugin manifest"
-            assert json.loads(manifest.read_text())["name"] == entry["name"]
+            assert json.loads(manifest.read_text(encoding="utf-8"))["name"] == entry["name"]
 
     def test_plugin_version_matches_the_package(self) -> None:
         import json
@@ -332,7 +332,7 @@ class TestWorkflows:
         files = list((ROOT / ".github/workflows").glob("*.yml")) + [ROOT / "action.yml"]
         assert files
         for path in files:
-            yaml.safe_load(path.read_text())
+            yaml.safe_load(path.read_text(encoding="utf-8"))
 
     def test_image_workflow_verifies_the_manifest_covers_both_arches(self) -> None:
         text = read(".github/workflows/image.yml")
@@ -847,7 +847,7 @@ class TestNpxPackage:
 
         script = ROOT / "npm/install-skill.mjs"
         assert script.stat().st_mode & stat.S_IXUSR
-        assert script.read_text().startswith("#!/usr/bin/env node")
+        assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env node")
         pkg = json.loads(read("package.json"))
         assert not pkg.get("dependencies"), (
             "an installer with dependencies is slower to npx and more to trust"
@@ -896,3 +896,25 @@ class TestNpxPackage:
         assert "/tmp/skills" not in code
         assert "SKILL_SOURCE" in code, "the source path must be resolvable"
         assert "$PWD/skills/veripp/SKILL.md" in code
+
+
+class TestEncodingIsExplicit:
+    """Reading a file without an encoding uses the platform default, which on
+    Windows is cp1252. A UTF-8 source then either crashes with
+    UnicodeDecodeError or -- with errors="replace", which is worse -- decodes
+    to mangled identifiers. Found by running the suite on windows-latest,
+    where collection died on the README's em dashes."""
+
+    def test_no_unencoded_reads_or_writes(self) -> None:
+        offenders = []
+        for path in sorted((ROOT / "src" / "veripp").glob("*.py")):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                for call in ("read_text(", "write_text("):
+                    if call in line and "encoding=" not in line:
+                        offenders.append(f"{path.name}:{number}")
+        assert not offenders, (
+            "these use the platform default encoding, which breaks on "
+            f"Windows: {offenders}"
+        )

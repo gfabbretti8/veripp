@@ -48,62 +48,62 @@ class TestKeyCoversEverythingThatMatters:
 
     def test_the_file_itself(self, tmp_path) -> None:
         f = tmp_path / "a.c"
-        f.write_text("int f(void){return 1;}\n")
+        f.write_text("int f(void){return 1;}\n", encoding="utf-8")
         first = _key(source=f)
-        f.write_text("int f(void){return 2;}\n")
+        f.write_text("int f(void){return 2;}\n", encoding="utf-8")
         assert _key(source=f) != first
 
     def test_the_bounds(self, tmp_path) -> None:
         from veripp.esbmc import VerifyConfig
 
-        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n")
+        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n", encoding="utf-8")
         assert _key(source=f) != _key(source=f, config=VerifyConfig(unwind=99))
 
     def test_the_harness_options(self, tmp_path) -> None:
         """A different array bound is a different question."""
         from veripp.harness import HarnessOptions
 
-        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n")
+        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n", encoding="utf-8")
         assert _key(source=f) != _key(source=f, options=HarnessOptions(max_array_len=16))
 
     def test_the_checker_version(self, tmp_path) -> None:
         """A different checker can disagree about the same code, so a cache
         shared across one is not a cache."""
-        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n")
+        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n", encoding="utf-8")
         assert _key(source=f) != _key(source=f, checker_version="esbmc-y")
 
     def test_veripps_own_version(self, tmp_path) -> None:
         """The harness generator changes what is asked."""
-        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n")
+        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n", encoding="utf-8")
         assert _key(source=f) != _key(source=f, veripp_version="2.0")
 
     def test_a_header_or_linked_source(self, tmp_path) -> None:
         """These are inputs, not context: changing one can flip a verdict
         without the file under test changing at all."""
-        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n")
-        h = tmp_path / "h.h"; h.write_text("#define N 4\n")
+        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n", encoding="utf-8")
+        h = tmp_path / "h.h"; h.write_text("#define N 4\n", encoding="utf-8")
         first = _key(source=f, extra_files=[h])
-        h.write_text("#define N 99\n")
+        h.write_text("#define N 99\n", encoding="utf-8")
         assert _key(source=f, extra_files=[h]) != first
 
     def test_an_unchanged_input_keeps_its_key(self, tmp_path) -> None:
-        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n")
+        f = tmp_path / "a.c"; f.write_text("int f(void){return 1;}\n", encoding="utf-8")
         assert _key(source=f) == _key(source=f)
 
 
 @pytest.mark.esbmc
 class TestBehaviour:
     def test_an_unchanged_file_is_reused(self, tmp_path) -> None:
-        (tmp_path / "a.c").write_text(CLEAN)
+        (tmp_path / "a.c").write_text(CLEAN, encoding="utf-8")
         run("scan", ".", cwd=tmp_path)
         second = run("scan", ".", cwd=tmp_path)
         assert "cached" in second.stderr
 
     def test_editing_one_file_reverifies_only_it(self, tmp_path) -> None:
-        (tmp_path / "a.c").write_text(CLEAN)
-        (tmp_path / "b.c").write_text("int twice(int x){ if(x>99||x<-99) return 0; return x*2; }\n")
+        (tmp_path / "a.c").write_text(CLEAN, encoding="utf-8")
+        (tmp_path / "b.c").write_text("int twice(int x){ if(x>99||x<-99) return 0; return x*2; }\n", encoding="utf-8")
         run("scan", ".", cwd=tmp_path)
-        (tmp_path / "a.c").write_text(CLEAN.replace("100", "50"))
+        (tmp_path / "a.c").write_text(CLEAN.replace("100", "50"), encoding="utf-8")
         again = run("scan", ".", cwd=tmp_path)
         assert "1 of 2 files" in again.stderr, again.stderr[-400:]
 
@@ -118,7 +118,7 @@ class TestBehaviour:
             "int at(const int*a,int i){ if(i<0||i>=limit()) return 0; return a[i]; }\n"
         )
         assert run("scan", "t.c", cwd=tmp_path).returncode == 0
-        source.write_text(source.read_text().replace("return 4;", "return 99;"))
+        source.write_text(source.read_text(encoding="utf-8").replace("return 4;", "return 99;"))
         after = run("scan", "t.c", cwd=tmp_path)
         assert after.returncode == 1, (
             "a stale 'verified' was served after a callee changed:\n"
@@ -126,14 +126,14 @@ class TestBehaviour:
         )
 
     def test_no_cache_disables_it(self, tmp_path) -> None:
-        (tmp_path / "a.c").write_text(CLEAN)
+        (tmp_path / "a.c").write_text(CLEAN, encoding="utf-8")
         run("scan", ".", cwd=tmp_path)
         assert "cached" not in run("scan", ".", "--no-cache", cwd=tmp_path).stderr
 
     def test_only_results_are_not_cached_as_the_files_verdict(self, tmp_path) -> None:
         """A subset scan answers a different question; storing it as the
         file's verdict would hide every function it skipped."""
-        (tmp_path / "a.c").write_text(CLEAN + "int mean(int a,int b){return (a+b)/2;}\n")
+        (tmp_path / "a.c").write_text(CLEAN + "int mean(int a,int b){return (a+b)/2;}\n", encoding="utf-8")
         run("scan", "a.c", "--only", "clamp", cwd=tmp_path)
         full = run("scan", "a.c", cwd=tmp_path)
         assert full.returncode == 1, "the skipped buggy function was masked"
@@ -145,14 +145,14 @@ class TestCacheStore:
 
         cache = Cache(tmp_path)
         cache.directory.mkdir(exist_ok=True)
-        cache.path_for("k").write_text(json.dumps({"cache_version": 0, "results": []}))
+        cache.path_for("k").write_text(json.dumps({"cache_version": 0, "results": []}), encoding="utf-8")
         assert cache.get("k") is None
 
     def test_corrupt_entries_are_ignored_not_fatal(self, tmp_path) -> None:
         from veripp.cache import Cache
 
         cache = Cache(tmp_path)
-        cache.path_for("k").write_text("{ truncated")
+        cache.path_for("k").write_text("{ truncated", encoding="utf-8")
         assert cache.get("k") is None
 
     def test_an_unwritable_cache_does_not_raise(self, tmp_path) -> None:

@@ -20,7 +20,7 @@ def main() -> int:
     if len(sys.argv) != 2:
         sys.exit(f"usage: {Path(sys.argv[0]).name} VERSION   (e.g. 0.1.1)")
     version = sys.argv[1].lstrip("v")
-    text = (ROOT / "CHANGELOG.md").read_text()
+    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     section = re.search(
         rf"^## {re.escape(version)}\n(.*?)(?=^## |\Z)", text, re.S | re.M
     )

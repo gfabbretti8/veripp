@@ -69,7 +69,7 @@ class Baseline:
     @classmethod
     def load(cls, path: Path) -> Baseline:
         try:
-            raw = json.loads(path.read_text())
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise BaselineError(f"{path} not found") from exc
         except json.JSONDecodeError as exc:
@@ -125,7 +125,7 @@ class Baseline:
                 )
             ],
         }
-        path.write_text(json.dumps(payload, indent=2) + "\n")
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     # -- using -------------------------------------------------------------
 
