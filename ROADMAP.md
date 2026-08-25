@@ -50,7 +50,12 @@ Known M1 limits, all disclosed at runtime rather than papered over:
       reports these for C but not C++, so veripp works them out itself).
 - [x] `veripp scan`: harness and verify every function in a file, and report
       what could not be reached and why.
-- [ ] Cache keyed on function-body hash; `veripp verify-changed` for CI.
+- [x] Incremental verification: unchanged files are reused. Deliberately NOT
+      keyed on the function body, which this milestone originally called for
+      and which is unsound — a function can be byte-identical and change
+      verdict when a callee changes, so a body hash serves a stale "verified".
+      The key covers the translation unit, its local headers, linked sources,
+      the bounds, the harness options and the checker's version.
 - Note: the libclang slicer this milestone originally called for was dropped.
   The measured blocker was never TU assembly -- tinyxml2 is a single .cpp and
   still failed -- it was type visibility and frontend gaps, addressed by

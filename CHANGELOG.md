@@ -10,15 +10,6 @@ run, and refuses to back results from one that cannot detect a planted bug.
 ## Unreleased
 
 ### Added
-- `npx veripp-skill` installs the agent skill with nothing but Node — into
-  `./.claude/skills/veripp`, or `--global` for every project. It installs the
-  skill, not the verifier, and says so: the verifier is a Python program
-  needing ESBMC, and the skill's own `install.sh` reports what getting it
-  would cost before doing anything.
-
-## Unreleased
-
-### Added
 - `veripp accept` records current findings to a `.veripp-baseline`, and
   `veripp scan --baseline` fails only on findings absent from it. Pointed at an
   existing codebase a verifier reports everything at once — cJSON gives 33
@@ -62,18 +53,24 @@ run, and refuses to back results from one that cannot detect a planted bug.
   the product the name advertises, and one command closes it.
 - `npx veripp-skill` installs the agent skill with nothing but Node.
 
-### Fixed
-- Every file read and write is explicitly UTF-8. Without an encoding Python
-  uses the platform default, which on Windows is cp1252: veripp then crashed
-  on any source file containing a non-ASCII byte, or silently mis-decoded it
-  where `errors="replace"` was set. Found by running the suite on
-  windows-latest.
+- `npx veripp-skill` installs the agent skill with nothing but Node — into
+  `./.claude/skills/veripp`, or `--global` for every project. It installs the
+  skill, not the verifier, and says so: the verifier is a Python program
+  needing ESBMC, and the skill's own `install.sh` reports what getting it
+  would cost before doing anything.
 
 ### Changed
 - The README leads with something runnable. The first command a reader could
   run used to be 109 lines in, behind four sections of context; the three
   install routes and the worked examples are now at the top, with the exit-code
   contract beside them.
+
+### Fixed
+- Every file read and write is explicitly UTF-8. Without an encoding Python
+  uses the platform default, which on Windows is cp1252: veripp then crashed
+  on any source file containing a non-ASCII byte, or silently mis-decoded it
+  where `errors="replace"` was set. Found by running the suite on
+  windows-latest.
 
 ## 0.1.3
 

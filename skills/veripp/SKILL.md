@@ -76,12 +76,49 @@ veripp will propose a precondition itself if an LLM is configured
 (`--model`), but the solver re-checks every proposal, so treat the proposal as
 a hypothesis, not an answer.
 
+## Working on an existing codebase
+
+Pointed at code that already exists, veripp reports everything at once. cJSON
+gives 33 counterexamples on a first run. Failing a build on all of them gets
+the check deleted, so record what is already there and fail only on what
+appears afterwards:
+
+```bash
+veripp accept src/ --baseline .veripp-baseline   # commit this file
+veripp scan   src/ --baseline .veripp-baseline   # now fails only on new findings
+```
+
+The baseline is JSON and meant to be read in the pull request that adds it:
+each entry is a risk somebody decided to carry. Findings are keyed on
+(file, function, property), never line numbers, so moving code does not
+resurrect an accepted finding. When an accepted finding stops occurring veripp
+says so, because an entry matching nothing still grants permission to whatever
+matches it later.
+
+**Suggest this whenever someone is adding veripp to a project that already has
+code.** Recommending a bare `veripp scan` there produces a wall of findings and
+a bad first impression of the tool.
+
 ## Common invocations
 
 ```bash
 # a whole project: every .c/.cc/.cpp/.cxx underneath, skipping build and
 # vendor trees. Prefer this to scanning files one at a time.
 veripp scan src/ --jobs 8
+
+# only what you are working on -- seconds instead of minutes on a big file
+veripp scan src/ --only 'parse_*'
+
+# an inconclusive result usually means it ran out of budget, not that the
+# code is wrong. More of both is the first thing to try.
+veripp verify src/parser.c --function parse --unwind 64 --timeout 300
+
+# findings as SARIF, so CI can put them on the pull request diff rather than
+# in a log (github/codeql-action/upload-sarif reads this)
+veripp scan src/ --sarif veripp.sarif --baseline .veripp-baseline
+
+# unchanged files are reused from cache automatically
+veripp scan src/ --cache .veripp-cache   # or --no-cache to verify everything
 
 # a whole file, in parallel, machine-readable
 veripp scan src/parser.c --jobs 4 --json

@@ -131,3 +131,48 @@ class TestDemoTimingClaim:
         assert elapsed < 180, (
             f"the README says ~30 seconds; this took {elapsed:.0f}s"
         )
+
+
+class TestReadmeWorkflows:
+    """The README hands people a workflow to copy. It has to parse, and it has
+    to keep the ordering that makes it work."""
+
+    @staticmethod
+    def _workflows():
+        import yaml
+
+        blocks = re.findall(r"```yaml\n(.*?)```", README, re.S)
+        out = []
+        for block in blocks:
+            doc = yaml.safe_load(block)
+            if isinstance(doc, dict) and "jobs" in doc:
+                out.append(doc)
+        return out
+
+    def test_every_yaml_block_parses(self) -> None:
+        yaml = pytest.importorskip("yaml")
+        for block in re.findall(r"```yaml\n(.*?)```", README, re.S):
+            yaml.safe_load(block)
+
+    def test_the_ci_example_uploads_sarif_before_failing(self) -> None:
+        """Without this ordering a finding fails the job before the SARIF is
+        uploaded, and the annotations explaining the failure never appear."""
+        pytest.importorskip("yaml")
+        workflows = self._workflows()
+        assert workflows, "no complete workflow in the README"
+        steps = workflows[0]["jobs"]["veripp"]["steps"]
+
+        verify = next(i for i, s in enumerate(steps) if "veripp@" in str(s.get("uses", "")))
+        upload = next(i for i, s in enumerate(steps) if "upload-sarif" in str(s.get("uses", "")))
+        assert upload > verify, "SARIF is uploaded before veripp runs"
+        assert steps[verify].get("continue-on-error") is True, (
+            "without continue-on-error the job dies before the upload"
+        )
+        assert any("exit 1" in str(s.get("run", "")) for s in steps[upload:]), (
+            "nothing fails the job after the upload, so findings never go red"
+        )
+
+    def test_it_requests_the_permission_sarif_needs(self) -> None:
+        pytest.importorskip("yaml")
+        workflow = self._workflows()[0]
+        assert workflow.get("permissions", {}).get("security-events") == "write"

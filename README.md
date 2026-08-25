@@ -217,17 +217,40 @@ veripp accept src/ --baseline .veripp-baseline   # commit this
 ```
 
 ```yaml
-- uses: gfabbretti8/veripp@main
-  with:
-    source: src/
-    baseline: .veripp-baseline
-    sarif: veripp.sarif
+name: verify
+on: [pull_request]
 
-- uses: github/codeql-action/upload-sarif@v3
-  if: always()
-  with:
-    sarif_file: veripp.sarif
+permissions:
+  contents: read
+  security-events: write      # required to upload SARIF
+
+jobs:
+  veripp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: gfabbretti8/veripp@main
+        id: verify
+        continue-on-error: true    # let the SARIF upload run either way
+        with:
+          source: src/
+          baseline: .veripp-baseline
+          sarif: veripp.sarif
+
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: veripp.sarif
+
+      - name: Fail on new findings
+        if: steps.verify.outcome == 'failure'
+        run: exit 1
 ```
+
+`continue-on-error` plus the explicit final step is deliberate: without it a
+finding fails the job before the SARIF is uploaded, and the annotations that
+explain the failure never appear on the diff.
 
 With `sarif:` each finding becomes an annotation on the pull request diff
 instead of a line in a job log. Findings covered by the baseline are uploaded
@@ -351,6 +374,24 @@ Build trees, vendored dependencies and dotted directories are skipped
 left alone because definitions live in the source file. The file count is
 printed before the work starts, findings are grouped by file, and the exit
 code is 1 if anything anywhere failed.
+
+## Adding veripp to code that already exists
+
+The first run on an existing codebase reports everything at once — cJSON gives
+33 counterexamples. Record what is already there, then fail only on what
+appears afterwards:
+
+```bash
+veripp accept src/ --baseline .veripp-baseline   # commit this
+veripp scan   src/ --baseline .veripp-baseline   # exits 1 only on new findings
+```
+
+The file is JSON, sorted, and meant to be reviewed in the pull request that
+adds it: each entry is a risk someone decided to carry, with the signature and
+the date recorded beside it. Findings are keyed on (file, function, property)
+rather than line numbers, so moving code around does not resurrect an accepted
+finding. When one stops occurring veripp says so, because an entry that matches
+nothing still grants permission to whatever matches it later.
 
 ## Scan a whole file
 

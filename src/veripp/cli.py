@@ -84,9 +84,15 @@ dereference and division by zero -- or hands you an input that breaks them.
 You do not write the harness; veripp generates it from the signature.
 
   veripp doctor                       is the checker present, and is it sound?
-  veripp scan   src/parser.c          every function in a file
+  veripp scan   src/                  every function under a directory
   veripp verify src/parser.c --function parse_header
   veripp harness src/parser.c --function parse_header   see what it generated
+
+Adding this to a project that already has code? Record what is there first,
+so CI fails only on what appears afterwards:
+
+  veripp accept src/ --baseline .veripp-baseline
+  veripp scan   src/ --baseline .veripp-baseline
 
 Exit codes: 0 verified   1 counterexample   2 usage   3 inconclusive
 
