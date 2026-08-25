@@ -261,3 +261,35 @@ class TestPropertySet:
             assert name in described, f"{name} missing from: {described}"
         # And a check that did not run must not be listed.
         assert "ub-shift" not in VerifyConfig(overflow_check=False).describe()
+
+    def test_nan_checking_is_on_because_the_harness_makes_it_usable(self) -> None:
+        """Raw ESBMC users leave --nan-check off for a reason: with
+        unconstrained nondet doubles, a/b is NaN for inf/inf, so it reports
+        every floating-point division in correct code. veripp writes the
+        harness and constrains float inputs to finite values, which turns a
+        check nobody can use into one that works.
+        """
+        from veripp.esbmc import VerifyConfig
+
+        args = " ".join(str(a) for a in VerifyConfig().to_args(Path("x.c")))
+        assert "--nan-check" in args
+
+    def test_the_harness_constrains_floats_to_finite_values(self) -> None:
+        header = (
+            Path(__file__).resolve().parent.parent
+            / "src/veripp/include/veripp/contracts.hpp"
+        ).read_text(encoding="utf-8")
+        assert "veripp_finite_double" in header
+        assert "__ESBMC_assume" in header
+        assert "value == value" in header, "the NaN exclusion"
+
+    def test_float_overflow_to_infinity_is_explained_not_just_reported(self) -> None:
+        """finite / finite can exceed a double's range and give infinity --
+        defined IEEE behaviour, which ESBMC cannot separate from integer
+        overflow. Reporting it like a memory error would mislead."""
+        from veripp.triage import _MECHANICAL_ARTIFACTS
+
+        reasons = [why for needle, why in _MECHANICAL_ARTIFACTS
+                   if "floating-point" in needle]
+        assert reasons, "float overflow has no explanation"
+        assert "defined IEEE behaviour" in reasons[0]

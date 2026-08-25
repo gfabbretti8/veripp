@@ -53,8 +53,31 @@ double __VERIFIER_nondet_double();
 #define VERIPP_NONDET_SIZE() ((unsigned long)__VERIFIER_nondet_ulong())
 #define VERIPP_NONDET_CHAR() __VERIFIER_nondet_char()
 #define VERIPP_NONDET_BOOL() __VERIFIER_nondet_bool()
-#define VERIPP_NONDET_FLOAT() __VERIFIER_nondet_float()
-#define VERIPP_NONDET_DOUBLE() __VERIFIER_nondet_double()
+// Floating-point inputs are constrained to finite values. Without this an
+// unconstrained double may be an infinity or a NaN, and then a/b is NaN for
+// inf/inf -- so a NaN check reports every floating-point division in correct
+// code. Constrained, the same check becomes useful: quiet on code that
+// guards its divisor, and still catching a genuine 0.0/0.0.
+//
+// This is an assumption, and it is listed with every result that relies on
+// it: veripp is checking the function for finite inputs, not for infinities
+// a caller could in principle pass.
+#define VERIPP_NONDET_FLOAT() (veripp_finite_float())
+#define VERIPP_NONDET_DOUBLE() (veripp_finite_double())
+
+static inline float veripp_finite_float(void) {
+    float value = __VERIFIER_nondet_float();
+    __ESBMC_assume(value == value);                    // not NaN
+    __ESBMC_assume(value < __FLT_MAX__ && value > -__FLT_MAX__);
+    return value;
+}
+
+static inline double veripp_finite_double(void) {
+    double value = __VERIFIER_nondet_double();
+    __ESBMC_assume(value == value);                    // not NaN
+    __ESBMC_assume(value < __DBL_MAX__ && value > -__DBL_MAX__);
+    return value;
+}
 
 // Guard for a demo/self-test main() living inside a verified source file.
 // veripp defines VERIPP_GENERATED_HARNESS in the harness it generates for a

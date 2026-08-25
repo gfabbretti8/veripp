@@ -53,6 +53,13 @@ class VerifyConfig:
     memory_leak_check: bool = True
     uninitialised_check: bool = True
     ub_shift_check: bool = True
+    #: Usable only because veripp writes the harness. With unconstrained
+    #: nondet doubles a/b is NaN for inf/inf, so this check reports every
+    #: floating-point division in correct code -- which is why raw ESBMC users
+    #: leave it off. veripp constrains float inputs to finite values, and the
+    #: check then does its job: quiet on code that guards its divisor, still
+    #: catching a genuine 0.0/0.0.
+    nan_check: bool = True
 
     #: Off by default, and this is a judgement rather than an oversight:
     #: unsigned wraparound is DEFINED behaviour in C. djb2 (`h * 33u + c`) is
@@ -104,6 +111,8 @@ class VerifyConfig:
         # checking back on, so passing it alongside --no-overflow-check would
         # silently ignore what the user asked for. They travel together: if
         # overflow checking is off, this goes off with it.
+        if self.nan_check:
+            args.append("--nan-check")
         if self.ub_shift_check and self.overflow_check:
             args.append("--ub-shift-check")
         if self.termination:
@@ -143,6 +152,7 @@ class VerifyConfig:
                 ("memory-leak", self.memory_leak_check),
                 ("uninitialised", self.uninitialised_check),
                 ("ub-shift", self.ub_shift_check and self.overflow_check),
+                ("nan", self.nan_check),
                 ("termination", self.termination),
             )
             if on

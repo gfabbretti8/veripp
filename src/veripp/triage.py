@@ -37,6 +37,17 @@ _MECHANICAL_ARTIFACTS: tuple[tuple[str, str], ...] = (
         "the harness's doing, not the library's",
     ),
     (
+        # finite / finite can exceed a double's range and give infinity. That
+        # is defined IEEE behaviour, and ESBMC cannot separate it from integer
+        # overflow, so it fires on any function doing float arithmetic.
+        "arithmetic overflow on floating-point ieee_",
+        "dividing or multiplying two finite doubles can exceed the range of a "
+        "double and give infinity. That is defined IEEE behaviour rather than "
+        "undefined behaviour, and ESBMC cannot separate it from integer "
+        "overflow. Treat it as a finding only if overflow to infinity matters "
+        "in your domain",
+    ),
+    (
         # Reproduced in eight lines: allocating through a function pointer
         # yields this, while the same code calling malloc directly verifies.
         # The checker cannot establish the alignment of a pointer returned by
