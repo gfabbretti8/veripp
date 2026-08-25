@@ -33,6 +33,11 @@ jobs:
           # The weekly tag is rolling, so the cache key carries the week.
           key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml') }}
 
+      # zsh is not on the runner image, and without it the zsh completion is
+      # generated but never checked for validity -- a broken one would ship.
+      - name: Install zsh, for the completion tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+
       - name: Install ESBMC
         if: steps.cache-esbmc.outputs.cache-hit != 'true'
         run: |
@@ -52,7 +57,7 @@ jobs:
       - run: uv sync --locked
       # No --allow-unsound: the tracked build must pass the soundness probes.
       - run: uv run veripp doctor
-      - run: uv run pytest -q
+      - run: uv run pytest -q -rs
 
   # The tests run from a source checkout; this proves the published artifact
   # works too. The contracts header must ship inside the wheel or every

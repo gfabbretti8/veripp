@@ -39,7 +39,11 @@ Changelog = "https://github.com/gfabbretti8/veripp/blob/main/CHANGELOG.md"
 
 # PEP 735 group: `uv sync` installs it by default, `uv sync --no-dev` skips it.
 [dependency-groups]
-dev = ["pytest>=8"]
+# PyYAML is a test dependency, not a runtime one: several tests parse the
+# workflows to check they are valid and that the act harness enumerates the
+# same jobs the workflow defines. Without it those tests skip silently, which
+# is how they were never running anywhere -- neither locally nor in CI.
+dev = ["pytest>=8", "pyyaml>=6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

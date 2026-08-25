@@ -759,3 +759,34 @@ class TestInstallerHonesty:
         assert "docker login" in code, (
             "the likely cause of a failed read is missing credentials; say so"
         )
+
+
+class TestTestsActuallyRun:
+    """A skipped test protects nothing, and pytest skips quietly.
+
+    Two tests here parsed the workflows and never ran anywhere -- PyYAML was
+    in no dependency group, so `importorskip` skipped them locally and in CI
+    alike. They were counted as passing for weeks.
+    """
+
+    def test_yaml_is_a_declared_test_dependency(self) -> None:
+        pyproject = read("pyproject.toml")
+        dev = re.search(r"^dev = \[(.+?)\]", pyproject, re.M | re.S)
+        assert dev, "no dev dependency group"
+        assert "yaml" in dev.group(1).lower(), (
+            "tests parse the workflows; without PyYAML declared they skip "
+            "silently instead of failing"
+        )
+
+    def test_ci_installs_the_shells_the_completion_tests_need(self) -> None:
+        """zsh is absent from the runner image, so the zsh completion was
+        generated in CI and never checked for validity."""
+        ci = read(".github/workflows/ci.yml")
+        assert "zsh" in ci, "CI must install zsh or the zsh completion is untested"
+
+    def test_ci_reports_why_anything_skipped(self) -> None:
+        ci = read(".github/workflows/ci.yml")
+        assert re.search(r"pytest[^\n]*-rs", ci), (
+            "run pytest with -rs in CI: a test that silently stops running is "
+            "a test that stops protecting anything"
+        )
