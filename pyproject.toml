@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "veripp"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-operated formal verification for real C++ code (ESBMC + LLM agent loop)"
 readme = "README.md"
 requires-python = ">=3.10"

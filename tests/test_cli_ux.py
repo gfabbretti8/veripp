@@ -321,3 +321,31 @@ class TestRoughInput:
         result = run("verify", str(broken), "--function", "broken")
         assert "Traceback" not in result.stderr
         assert result.returncode in (1, 2, 3)
+
+
+class TestScanNextStep:
+    """A tally answers "what happened". The reader's question is "what now"."""
+
+    def _scan(self, tmp_path, body: str):
+        src = tmp_path / "m.c"
+        src.write_text(body)
+        return run("scan", str(src))
+
+    @pytest.mark.esbmc
+    def test_counterexamples_get_a_runnable_command(self, tmp_path) -> None:
+        out = self._scan(tmp_path, "int mean(int a,int b){ return (a+b)/2; }\n").stdout
+        assert "next:" in out
+        assert "veripp verify" in out and "--function mean" in out
+
+    @pytest.mark.esbmc
+    def test_it_says_a_counterexample_may_not_be_reachable(self, tmp_path) -> None:
+        """The honest caveat: the input holds in the generated harness, which
+        is not the same as a caller being able to produce it."""
+        out = self._scan(tmp_path, "int mean(int a,int b){ return (a+b)/2; }\n").stdout
+        assert "caller" in out
+
+    @pytest.mark.esbmc
+    def test_a_clean_scan_does_not_nag(self, tmp_path) -> None:
+        body = "int clamp(int x){ if(x<0) return 0; if(x>100) return 100; return x; }\n"
+        out = self._scan(tmp_path, body).stdout
+        assert "next:" not in out, "nothing to do, so say nothing"

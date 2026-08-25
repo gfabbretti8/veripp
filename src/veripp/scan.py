@@ -120,7 +120,44 @@ class ScanReport:
                 lines.append(f"    {r.name}: {r.detail}")
             if len(self.counterexamples) > 20:
                 lines.append(f"    ... and {len(self.counterexamples) - 20} more")
+
+        # End on something to do. A tally answers "what happened"; the reader's
+        # actual question is "what now", and the answer differs by result.
+        nudge = self._next_step()
+        if nudge:
+            lines += ["", nudge]
         return "\n".join(lines)
+
+    def _next_step(self) -> str | None:
+        """The single most useful next command, given how this scan went."""
+        where = self.source
+
+        if self.counterexamples:
+            first = sorted(self.counterexamples, key=lambda r: r.name)[0]
+            return (
+                f"  next:  veripp verify {where} --function {first.name}\n"
+                "         to see the failing input. A counterexample holds in the\n"
+                "         generated harness; check a caller can really reach it."
+            )
+        if self.inconclusive:
+            return (
+                f"  next:  veripp verify {where} --function "
+                f"{sorted(self.inconclusive, key=lambda r: r.name)[0].name} "
+                "--unwind 16 --timeout 300\n"
+                "         nothing was proved or disproved for these; more budget\n"
+                "         sometimes settles it."
+            )
+        if self.artifacts:
+            return (
+                "  next:  veripp harness "
+                f"{where} --function "
+                f"{sorted(self.artifacts, key=lambda r: r.name)[0].name}\n"
+                "         these failed on how the harness was built, not on the\n"
+                "         code; read it to see what it assumed."
+            )
+        if self.proved and not self.refusal_reasons():
+            return None
+        return None
 
 
 _IMPL_DEFINE_RE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+(\w*IMPL\w*)", re.M | re.I)
