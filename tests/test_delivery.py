@@ -886,7 +886,13 @@ class TestNpxPackage:
         existed only in the Docker harness. On a GitHub runner it compared
         against a file that was not there and reported "SKILL.md differs from
         source" -- a true statement about the wrong thing, and green locally."""
-        text = read("npm/test-install.sh")
-        assert "/tmp/skills" not in text
-        assert "SKILL_SOURCE" in text, "the source path must be resolvable"
-        assert "$PWD/skills/veripp/SKILL.md" in text
+        # Judge the code, not the comment recording why the path was wrong.
+        # Fifth time in this repo -- see the same strip in the action.yml,
+        # Dockerfile, demo-shim and act-harness tests.
+        code = "\n".join(
+            line for line in read("npm/test-install.sh").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "/tmp/skills" not in code
+        assert "SKILL_SOURCE" in code, "the source path must be resolvable"
+        assert "$PWD/skills/veripp/SKILL.md" in code
