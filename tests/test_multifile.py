@@ -9,7 +9,11 @@ arguments.
 
 import json
 
+from pathlib import Path
+
 import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
 
 from veripp.compdb import CompDBError, entry_for, find_database, sources
 from veripp.cppsig import unresolved_callees
@@ -249,4 +253,27 @@ class TestDatabasePathsAcrossPlatforms:
         assert not any("build" in str(d) and "usr" in str(d) for d in entry.include_dirs), (
             f"an absolute path was joined onto the database directory: "
             f"{entry.include_dirs}"
+        )
+
+    def test_a_windows_command_string_keeps_its_separators(self) -> None:
+        """shlex in POSIX mode eats backslashes, so a Windows path in a
+        database's `command` string came back as "C:projinclude" — every
+        include path silently wrong. Found on windows-latest."""
+        import shlex
+
+        command = r"c++ -IC:\proj\include -c C:\proj\src\a.c"
+        assert "C:projinclude" in shlex.split(command)[1], (
+            "this test documents the trap; if POSIX mode stops eating "
+            "backslashes it can go"
+        )
+        assert r"C:\proj\include" in shlex.split(command, posix=False)[1]
+
+    def test_the_parser_does_not_use_posix_mode_unconditionally(self) -> None:
+        code = "\n".join(
+            line for line in (ROOT / "src/veripp/compdb.py").read_text(
+                encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "posix=" in code, (
+            "shlex.split must choose its mode, not default to POSIX on Windows"
         )

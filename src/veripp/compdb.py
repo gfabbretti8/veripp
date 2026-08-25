@@ -9,6 +9,7 @@ the difference between "works on the examples" and "works on your project".
 from __future__ import annotations
 
 import json
+import os
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -200,7 +201,13 @@ def _parse(raw: dict, directory: Path, source: Path) -> CompileEntry:
     if "arguments" in raw:
         tokens = list(raw["arguments"])
     else:
-        tokens = shlex.split(raw.get("command", ""))
+        # POSIX mode treats a backslash as an escape, so a Windows path in
+        # the command string comes back with its separators eaten:
+        # "-IC:\\proj\\include" becomes "-IC:projinclude". Silent, and every
+        # include path is then wrong. Prefer the "arguments" array when a
+        # database provides one; when only "command" is available, split it
+        # the way the running platform quotes.
+        tokens = shlex.split(raw.get("command", ""), posix=(os.name != "nt"))
 
     entry = CompileEntry(file=source, directory=directory)
     i = 1  # token 0 is the compiler
