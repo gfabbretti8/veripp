@@ -582,3 +582,38 @@ class TestSkillInstaller:
         )
         assert result.returncode in (0, 3, 4), result.stdout + result.stderr
         assert "Re-run with --yes" in result.stdout or "image" in result.stdout
+
+
+class TestActHarness:
+    """Local Action testing on arm64, which is otherwise impossible: the
+    action installs ESBMC by download, and upstream publishes no arm64 Linux
+    binary, so it correctly refuses before anything can be exercised."""
+
+    PATH = "tests/act_local.sh"
+
+    def test_is_executable_and_valid_bash(self) -> None:
+        import subprocess
+
+        assert (ROOT / self.PATH).stat().st_mode & stat.S_IXUSR
+        result = subprocess.run(
+            ["bash", "-n", str(ROOT / self.PATH)], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_resolves_libraries_rather_than_copying_symlinks(self) -> None:
+        """`docker cp` copies a symlink as a symlink, so the staged libraries
+        dangle and the binary will not start. cp -L inside the image is what
+        makes this work at all."""
+        assert "cp -L" in read(self.PATH)
+
+    def test_stages_somewhere_the_runtime_shares(self) -> None:
+        """colima and Lima do not share /tmp or /var/folders; a bind mount
+        from there silently becomes an empty directory."""
+        text = read(self.PATH)
+        assert "$HOME" in text
+        assert "/tmp/veripp-act" not in text
+
+    def test_relies_on_the_actions_reuse_step(self) -> None:
+        """The harness only works because the action prefers an ESBMC already
+        on PATH. If that step is ever dropped, this stops testing anything."""
+        assert "Use an ESBMC already on PATH" in read("action.yml")
