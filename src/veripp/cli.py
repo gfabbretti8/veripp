@@ -89,6 +89,16 @@ Full options:  veripp <command> --help
 
 
 def main(argv: list[str] | None = None) -> int:
+    # veripp's output contains characters (em dashes, and whatever a source
+    # file's identifiers hold) that the console's codepage may not cover.
+    # Windows picks a codepage rather than UTF-8, and an unencodable character
+    # turns a finished verification into a traceback at the last moment.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
+
     parser = _Parser(
         prog="veripp",
         description="AI-operated formal verification for C and C++",

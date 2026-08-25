@@ -185,3 +185,40 @@ class TestTreeScanReport:
         """bool is a subclass of int; True must not read as a count of 1."""
         out = render("0", dict(self.REPORT, artifacts=True), tmp_path).stdout
         assert "| 🔧 Harness artifacts | 0 |" in out
+
+
+class TestOutputEncoding:
+    """The summary writes ✅ and ❌. Python encodes stdout with the platform's
+    preferred encoding, which on Windows is a codepage that has neither, so
+    printing raised UnicodeEncodeError and the summary vanished entirely --
+    the step showed nothing at all. Found on windows-latest.
+
+    PYTHONIOENCODING reproduces it without a Windows machine.
+    """
+
+    def test_renders_under_a_codepage_without_the_symbols(self, tmp_path) -> None:
+        import os
+        import subprocess
+        import sys as _sys
+
+        env = {"VERIPP_STATUS": "0", "PATH": os.environ.get("PATH", ""),
+               "PYTHONIOENCODING": "cp437"}
+        result = subprocess.run(
+            [_sys.executable, str(SCRIPT)], capture_output=True, text=True,
+            env=env, timeout=120,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Verified" in result.stdout, result.stderr
+
+    def test_an_unencodable_symbol_would_otherwise_fail(self) -> None:
+        """Confirms the simulation is real rather than vacuous."""
+        import subprocess
+        import sys as _sys
+
+        result = subprocess.run(
+            [_sys.executable, "-c", "print('\\u2705')"],
+            capture_output=True, text=True,
+            env={"PYTHONIOENCODING": "cp437"}, timeout=120,
+        )
+        assert result.returncode != 0
+        assert "UnicodeEncodeError" in result.stderr

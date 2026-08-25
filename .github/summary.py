@@ -26,6 +26,15 @@ VERDICT = {
 
 
 def main() -> int:
+    # This writes ✅ and ❌. Python encodes stdout with the platform's
+    # preferred encoding, which on Windows is a codepage that has neither, so
+    # printing raises UnicodeEncodeError and the summary vanishes. The step
+    # summary file itself is UTF-8; only our end of the pipe needs telling.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):
+        pass
+
     status = os.environ.get("VERIPP_STATUS", "")
     outcome = {"0": "verified", "1": "counterexample", "2": "usage-error"}.get(
         status, "inconclusive"
