@@ -48,7 +48,21 @@ run, and refuses to back results from one that cannot detect a planted bug.
   keyed on the function body, which is unsound: a function can be
   byte-identical and change verdict when a callee changes, and a body hash
   would serve the stale "verified".
+- The default unwind bound is 32, was 8. Measured on 37 cJSON functions:
+  29% decided before, 62% after, in the same wall time (488s vs 489s). The
+  old default was tuned for loops people write, but library code constantly
+  memsets and memcpys structs, and those loops need a bound near the struct's
+  size — `cJSON_CreateArray` has no loop of its own and was inconclusive at 8
+  and at 32, needing 128, which the old ladder never reached. Pass `--unwind`
+  to override.
 - `npx veripp-skill` installs the agent skill with nothing but Node.
+
+### Fixed
+- Every file read and write is explicitly UTF-8. Without an encoding Python
+  uses the platform default, which on Windows is cp1252: veripp then crashed
+  on any source file containing a non-ASCII byte, or silently mis-decoded it
+  where `errors="replace"` was set. Found by running the suite on
+  windows-latest.
 
 ### Changed
 - The README leads with something runnable. The first command a reader could

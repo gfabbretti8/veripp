@@ -328,7 +328,10 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         help="property checked after every call in a --class sequence; the "
         "object under test is named `veripp_obj`. Repeatable.",
     )
-    bounds.add_argument("--unwind", type=int, default=8)
+    bounds.add_argument(
+        "--unwind", type=int, default=32,
+        help="loop unwinding bound (default 32)",
+    )
     bounds.add_argument("--timeout", type=int, default=120, help="per-attempt timeout (s)")
     build.add_argument("--std", default=_DEFAULT_STD)
     bounds.add_argument(

@@ -37,7 +37,7 @@ class Outcome(Enum):
 class VerifyConfig:
     """Parameters of one verification attempt. Recorded verbatim in reports."""
 
-    unwind: int = 8
+    unwind: int = 32
     timeout_s: int = 120
     k_induction: bool = False
     incremental_bmc: bool = False

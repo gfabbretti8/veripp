@@ -2,6 +2,8 @@
 
 import json
 
+from veripp.esbmc import VerifyConfig
+
 import pytest
 
 from veripp.cli import EXIT_COUNTEREXAMPLE, EXIT_VERIFIED, main
@@ -67,7 +69,10 @@ def test_json_output_carries_the_assumptions(capsys, examples):
     assert payload["function"] == "sum_array"
     assert payload["assumptions"]
     assert payload["violated_property"]["loc"]["line"] == 7
-    assert payload["config"]["unwind"] == 8
+    # The point is that the JSON carries the bound it used, not what that
+    # bound happens to be. Duplicating the literal makes this fail on any
+    # tuning change while testing nothing extra.
+    assert payload["config"]["unwind"] == VerifyConfig().unwind
     assert any(a["lvalue"] == "n" for step in payload["trace"] for a in step["assignments"])
 
 

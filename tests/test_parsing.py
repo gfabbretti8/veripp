@@ -123,7 +123,7 @@ class TestConfigArgs:
         assert "--no-div-by-zero-check" in off
 
     def test_describe_states_the_bound(self):
-        assert "unwind=8" in VerifyConfig().describe()
+        assert "unwind=32" in VerifyConfig().describe()
         assert "k-induction" in VerifyConfig(k_induction=True).describe()
 
 
