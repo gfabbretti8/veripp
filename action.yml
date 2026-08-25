@@ -32,6 +32,19 @@ inputs:
     required: false
     default: 'weekly'
 
+outputs:
+  outcome:
+    description: >-
+      "verified", "counterexample", "inconclusive", or "usage-error". Lets a
+      later step branch without re-deriving it from the exit code.
+    value: ${{ steps.run.outputs.outcome }}
+  exit-code:
+    description: 'veripp exit code: 0 verified, 1 counterexample, 2 usage, 3 inconclusive.'
+    value: ${{ steps.run.outputs.exit-code }}
+  report:
+    description: 'Path to the JSON report, for a step that wants the detail.'
+    value: ${{ steps.run.outputs.report }}
+
 runs:
   using: 'composite'
   steps:
@@ -47,8 +60,23 @@ runs:
         path: ~/.cache/veripp-esbmc
         key: veripp-esbmc-${{ inputs.esbmc-version }}-${{ runner.os }}
 
+    # A self-hosted runner, a prewarmed container, or an earlier step may
+    # already have one. Downloading 235MB over the top of a working checker
+    # helps nobody -- and on arm64, where no prebuilt exists, reusing what is
+    # there is the only way this action runs at all.
+    - name: Use an ESBMC already on PATH
+      id: existing
+      shell: bash
+      run: |
+        if command -v esbmc >/dev/null 2>&1; then
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "Reusing $(command -v esbmc)"
+        else
+          echo "found=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Install ESBMC
-      if: steps.cache-esbmc.outputs.cache-hit != 'true'
+      if: steps.existing.outputs.found != 'true' && steps.cache-esbmc.outputs.cache-hit != 'true'
       shell: bash
       env:
         ESBMC_VERSION: ${{ inputs.esbmc-version }}
@@ -82,6 +110,7 @@ runs:
         unzip -q /tmp/esbmc.zip -d ~/.cache/veripp-esbmc
 
     - name: Put ESBMC on PATH
+      if: steps.existing.outputs.found != 'true'
       shell: bash
       run: |
         bin="$(find ~/.cache/veripp-esbmc -name esbmc -type f | head -1)"
@@ -97,6 +126,7 @@ runs:
       run: uv run --project "$GITHUB_ACTION_PATH" veripp doctor
 
     - name: Run veripp
+      id: run
       shell: bash
       # Inputs arrive as environment variables rather than being interpolated
       # into the script text: a branch name or an args string is attacker-
@@ -118,16 +148,43 @@ runs:
         set +e
         # Word-splitting of VERIPP_ARGS is intended -- it carries flags like
         # `-I include -D NDEBUG`.
+        report="$RUNNER_TEMP/veripp-report.json"
+
         # shellcheck disable=SC2086
         if [ -n "$VERIPP_FUNCTION" ]; then
           uv run --project "$GITHUB_ACTION_PATH" \
             veripp verify "$VERIPP_SOURCE" --function "$VERIPP_FUNCTION" $VERIPP_ARGS
+          status=$?
+          uv run --project "$GITHUB_ACTION_PATH" \
+            veripp verify "$VERIPP_SOURCE" --function "$VERIPP_FUNCTION" $VERIPP_ARGS \
+            --json > "$report" 2>/dev/null || true
         else
           uv run --project "$GITHUB_ACTION_PATH" \
             veripp scan "$VERIPP_SOURCE" $VERIPP_ARGS
+          status=$?
+          uv run --project "$GITHUB_ACTION_PATH" \
+            veripp scan "$VERIPP_SOURCE" $VERIPP_ARGS \
+            --json > "$report" 2>/dev/null || true
         fi
-        status=$?
         set -e
+
+        case "$status" in
+          0) outcome=verified ;;
+          1) outcome=counterexample ;;
+          2) outcome=usage-error ;;
+          *) outcome=inconclusive ;;
+        esac
+        {
+          echo "outcome=$outcome"
+          echo "exit-code=$status"
+          echo "report=$report"
+        } >> "$GITHUB_OUTPUT"
+
+        # A readable summary on the run page, so nobody has to open the log to
+        # learn what happened. Best effort: a malformed report must never turn
+        # a real result into a failed step.
+        VERIPP_STATUS="$status" VERIPP_REPORT="$report" \
+        python3 "$GITHUB_ACTION_PATH/.github/summary.py" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
         # 0 verified, 1 counterexample, 2 usage, 3 inconclusive/vacuous.
         case "$status" in

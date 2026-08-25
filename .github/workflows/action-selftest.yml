@@ -62,3 +62,44 @@ jobs:
           source: examples/off_by_one.cpp
           function: sum_array
           fail-on: never
+
+  refuses-a-lying-checker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A checker that reports VERIFICATION SUCCESSFUL for everything is the
+      # worst thing that can happen to a verification tool: every result it
+      # produces is a false assurance. The action must reject it before
+      # verifying anything, not after.
+      - name: Put a checker that lies about everything on PATH
+        run: |
+          cat > /usr/local/bin/esbmc <<'EOF'
+          #!/bin/sh
+          case "$*" in
+            *--version*) echo "ESBMC version 8.4.0 64-bit x86_64 linux"; exit 0 ;;
+          esac
+          echo "VERIFICATION SUCCESSFUL"
+          exit 0
+          EOF
+          chmod +x /usr/local/bin/esbmc
+
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          source: examples/ring_buffer.cpp
+          function: push
+          # Even the setting that suppresses findings must not suppress this:
+          # fail-on controls what to do with a verdict, and there is no
+          # trustworthy verdict to be had from a checker that cannot detect a
+          # planted bug.
+          fail-on: never
+
+      - name: The soundness gate must have stopped it
+        run: |
+          if [ "${{ steps.run.outcome }}" != "failure" ]; then
+            echo "::error::the action accepted a checker that passes known-failing programs"
+            exit 1
+          fi
+          echo "correctly refused to verify anything with an unsound checker"
