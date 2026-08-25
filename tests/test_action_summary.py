@@ -9,6 +9,7 @@ what matters, and that nothing makes it blow up.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -20,7 +21,12 @@ SCRIPT = ROOT / ".github/summary.py"
 
 
 def render(status: str, report=None, tmp_path=None) -> subprocess.CompletedProcess:
-    env = {"VERIPP_STATUS": status, "PATH": "/usr/bin:/bin"}
+    # Inherit the real environment and override only what this test controls.
+    # A hardcoded POSIX PATH leaves Python unable to start on Windows, where
+    # the interpreter needs its own directories to load at all -- the process
+    # then produces no output and every assertion fails against None.
+    env = {**os.environ, "VERIPP_STATUS": status}
+    env.pop("VERIPP_REPORT", None)
     if report is not None:
         path = tmp_path / "report.json"
         path.write_text(report if isinstance(report, str) else json.dumps(report), encoding="utf-8")
@@ -125,7 +131,9 @@ class TestNeverBreaksTheStep:
     def test_no_environment_at_all(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],
-            capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, timeout=120,
+            capture_output=True, text=True,
+            env={k: v for k, v in os.environ.items() if k != "VERIPP_REPORT"},
+            timeout=120,
         )
         assert result.returncode == 0
         assert result.stdout.strip()
@@ -201,8 +209,8 @@ class TestOutputEncoding:
         import subprocess
         import sys as _sys
 
-        env = {"VERIPP_STATUS": "0", "PATH": os.environ.get("PATH", ""),
-               "PYTHONIOENCODING": "cp437"}
+        env = {**os.environ, "VERIPP_STATUS": "0", "PYTHONIOENCODING": "cp437"}
+        env.pop("VERIPP_REPORT", None)
         result = subprocess.run(
             [_sys.executable, str(SCRIPT)], capture_output=True, text=True,
             env=env, timeout=120,
@@ -218,7 +226,7 @@ class TestOutputEncoding:
         result = subprocess.run(
             [_sys.executable, "-c", "print('\\u2705')"],
             capture_output=True, text=True,
-            env={"PYTHONIOENCODING": "cp437"}, timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "cp437"}, timeout=120,
         )
         assert result.returncode != 0
         assert "UnicodeEncodeError" in result.stderr
