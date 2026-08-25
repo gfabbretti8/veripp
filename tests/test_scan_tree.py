@@ -115,3 +115,63 @@ class TestVerifyStillWantsAFile:
         result = run("verify", "examples", "--function", "f")
         assert result.returncode == 2
         assert "veripp scan examples" in result.stderr
+
+
+@pytest.mark.esbmc
+class TestTreeWithCompilationDatabase:
+    """The real-project path: a source tree plus compile_commands.json.
+
+    Everything derived from the source has to be derived per file. A database
+    is keyed by translation unit, and the harness's include path starts at the
+    file's own directory -- neither means anything for a directory.
+    """
+
+    @staticmethod
+    def _project(tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "inc").mkdir()
+        (tmp_path / "build").mkdir()
+        (tmp_path / "inc" / "cfg.h").write_text("#define LIMIT 4\n")
+        (tmp_path / "src" / "a.c").write_text(
+            '#include "cfg.h"\n'
+            "int at(const int*a,int i){ if(i<0||i>=LIMIT) return 0; return a[i]; }\n"
+        )
+        (tmp_path / "build" / "compile_commands.json").write_text(json.dumps([{
+            "directory": str(tmp_path / "build"),
+            "file": str(tmp_path / "src" / "a.c"),
+            "command": f"cc -I{tmp_path / 'inc'} -c {tmp_path / 'src' / 'a.c'}",
+        }]))
+        return tmp_path
+
+    def test_the_database_reaches_each_file(self, tmp_path) -> None:
+        """Resolving once against the tree root looked the *directory* up in
+        the database, which matches nothing: the scan died with a usage error
+        before verifying anything."""
+        project = self._project(tmp_path)
+        result = run("scan", "src", "--compile-commands",
+                     "build/compile_commands.json", cwd=project)
+        assert result.returncode == 0, result.stderr[-800:]
+        assert "not in" not in result.stderr, result.stderr[-400:]
+        assert "PROVED" in result.stderr or "PROVED" in result.stdout
+
+    def test_a_file_outside_the_database_does_not_abort_the_run(self, tmp_path) -> None:
+        """A tree legitimately contains files no database covers -- tests,
+        fuzzers, generated code. Losing the whole scan over one is wrong."""
+        project = self._project(tmp_path)
+        (project / "src" / "extra.c").write_text(
+            "int helper(int x){ if(x<0) return 0; return x; }\n"
+        )
+        result = run("scan", "src", "--compile-commands",
+                     "build/compile_commands.json", cwd=project)
+        assert result.returncode == 0, result.stderr[-800:]
+        assert "Scanned 2 files" in result.stdout
+
+    def test_a_single_file_still_fails_loudly_on_a_bad_database(self, tmp_path) -> None:
+        """Skipping is right for one file inside a tree, not for the single
+        file someone explicitly named."""
+        project = self._project(tmp_path)
+        (project / "src" / "extra.c").write_text("int helper(int x){ return x; }\n")
+        result = run("verify", "src/extra.c", "--function", "helper",
+                     "--compile-commands", "build/compile_commands.json", cwd=project)
+        assert result.returncode == 2
+        assert "not in" in result.stderr

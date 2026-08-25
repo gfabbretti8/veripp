@@ -7,6 +7,18 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## Unreleased
+
+### Fixed
+- `veripp scan DIR --compile-commands ...` died with a usage error before
+  verifying anything, and an auto-discovered database silently gave every file
+  no include paths. A compilation database is keyed by translation unit and the
+  harness's include path starts at the file's own directory, so both are now
+  resolved per file rather than once against the tree root. A file the database
+  does not cover — a test, a fuzzer, generated code — is scanned without its
+  flags instead of aborting the run; naming such a file directly still fails
+  loudly.
+
 ## 0.1.2
 
 Scanning a project rather than a file.

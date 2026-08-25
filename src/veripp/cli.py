@@ -516,9 +516,28 @@ def _scan_tree(args) -> int:
               "directories", file=sys.stderr)
         return EXIT_USAGE
 
-    config = _config_for(args)
-    options = _harness_options(args)
     reports: list = []
+
+    # Everything derived from the source has to be derived per file. A
+    # compilation database is keyed by translation unit, and the harness's
+    # include path starts at the file's own directory -- neither means
+    # anything for a directory. Resolving once against the tree root looked
+    # the directory up in the database, which matches nothing: with an
+    # explicit --compile-commands the scan died with a usage error before
+    # verifying anything, and with an auto-discovered one every file silently
+    # lost its include paths.
+    import copy
+
+    def settings_for(source: Path, first: bool):
+        per_file = copy.copy(args)
+        per_file.source = source
+        # One note about a database that does not cover the tree is useful;
+        # one per file is noise.
+        per_file._compdb_quiet = not first
+        # A tree legitimately contains files the database does not cover
+        # (tests, fuzzers, generated code). Skip their flags, do not abort.
+        per_file._compdb_optional = True
+        return _config_for(per_file), _harness_options(per_file)
 
     if not args.quiet and not args.json:
         print(f"scanning {len(sources)} file"
@@ -544,6 +563,7 @@ def _scan_tree(args) -> int:
                   f"{result.name}", file=sys.stderr)
 
         try:
+            config, options = settings_for(source, first=index == 1)
             reports.append(scan(source, config, options, jobs=args.jobs,
                                 progress=progress, escalations=args.escalations))
         except Exception as exc:  # one unreadable file must not lose the rest
@@ -907,11 +927,14 @@ def _compile_entry(args, quiet: bool = False):
     elif not database.is_file():
         print(f"error: {database} not found", file=sys.stderr)
         raise SystemExit(EXIT_USAGE)
+    quiet = quiet or getattr(args, "_compdb_quiet", False)
     try:
         entry = entry_for(database, args.source)
     except CompDBError as exc:
         # Auto-discovery must never break a run that would otherwise work.
-        if args.compile_commands is not None:
+        if args.compile_commands is not None and not getattr(
+            args, "_compdb_optional", False
+        ):
             print(f"error: {exc}", file=sys.stderr)
             raise SystemExit(EXIT_USAGE) from exc
         if not quiet:
