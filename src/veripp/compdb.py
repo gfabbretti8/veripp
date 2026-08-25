@@ -50,6 +50,20 @@ class CompileEntry:
         return args
 
 
+def normalise(path: Path) -> Path:
+    """Tidy separators and `..` without inventing a drive.
+
+    A database written on one platform and read on another mixes separators
+    ("C:\\proj/include"), and two spellings of the same directory compare
+    unequal. resolve() would fix that but also anchors a POSIX path to the
+    current drive on Windows, turning "/usr/include" into "C:/usr/include" --
+    a different place. normpath does the tidying and nothing else.
+    """
+    import os
+
+    return Path(os.path.normpath(str(path)))
+
+
 def looks_absolute(value: str | Path) -> bool:
     """Whether a compilation database means this path absolutely.
 
@@ -213,7 +227,8 @@ def _absorb(entry: CompileEntry, flag: str, value: str, directory: Path) -> None
     if flag in ("-I", "-isystem", "-iquote"):
         path = Path(value)
         entry.include_dirs.append(
-            path if looks_absolute(path) else (directory / path).resolve()
+            normalise(path) if looks_absolute(path)
+            else normalise(directory / path)
         )
     elif flag == "-D":
         entry.defines.append(value)
@@ -222,7 +237,8 @@ def _absorb(entry: CompileEntry, flag: str, value: str, directory: Path) -> None
     elif flag == "-include":
         path = Path(value)
         entry.force_includes.append(
-            path if looks_absolute(path) else (directory / path).resolve()
+            normalise(path) if looks_absolute(path)
+            else normalise(directory / path)
         )
 
 
@@ -233,7 +249,7 @@ def sources(database: Path) -> list[Path]:
         directory = Path(raw.get("directory", database.parent))
         candidate = Path(raw.get("file", ""))
         result.append(
-            candidate if looks_absolute(candidate)
-            else (directory / candidate).resolve()
+            normalise(candidate) if looks_absolute(candidate)
+            else normalise(directory / candidate)
         )
     return result

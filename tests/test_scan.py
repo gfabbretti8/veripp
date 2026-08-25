@@ -182,6 +182,7 @@ class TestAdviceIsTimely:
         main(["verify", str(src), "--function", "safe_add", "--timeout", "90"])
         assert "no LLM configured" not in capsys.readouterr().err
 
+    @pytest.mark.esbmc
     def test_the_hint_appears_when_there_is_something_to_triage(
         self, capsys, src, monkeypatch
     ):
