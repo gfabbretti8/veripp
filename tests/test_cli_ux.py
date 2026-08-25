@@ -273,3 +273,51 @@ class TestMistypedTarget:
     def test_a_file_with_no_classes_says_so(self) -> None:
         result = run("verify", "examples/off_by_one.cpp", "--class", "Foo")
         assert "no class" in result.stderr
+
+
+class TestRoughInput:
+    """What happens when the tool is pointed at something that is not a
+    tidy C file. These are ordinary slips, and a crash is never the answer."""
+
+    def test_a_directory_does_not_crash(self, tmp_path) -> None:
+        """`veripp verify .` used to raise IsADirectoryError and exit 1."""
+        (tmp_path / "a.c").write_text("int f(int x){return x;}\n")
+        result = run("verify", str(tmp_path), "--function", "f")
+        assert "Traceback" not in result.stderr, result.stderr
+        assert result.returncode == 2
+        assert "is a directory" in result.stderr
+
+    def test_a_directory_points_at_a_file_inside_it(self, tmp_path) -> None:
+        (tmp_path / "parser.c").write_text("int f(int x){return x;}\n")
+        result = run("scan", str(tmp_path))
+        assert "parser.c" in result.stderr
+
+    def test_an_empty_file_says_it_is_empty(self, tmp_path) -> None:
+        empty = tmp_path / "empty.c"
+        empty.touch()
+        result = run("verify", str(empty), "--function", "f")
+        assert result.returncode == 2
+        assert "is empty" in result.stderr
+
+    def test_a_non_c_file_says_so(self, tmp_path) -> None:
+        script = tmp_path / "script.py"
+        script.write_text("def f(x):\n    return x\n")
+        result = run("verify", str(script), "--function", "f")
+        assert result.returncode == 2
+        assert "does not look like a C or C++ source file" in result.stderr
+
+    def test_a_c_file_with_no_definitions_is_not_blamed_on_its_suffix(
+        self, tmp_path
+    ) -> None:
+        header = tmp_path / "decls.h"
+        header.write_text("int f(int x);\nint g(void);\n")
+        result = run("verify", str(header), "--function", "f")
+        assert "does not look like" not in result.stderr
+        assert "no C or C++ function definitions" in result.stderr
+
+    def test_unparseable_c_does_not_crash(self, tmp_path) -> None:
+        broken = tmp_path / "broken.c"
+        broken.write_text("int broken(int x { return x;\n")
+        result = run("verify", str(broken), "--function", "broken")
+        assert "Traceback" not in result.stderr
+        assert result.returncode in (1, 2, 3)

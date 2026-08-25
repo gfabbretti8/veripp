@@ -183,6 +183,34 @@ def main(argv: list[str] | None = None) -> int:
             print(hint, file=sys.stderr)
         return EXIT_USAGE
 
+    # Pointing at a directory is an ordinary slip -- `veripp scan .` reads as
+    # though it should work. It used to reach read_text() and die with a
+    # traceback, which is never an acceptable answer to a plausible mistake.
+    if args.source.is_dir():
+        print(f"error: {args.source} is a directory; veripp works on one "
+              "source file at a time", file=sys.stderr)
+        try:
+            nearby = sorted(
+                p.name for p in args.source.iterdir()
+                if p.suffix in {".c", ".cc", ".cpp", ".cxx"}
+            )[:5]
+        except OSError:
+            nearby = []
+        if nearby:
+            print(f"  try:  veripp {args.command} {args.source / nearby[0]}",
+                  file=sys.stderr)
+            if len(nearby) > 1:
+                print(f"  this directory also has: {', '.join(nearby[1:])}",
+                      file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        if args.source.stat().st_size == 0:
+            print(f"error: {args.source} is empty", file=sys.stderr)
+            return EXIT_USAGE
+    except OSError:
+        pass
+
     if args.command == "scan":
         return _scan(args)
 
@@ -414,6 +442,15 @@ def _suggest_targets(args, wanted: str) -> None:
     except OSError:
         return
     if not names:
+        # No C/C++ function definitions at all. If the suffix is not one we
+        # recognise, that is almost certainly the actual problem.
+        known = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc"}
+        if args.source.suffix and args.source.suffix not in known:
+            print(f"  {args.source.name} does not look like a C or C++ source "
+                  f"file ({args.source.suffix})", file=sys.stderr)
+        else:
+            print("  no C or C++ function definitions were found in this file",
+                  file=sys.stderr)
         return
     base = wanted.split("(")[0]
     close = difflib.get_close_matches(base, names, n=3, cutoff=0.6)
