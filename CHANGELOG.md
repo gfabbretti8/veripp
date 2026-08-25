@@ -55,6 +55,11 @@ run, and refuses to back results from one that cannot detect a planted bug.
   size — `cJSON_CreateArray` has no loop of its own and was inconclusive at 8
   and at 32, needing 128, which the old ladder never reached. Pass `--unwind`
   to override.
+- `benchmarks/TRIAGE.md` records how far the LLM triage path is actually
+  evidenced: the path runs end to end against a real model, a 7B local model
+  scores 0/2 and over-reports real bugs, and no hosted model has been graded
+  because nothing here has an API key. That last gap sits under the half of
+  the product the name advertises, and one command closes it.
 - `npx veripp-skill` installs the agent skill with nothing but Node.
 
 ### Fixed

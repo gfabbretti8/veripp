@@ -165,6 +165,13 @@ the triage proposes that precondition itself; the solver confirms it. See
 
 ## Bring your own model
 
+> **How well does the triage actually work?** The path is validated end to end
+> against a real model, and a 7B local model scores 0/2 on the benchmark. No
+> hosted model has been graded here — see
+> [benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md)
+> for exactly what is and is not evidenced, and the one command that closes it.
+
+
 Triage works with any provider, and veripp needs no extra packages for most of
 them — everything except Anthropic speaks the OpenAI-compatible HTTP API,
 which veripp calls with the standard library.
