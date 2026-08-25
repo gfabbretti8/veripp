@@ -195,3 +195,55 @@ jobs:
             exit 1
           fi
           echo "args reached the checker: $got"
+
+  scans-a-directory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # What a client actually configures: point it at the source tree, not at
+      # one file. A finding in any file must fail the job, and the summary must
+      # count the proofs rather than reporting zero.
+      - name: A small tree with one good file and one bad
+        run: |
+          mkdir -p tree/src/sub tree/build
+          cat > tree/src/good.c <<'EOF'
+          int clamp(int x) { if (x < 0) return 0; if (x > 100) return 100; return x; }
+          EOF
+          cat > tree/src/sub/bad.c <<'EOF'
+          int mean(int a, int b) { return (a + b) / 2; }
+          EOF
+          # Must be ignored: a finding here would be in code nobody owns.
+          cat > tree/build/vendored.c <<'EOF'
+          int also_broken(int a, int b) { return (a + b) / 2; }
+          EOF
+
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          source: tree
+
+      - name: A finding anywhere in the tree fails the job
+        run: |
+          if [ "${{ steps.run.outcome }}" != "failure" ]; then
+            echo "::error::a tree containing a known overflow did not fail"
+            exit 1
+          fi
+          got="${{ steps.run.outputs.outcome }}"
+          [ "$got" = "counterexample" ] || { echo "::error::outcome was '$got'"; exit 1; }
+          echo "tree scan reported: $got"
+
+      - name: It scanned the sources and ignored the build directory
+        run: |
+          python3 - "${{ steps.run.outputs.report }}" <<'PY'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          files = [entry["file"] for entry in report["per_file"]]
+          assert report["files"] == 2, f"expected 2 files, got {files}"
+          assert not any("build/" in f for f in files), f"scanned build/: {files}"
+          assert report["proved"] >= 1, "clamp should have been proved"
+          found = {c["function"] for c in report["counterexamples"]}
+          assert found == {"mean"}, found
+          print("per_file:", files, "proved:", report["proved"])
+          PY

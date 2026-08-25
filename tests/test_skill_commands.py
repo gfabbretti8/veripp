@@ -86,6 +86,17 @@ class TestDocumentedInvocations:
         check(result, "veripp harness FILE --function F")
         assert "VERIPP_NONDET" in result.stdout
 
+    def test_scan_a_directory(self, tmp_path) -> None:
+        """SKILL.md now tells the agent to prefer `veripp scan src/` over
+        scanning files one at a time, so that form has to work."""
+        src = tmp_path / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "a.c").write_text("int f(int x){ return x; }\n")
+        (src / "sub" / "b.c").write_text("int g(int x){ return x; }\n")
+        result = veripp("scan", str(src), "--jobs", "8")
+        check(result, "veripp scan DIR --jobs N")
+        assert "2 files" in result.stdout, result.stdout[-500:]
+
     def test_json_out_alongside_readable_output(self, tmp_path) -> None:
         report = tmp_path / "report.json"
         result = veripp("scan", "examples/ring_buffer.cpp", "--json-out", str(report))
@@ -136,4 +147,25 @@ class TestSkillStaysTrue:
         missing = documented - exercised
         assert not missing, (
             f"SKILL.md documents {sorted(missing)} but nothing here runs them"
+        )
+
+    def test_every_documented_subcommand_is_exercised(self) -> None:
+        """Flags are not the only thing that drifts. `veripp scan DIR` added
+        no new flag, so the flag guard above would not have noticed it."""
+        import inspect
+
+        blocks = re.findall(r"```bash\n(.*?)```", SKILL.read_text(), re.S)
+        documented = {
+            line.strip().split()[1]
+            for block in blocks
+            for line in block.splitlines()
+            if line.strip().startswith("veripp ") and len(line.strip().split()) > 1
+        }
+        source = inspect.getsource(TestDocumentedInvocations)
+        exercised = set(re.findall(r'veripp\(\s*"([a-z]+)"', source))
+        missing = {c for c in documented if c.startswith(("verify", "scan", "harness",
+                                                          "doctor", "completion"))}
+        missing = {c.split()[0] for c in missing} - exercised
+        assert not missing, (
+            f"SKILL.md documents subcommands nothing here runs: {sorted(missing)}"
         )
