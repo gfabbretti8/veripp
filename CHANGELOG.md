@@ -44,6 +44,12 @@ run, and refuses to back results from one that cannot detect a planted bug.
   cJSON.
 - `npx veripp-skill` installs the agent skill with nothing but Node.
 
+### Changed
+- The README leads with something runnable. The first command a reader could
+  run used to be 109 lines in, behind four sections of context; the three
+  install routes and the worked examples are now at the top, with the exit-code
+  contract beside them.
+
 ## 0.1.3
 
 ### Fixed

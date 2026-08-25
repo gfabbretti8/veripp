@@ -1,9 +1,9 @@
 # veripp
 
-**AI-operated formal verification for real C++ code.**
+**AI-operated formal verification for real C and C++ code.**
 
 `veripp` wraps the [ESBMC](https://esbmc.org) model checker in an LLM agent loop so that a
-regular C++ developer can run:
+regular C or C++ developer can run:
 
 ```bash
 veripp verify src/parser.cpp --function parse_header
@@ -19,6 +19,92 @@ The division of labor is strict: **the LLM only proposes, the solver disposes.**
 Harnesses, loop invariants, and preconditions suggested by the model are always
 checked by ESBMC before anything is reported. A hallucination costs a retry,
 never soundness.
+
+## Get started
+
+Pick whichever suits you; all three run the same checker.
+
+```bash
+# 1. A container, needing nothing else installed
+docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
+
+# 2. The CLI, if you have uv and ESBMC (see Requirements)
+uv run veripp scan src/parser.c
+
+# 3. As a skill your coding agent can use, needing only Node
+npx veripp-skill
+```
+
+Then, on this repository's own examples:
+
+```bash
+uv run veripp doctor                                                # is the checker sound?
+uv run veripp verify examples/ring_buffer.cpp --function push       # proves a postcondition
+uv run veripp verify examples/off_by_one.cpp  --function sum_array  # finds a real bug
+uv run veripp scan   src/                                           # a whole project
+```
+
+Exit codes: `0` verified, `1` counterexample, `2` usage, `3` inconclusive — so
+CI can act on the result. **An inconclusive run is not a pass.**
+
+## What a result looks like
+
+```
+Result: counterexample
+  bounded, unwind=8; checks: overflow, bounds, pointer, div-by-zero; std=c++17
+Assumptions (a result is only as good as these):
+  - `a` points to exactly `n` valid elements, with n <= 4 (harness bound on array length)
+Violated property: dereference failure: array bounds violated
+  at examples/off_by_one.cpp:7:9 in sum_array
+Counterexample inputs:
+  n = 4
+  a_buf[0] = -1879048911
+  ...
+```
+
+Exit codes: `0` verified, `1` counterexample, `2` usage error, `3` inconclusive.
+
+## Requirements
+
+- [uv](https://docs.astral.sh/uv/) (it installs Python for you)
+- [ESBMC](https://github.com/esbmc/esbmc/releases) built from master, or the
+  [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build (which,
+  despite the name, is cut infrequently — check its date).
+  **Not the v8.4 release** — it carries
+  [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
+  out-of-bounds writes in ordinary container code. `veripp doctor` checks this
+  for you. On macOS: `brew install --HEAD esbmc`.
+- An LLM, only for triage — see below. `--no-llm` runs the plain verifier
+  pipeline with no model at all.
+
+ESBMC is a C++ binary, not a Python package, so uv cannot install it. If you
+would rather not think about that at all, use the image — it carries a checker
+that has already passed the soundness probe at build time:
+
+```bash
+docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
+```
+
+Otherwise install it yourself:
+
+```bash
+brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
+# Linux x86_64: download esbmc-linux.zip from the `weekly` release above,
+# unzip it, and put the binary on PATH.
+# Linux arm64: no prebuilt ESBMC is published; use the image.
+```
+
+`veripp doctor` checks all of the above, tells you what is missing, prints the
+right command for your machine and architecture, and probes your checker for
+known soundness holes.
+
+Shell completions are generated from the CLI itself, so they cannot fall out
+of step with it:
+
+```bash
+eval "$(veripp completion bash)"      # or zsh
+veripp completion fish | source
+```
 
 ## Why
 
@@ -63,119 +149,6 @@ out-of-bounds, null dereference and division by zero for any input within the
 stated bounds. Full table, and the veripp bugs each library exposed, in
 [benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md). See `ROADMAP.md` for what is not done, and
 **Known limits** below for what to expect before you point it at your code.
-
-## Requirements
-
-- [uv](https://docs.astral.sh/uv/) (it installs Python for you)
-- [ESBMC](https://github.com/esbmc/esbmc/releases) built from master, or the
-  [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build (which,
-  despite the name, is cut infrequently — check its date).
-  **Not the v8.4 release** — it carries
-  [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
-  out-of-bounds writes in ordinary container code. `veripp doctor` checks this
-  for you. On macOS: `brew install --HEAD esbmc`.
-- An LLM, only for triage — see below. `--no-llm` runs the plain verifier
-  pipeline with no model at all.
-
-ESBMC is a C++ binary, not a Python package, so uv cannot install it. If you
-would rather not think about that at all, use the image — it carries a checker
-that has already passed the soundness probe at build time:
-
-```bash
-docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
-```
-
-Otherwise install it yourself:
-
-```bash
-brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
-# Linux x86_64: download esbmc-linux.zip from the `weekly` release above,
-# unzip it, and put the binary on PATH.
-# Linux arm64: no prebuilt ESBMC is published; use the image.
-```
-
-`veripp doctor` checks all of the above, tells you what is missing, prints the
-right command for your machine and architecture, and probes your checker for
-known soundness holes.
-
-Shell completions are generated from the CLI itself, so they cannot fall out
-of step with it:
-
-```bash
-eval "$(veripp completion bash)"      # or zsh
-veripp completion fish | source
-```
-
-## Quick start
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # if you do not have uv yet
-git clone https://github.com/gfabbretti8/veripp && cd veripp
-
-uv run veripp doctor
-uv run veripp verify examples/ring_buffer.cpp --function push       # proves a postcondition
-uv run veripp verify examples/off_by_one.cpp --function sum_array   # finds a real bug
-```
-
-`uv run` creates the environment on first use; there is no install step and
-nothing to activate.
-
-To put `veripp` on your `PATH` and use it on your own code:
-
-```bash
-uv tool install git+https://github.com/gfabbretti8/veripp
-veripp verify src/parser.cpp --function parse_header
-```
-
-or run it once without installing anything:
-
-```bash
-uvx --from git+https://github.com/gfabbretti8/veripp veripp verify mycode.cpp --function f
-```
-
-Plain pip works too (`pip install -e .`); uv is a convenience, not a
-dependency of the tool.
-
-### Working on veripp
-
-```bash
-uv sync             # exact environment from uv.lock
-uv run pytest -q    # tests needing esbmc skip themselves when it is absent
-```
-
-`--function f` generates a harness: nondeterministic values for every
-parameter, a bound on any buffer length, and `f`'s own `VERIPP_REQUIRES`
-preconditions hoisted in front of the call. Inspect it before you trust it:
-
-```bash
-veripp harness examples/off_by_one.cpp --function sum_array
-```
-
-Parameters that are structs or objects are built by calling the library's own
-initialiser when one can be found (`vec_init`, `HuffmanTree_init`), so the
-object starts in a state that genuinely occurs. That is a narrower question
-than "any object at all", and it is stated with the result.
-
-With `--no-initializers`, or when no initialiser exists, they are built field
-by field with nondeterministic values — nested structs recursively, array fields by loop,
-pointer fields followed to `--max-struct-depth` (default 2) and then
-null-terminated. Every simplification is reported as an assumption, including
-the big one: an object with every field nondeterministic includes states no
-real caller can produce, so a counterexample may be an unreachable object
-state. Constrain it with `--assume 'w->count > 0'` and the solver checks the
-property under that.
-
-For a class, `--class` drives a bounded nondeterministic **sequence** of its
-public methods, so states built up across calls are explored — not just the
-first call on a fresh object:
-
-```bash
-veripp verify examples/ring_buffer.cpp --class RingBuffer --max-calls 6 \
-    --assert 'veripp_obj.size() <= RingBuffer::capacity'
-```
-
-Without `--function` or `--class`, veripp verifies the file's own `main()` —
-useful when you have written the harness yourself.
 
 ## See it find a real CVE
 
@@ -442,23 +415,6 @@ fixed upstream but unreleased): an out-of-bounds write to a member array is
 missed when the index is another member of the same object reached through
 `this` or a pointer — the ordinary container idiom. `doctor` fails loudly
 rather than letting you build proofs on it.
-
-## What a result looks like
-
-```
-Result: counterexample
-  bounded, unwind=8; checks: overflow, bounds, pointer, div-by-zero; std=c++17
-Assumptions (a result is only as good as these):
-  - `a` points to exactly `n` valid elements, with n <= 4 (harness bound on array length)
-Violated property: dereference failure: array bounds violated
-  at examples/off_by_one.cpp:7:9 in sum_array
-Counterexample inputs:
-  n = 4
-  a_buf[0] = -1879048911
-  ...
-```
-
-Exit codes: `0` verified, `1` counterexample, `2` usage error, `3` inconclusive.
 
 ## Honest-reporting policy
 

@@ -13,6 +13,73 @@ them is bounded by the assumptions each result states.
 | [lodepng](https://github.com/lvandeve/lodepng) | single-file PNG codec | 260 | **99** | 61 | 82% |
 | [cJSON](https://github.com/DaveGamble/cJSON) | ubiquitous C JSON parser | 117 | 32 | 19 | 89% |
 
+## How many findings are real? (cJSON, triaged)
+
+The table above counts counterexamples. A counterexample is not a bug: it
+proves a property fails **in the generated harness**, which is not the same as
+a caller being able to reach it. So the number a reader actually wants is how
+many of those 33 survive triage. Here is that work, rather than an estimate.
+
+### 14 of 33 were one artifact
+
+Every `cJSON_Create*` finding was the same property — *"Incorrect alignment
+when accessing data object"* — and each sits inside an `if (item)` guard, so
+none is a null dereference. Reproduced in eight lines:
+
+```c
+static struct hooks global = { malloc };
+struct S *p = (struct S *)global.allocate(sizeof(struct S));
+if (p) { p->type = 1; }        /* "Incorrect alignment" */
+```
+
+The identical code calling `malloc` **directly verifies**. The checker cannot
+establish the alignment of a pointer returned by a call it could not resolve,
+so it assumes the worst — and cJSON allocates through `hooks->allocate`, as any
+library with pluggable allocators does. None of these 14 say anything about
+cJSON. veripp now classifies them as harness artifacts, with a note pointing at
+`--link` or a compilation database as the way to check them properly.
+
+### 5 more triaged in depth: none reachable
+
+| finding | verdict | why |
+|---|---|---|
+| `cJSON_AddItemToObject` | harness artifact | fails inside `__memcpy_impl` with `malloc`/`free` stubbed; the CWEs are use-after-free and uninitialised-read, i.e. about the missing allocator |
+| `cJSON_GetObjectItem` | precondition | fails in `case_insensitive_strcmp`, which walks until `*s == '\0'`. The harness builds objects whose `string` need not be NUL-terminated; every real one comes from `cJSON_strdup` and is |
+| `cJSON_DetachItemFromObject` | precondition | calls `cJSON_GetObjectItem`; same root cause |
+| `cJSON_Minify` | precondition | `while (json[0] != '\0')` with a two-byte harness buffer that need not be terminated; the documented contract is a C string |
+| `cJSON_CreateTrue` | harness artifact | the alignment class above |
+
+**Real bugs reachable from a public entry point: 0 of the 5 triaged, and 0 of
+the 19 of 33 now accounted for.**
+
+### How this was triaged
+
+Twice, independently. Once by hand from the source, with the verdicts written
+down before the second pass. Then by a Claude Haiku agent given only veripp's
+own skill file and the findings, told to read the source and follow the call
+chains. It agreed on all five, including the count, and noticed the `json[1]`
+lookahead in `Minify` that the hand pass had missed. It took 168 seconds.
+
+Two honest caveats. Agreement between two triagers is not proof — a shared
+blind spot produces the same answer twice. It carries weight here only because
+the alignment class has a standalone reproduction and the string cases are
+plain in the source. And for `cJSON_CreateTrue` the agent partly repeated
+veripp's own artifact note, so that verdict is less independent than the rest.
+
+### What this means
+
+On this library, the raw counterexample count overstates the findings a
+maintainer would act on, by a lot. That is worth stating plainly rather than
+quoting "33 counterexamples" and letting a reader assume 33 bugs. It is also
+why the harness-artifact category exists, why `--link` and
+`--compile-commands` matter more than they look, and why every counterexample
+veripp prints carries the reminder that it holds in the generated harness.
+
+The other 14 of 33 have not been triaged in depth. They are mostly the same
+`Access to object out of bounds` in string comparison that the two above turned
+out to be, but that is an expectation, not a measurement, and is recorded here
+as one.
+
 ## The container reproduces these numbers
 
 Every figure above was measured on the host. Scanning cJSON through the
