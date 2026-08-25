@@ -153,6 +153,17 @@ The release workflow does not need either of these: it pushes with
 `GITHUB_TOKEN` and verifies the manifest in-job, which is what the
 "Verify both architectures are in the manifest" step reports.
 
+## Changelog and release notes
+
+`CHANGELOG.md` is the client-facing record. Add the section before tagging,
+then publish the release page from that same section so the two cannot drift:
+
+    scripts/release-notes.py 0.1.1 > /tmp/notes.md
+    gh release create v0.1.1 --title "v0.1.1" --notes-file /tmp/notes.md --latest
+
+Tags alone are close to invisible: the repository page lists Releases, not
+tags, so a tag without a release page is a version nobody finds.
+
 ## Version
 
 `pyproject.toml` is the only place the version lives. Bump it before building;

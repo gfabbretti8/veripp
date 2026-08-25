@@ -658,3 +658,53 @@ class TestActHarness:
         """The harness only works because the action prefers an ESBMC already
         on PATH. If that step is ever dropped, this stops testing anything."""
         assert "Use an ESBMC already on PATH" in read("action.yml")
+
+
+class TestChangelog:
+    """The client-facing record of what changed. Useless if it drifts."""
+
+    def test_documents_the_version_being_shipped(self) -> None:
+        version = re.search(
+            r'^version = "([^"]+)"', read("pyproject.toml"), re.M
+        ).group(1)
+        assert re.search(rf"^## {re.escape(version)}$", read("CHANGELOG.md"), re.M), (
+            f"CHANGELOG.md has no section for {version}"
+        )
+
+    def test_versions_are_newest_first(self) -> None:
+        found = re.findall(r"^## (\d+\.\d+\.\d+)$", read("CHANGELOG.md"), re.M)
+        assert found, "no version sections"
+        parsed = [tuple(int(p) for p in v.split(".")) for v in found]
+        assert parsed == sorted(parsed, reverse=True), f"out of order: {found}"
+
+    def test_says_what_a_verified_result_actually_means(self) -> None:
+        """A changelog for a verification tool that never says "bounded"
+        invites a reader to hear "verified" as "correct"."""
+        text = read("CHANGELOG.md").lower()
+        assert "bounded" in text and "doctor" in text
+
+    def test_the_release_notes_extractor_matches_the_changelog(self) -> None:
+        import subprocess
+        import sys as _sys
+
+        version = re.search(
+            r'^version = "([^"]+)"', read("pyproject.toml"), re.M
+        ).group(1)
+        result = subprocess.run(
+            [_sys.executable, str(ROOT / "scripts/release-notes.py"), version],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip(), "extracted empty release notes"
+        assert result.stdout.strip() in read("CHANGELOG.md")
+
+    def test_the_extractor_refuses_an_unknown_version(self) -> None:
+        import subprocess
+        import sys as _sys
+
+        result = subprocess.run(
+            [_sys.executable, str(ROOT / "scripts/release-notes.py"), "99.99.99"],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        assert result.returncode != 0
+        assert "no section" in result.stderr
