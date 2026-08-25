@@ -180,7 +180,7 @@ useful when you have written the harness yourself.
 ## See it find a real CVE
 
 ```bash
-./demo/cve-2019-13223/run.sh        # ~30 seconds, clones stb for you
+./demo/cve-2019-13223/run.sh        # a few seconds, clones stb for you
 ```
 
 veripp rediscovers [CVE-2019-13223](https://nvd.nist.gov/vuln/detail/CVE-2019-13223)
