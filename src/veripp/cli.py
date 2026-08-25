@@ -8,7 +8,9 @@ import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import NoReturn
 
+from . import __version__
 from .agent import AgentReport, Budget, verify_with_agent
 from .compdb import CompDBError, entry_for, find_database
 from .cppsig import SignatureError
@@ -33,11 +35,63 @@ EXIT_USAGE = 2
 EXIT_INCONCLUSIVE = 3
 
 
+class _Parser(argparse.ArgumentParser):
+    """Argparse, but it behaves like a CLI people enjoy using.
+
+    Two changes, both borrowed from tools that get this right (git, cargo, gh):
+    a mistyped subcommand suggests the one you meant instead of listing all of
+    them, and an error points at `--help` rather than dumping the full usage
+    block, which is the least readable moment to show someone thirty flags.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        import difflib
+
+        match = re.search(r"invalid choice: '([^']+)' \(choose from (.+)\)", message)
+        if match:
+            typo = match.group(1)
+            choices = re.findall(r"'([^']+)'", match.group(2))
+            close = difflib.get_close_matches(typo, choices, n=1, cutoff=0.5)
+            hint = f"\n\nDid you mean:  {self.prog} {close[0]}" if close else ""
+            sys.stderr.write(
+                f"{self.prog}: unknown command '{typo}'{hint}\n"
+                f"\nCommands: {', '.join(choices)}\n"
+                f"Run '{self.prog} --help' for the full list.\n"
+            )
+            raise SystemExit(EXIT_USAGE)
+
+        sys.stderr.write(f"{self.prog}: {message}\n")
+        sys.stderr.write(f"Run '{self.prog} --help' to see the options.\n")
+        raise SystemExit(EXIT_USAGE)
+
+
+OVERVIEW = """\
+veripp proves C/C++ functions free of overflow, out-of-bounds access, null
+dereference and division by zero -- or hands you an input that breaks them.
+You do not write the harness; veripp generates it from the signature.
+
+  veripp doctor                       is the checker present, and is it sound?
+  veripp scan   src/parser.c          every function in a file
+  veripp verify src/parser.c --function parse_header
+  veripp harness src/parser.c --function parse_header   see what it generated
+
+Exit codes: 0 verified   1 counterexample   2 usage   3 inconclusive
+
+Full options:  veripp <command> --help
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="veripp", description="AI-operated formal verification for C++"
+    parser = _Parser(
+        prog="veripp",
+        description="AI-operated formal verification for C and C++",
+        epilog=OVERVIEW,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "-V", "--version", action="version", version=f"veripp {__version__}"
+    )
+    sub = parser.add_subparsers(dest="command", required=False, metavar="<command>")
 
     v = sub.add_parser("verify", help="verify a self-contained C++ file")
     _add_common_args(v)
@@ -86,6 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    # `veripp` on its own is someone finding out what this is. Show them,
+    # and exit 0 -- they did not do anything wrong.
+    if args.command is None:
+        print(OVERVIEW, end="")
+        return 0
 
     if args.command == "doctor":
         return _doctor(allow_unsound=args.allow_unsound)
