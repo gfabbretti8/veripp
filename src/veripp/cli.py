@@ -1453,6 +1453,16 @@ def _esbmc_install_hint() -> str:
             "&& chmod +x ~/.local/esbmc/*/bin/esbmc"
         )
 
+    if system == "Windows":
+        # esbmc-windows.zip is published on every release; the CLI itself is
+        # pure Python and portable, so this is the whole install.
+        return (
+            "curl.exe -L -o esbmc.zip "
+            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-windows.zip "
+            "&& tar -xf esbmc.zip "
+            "&& (add the folder containing esbmc.exe to PATH)"
+        )
+
     if system == "Linux":
         return (
             f"{DOCKER_HINT}\n"

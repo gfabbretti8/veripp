@@ -107,3 +107,41 @@ jobs:
 
       - name: Behaviour
         run: sh npm/test-install.sh
+
+  windows:
+    name: windows CLI
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      # The CLI is pure Python and should be portable; this is the only way to
+      # find out rather than assume. ESBMC itself is fetched below, so the
+      # verification path is exercised too, not just argument parsing.
+      - name: Install
+        run: uv sync
+
+      - name: The parts that do not need a checker
+        run: uv run pytest -q -rs -m "not esbmc"
+
+      - name: Fetch ESBMC for Windows
+        run: |
+          curl.exe -L -o esbmc.zip https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-windows.zip
+          tar -xf esbmc.zip
+          Get-ChildItem -Recurse -Filter esbmc.exe | Select-Object -First 1 -ExpandProperty DirectoryName |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Does the checker run at all here?
+        run: veripp doctor
+        continue-on-error: true
+
+      - name: Verify a function end to end
+        run: uv run veripp verify examples/off_by_one.cpp --function sum_array
+        continue-on-error: true
+
+      # Reported rather than enforced: Windows support is unproven, and this
+      # job exists to find out where it actually stands. Once it passes
+      # reliably the continue-on-error above should come off.
+      - name: Summary
+        run: echo "Windows CLI ran. See the steps above for how far it got."
