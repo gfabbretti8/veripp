@@ -478,3 +478,49 @@ class TestTheSurfaceAsksForAVerdict:
             capture_output=True, text=True, cwd=ROOT,
         )
         assert out.returncode == 0, out.stderr
+
+
+class TestEveryEsbmcFeatureStaysReachable:
+    """One escape hatch instead of a flag per check.
+
+    The goal is access to the whole checker without a 30-flag surface, so
+    --esbmc-arg forwards anything ESBMC accepts. The cost of that power is
+    that a raw flag can weaken a proof (--no-bounds-check is one word), so
+    the result line has to name whatever was passed.
+    """
+
+    def test_a_raw_flag_is_named_in_the_verdict(self):
+        from dataclasses import replace
+        from veripp.esbmc import VerifyConfig
+
+        cfg = replace(VerifyConfig(), extra_args=["--no-bounds-check"])
+        assert "--no-bounds-check" in cfg.describe(), (
+            "a proof obtained under raw flags must say which ones, or "
+            "'verified' hides that someone turned a check off"
+        )
+
+    def test_harness_plumbing_is_not_mistaken_for_a_check_flag(self):
+        from dataclasses import replace
+        from veripp.esbmc import VerifyConfig
+
+        cfg = replace(VerifyConfig(), extra_args=["-I", "/usr/include", "-D", "X=1"])
+        assert "raw ESBMC flags" not in cfg.describe()
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--esbmc-arg", "--struct-fields-check"],
+            ["--esbmc-arg=--struct-fields-check"],
+        ],
+    )
+    def test_both_spellings_work(self, tmp_path, argv):
+        # `--esbmc-arg --flag` is what a person types; argparse alone reads
+        # the second token as an option and rejects the first.
+        src = tmp_path / "t.c"
+        src.write_text("int f(int x){ return x; }\n")
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "harness", str(src),
+             "--function", "f", *argv],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        assert out.returncode == 0, out.stderr

@@ -157,7 +157,15 @@ class VerifyConfig:
             )
             if on
         ]
-        return f"{mode}; checks: {', '.join(checks) or 'none'}; std={self.cpp_std}"
+        line = f"{mode}; checks: {', '.join(checks) or 'none'}; std={self.cpp_std}"
+        # Raw ESBMC flags can silently weaken a result (--no-bounds-check is
+        # one word), so a verdict obtained under them has to say so. Only the
+        # checker flags are named; -I/-D and the harness plumbing are noise
+        # here and are already reflected in the harness itself.
+        passthrough = [a for a in self.extra_args if a.startswith("--")]
+        if passthrough:
+            line += f"; raw ESBMC flags: {' '.join(passthrough)}"
+        return line
 
 
 @dataclass

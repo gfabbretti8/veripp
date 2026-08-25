@@ -281,6 +281,23 @@ def main(argv: list[str] | None = None) -> int:
         if Path(argv[0]).exists():
             argv = ["scan", *argv]
 
+    # `--esbmc-arg --struct-fields-check` is what a person types; argparse
+    # sees the second token as an option of its own and complains that the
+    # first is missing a value. Join them so both forms work -- the `=` form
+    # should not be a thing anyone has to discover.
+    joined: list[str] = []
+    skip = False
+    for i, a in enumerate(argv):
+        if skip:
+            skip = False
+            continue
+        if a == "--esbmc-arg" and i + 1 < len(argv) and argv[i + 1].startswith("-"):
+            joined.append(f"--esbmc-arg={argv[i + 1]}")
+            skip = True
+        else:
+            joined.append(a)
+    argv = joined
+
     args = parser.parse_args(argv)
 
     # `veripp` on its own is someone finding out what this is. Show them,
@@ -495,6 +512,20 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         action="store_true",
         help=_adv(
             "disable arithmetic overflow checking (isolate other properties)"
+        ),
+    )
+    bounds.add_argument(
+        "--esbmc-arg",
+        action="append",
+        default=[],
+        metavar="FLAG",
+        help=_adv(
+            "pass a flag straight through to ESBMC, e.g. --esbmc-arg "
+            "--struct-fields-check. This is the escape hatch that keeps every "
+            "ESBMC feature reachable without giving veripp a flag per check; "
+            "run `esbmc --help` for the full list. Repeatable. Anything "
+            "passed here is named in the result line, because a raw flag can "
+            "weaken a proof as easily as strengthen it."
         ),
     )
     bounds.add_argument(
@@ -1271,6 +1302,9 @@ def _config_for(args) -> VerifyConfig:
     extra_args: list[str] = []
     for header in args.include_file:
         extra_args += ["--include-file", str(header)]
+    # Last, so a deliberate passthrough flag wins over anything veripp
+    # inferred from the compilation database.
+    extra_args += list(getattr(args, "esbmc_arg", []) or [])
     std = args.std
     defines = list(args.define)
     include_dirs = _include_dirs(args)
@@ -1310,6 +1344,9 @@ def _verify(args) -> int:
     extra_args: list[str] = []
     for header in args.include_file:
         extra_args += ["--include-file", str(header)]
+    # Last, so a deliberate passthrough flag wins over anything veripp
+    # inferred from the compilation database.
+    extra_args += list(getattr(args, "esbmc_arg", []) or [])
 
     std = args.std
     defines = list(args.define)
