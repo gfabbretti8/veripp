@@ -61,7 +61,7 @@ Measured across nine popular C libraries — **40 of libpng's 70 functions
 proved**, 99 of lodepng's 260, 32 of cJSON's 117 — free of overflow,
 out-of-bounds, null dereference and division by zero for any input within the
 stated bounds. Full table, and the veripp bugs each library exposed, in
-[benchmarks/CORPUS.md](benchmarks/CORPUS.md). See `ROADMAP.md` for what is not done, and
+[benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md). See `ROADMAP.md` for what is not done, and
 **Known limits** below for what to expect before you point it at your code.
 
 ## Requirements
@@ -287,7 +287,7 @@ In Claude Code, install it from this repository:
 /plugin install veripp@veripp
 ```
 
-For any other agent, copy [`skills/veripp`](skills/veripp) wherever it keeps
+For any other agent, copy [`skills/veripp`](https://github.com/gfabbretti8/veripp/blob/main/skills/veripp) wherever it keeps
 skills. Either way the agent will reach for veripp when it is asked to verify
 or prove something about C/C++.
 

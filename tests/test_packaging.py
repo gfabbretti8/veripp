@@ -50,3 +50,49 @@ def test_doctor_reports_the_header_as_found():
     )
     line = next(l for l in proc.stdout.splitlines() if l.startswith("contracts header:"))
     assert "NOT FOUND" not in line
+
+
+class TestPyPIPage:
+    """README.md becomes the PyPI project page.
+
+    Relative links resolve on GitHub and 404 on PyPI, so they break only after
+    publishing -- and only for the audience who found the project through PyPI.
+    Both of the ones this catches were added while polishing the README.
+    """
+
+    def test_no_relative_links(self) -> None:
+        import re
+        from pathlib import Path
+
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+        # Markdown links whose target is neither absolute nor an anchor.
+        relative = [
+            target
+            for target in re.findall(r"\]\(([^)]+)\)", readme)
+            if not target.startswith(("http://", "https://", "#", "mailto:"))
+        ]
+        assert not relative, (
+            f"these README links 404 on the PyPI page: {relative}. "
+            "Use absolute https://github.com/... URLs."
+        )
+
+    def test_the_metadata_points_somewhere_real(self) -> None:
+        import re
+        from pathlib import Path
+
+        pyproject = (
+            Path(__file__).resolve().parent.parent / "pyproject.toml"
+        ).read_text()
+        for field in ("Homepage", "Repository", "Issues", "Changelog"):
+            assert re.search(rf'^{field} = "https://', pyproject, re.M), (
+                f"[project.urls] {field} is missing or not absolute"
+            )
+
+    def test_the_changelog_url_points_at_the_changelog(self) -> None:
+        """It pointed at the commit log before CHANGELOG.md existed."""
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        pyproject = (root / "pyproject.toml").read_text()
+        assert "CHANGELOG.md" in pyproject
+        assert (root / "CHANGELOG.md").is_file()

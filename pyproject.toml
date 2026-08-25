@@ -35,7 +35,7 @@ veripp = "veripp.cli:main"
 Homepage = "https://github.com/gfabbretti8/veripp"
 Repository = "https://github.com/gfabbretti8/veripp"
 Issues = "https://github.com/gfabbretti8/veripp/issues"
-Changelog = "https://github.com/gfabbretti8/veripp/commits/main"
+Changelog = "https://github.com/gfabbretti8/veripp/blob/main/CHANGELOG.md"
 
 # PEP 735 group: `uv sync` installs it by default, `uv sync --no-dev` skips it.
 [dependency-groups]
