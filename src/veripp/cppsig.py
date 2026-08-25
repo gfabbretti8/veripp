@@ -756,9 +756,27 @@ def find_class(source: str, name: str) -> ClassInfo:
     refuses (templates, operators, overloads it cannot disambiguate).
     """
     scrubbed = scrub(source)
-    ranges = [c for c in find_class_ranges(scrubbed) if c.name == name]
+    all_ranges = find_class_ranges(scrubbed)
+    ranges = [c for c in all_ranges if c.name == name]
     if not ranges:
-        raise SignatureError(f"no definition of class or struct `{name}` in the file")
+        # The names of the classes, not of the functions. Answering "class
+        # Ringbuffer not found -- this file defines push, pop, size" points at
+        # the wrong kind of thing entirely, and hides the one-letter fix.
+        import difflib
+
+        defined = sorted({c.name for c in all_ranges})
+        close = difflib.get_close_matches(name, defined, n=1, cutoff=0.6)
+        if close:
+            hint = f"; did you mean `{close[0]}`?"
+        elif defined:
+            hint = "; this file defines: " + ", ".join(defined[:8])
+            if len(defined) > 8:
+                hint += f", and {len(defined) - 8} more"
+        else:
+            hint = "; this file defines no class, struct or union"
+        raise SignatureError(
+            f"no definition of class or struct `{name}` in the file{hint}"
+        )
     if len(ranges) > 1:
         raise SignatureError(f"`{name}` is defined {len(ranges)} times")
     rng = ranges[0]

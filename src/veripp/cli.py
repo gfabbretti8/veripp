@@ -391,7 +391,22 @@ def _suggest_targets(args, wanted: str) -> None:
     """Point at the names that do exist, rather than only refusing."""
     import difflib
 
-    from .cppsig import function_definitions
+    from .cppsig import find_class_ranges, function_definitions, scrub
+
+    # Asking about a class and being shown a list of functions points at the
+    # wrong kind of thing. find_class already suggests the right name; adding
+    # function names underneath only muddies it.
+    if getattr(args, "cls", None):
+        try:
+            classes = sorted({
+                c.name for c in find_class_ranges(scrub(args.source.read_text(errors="replace")))
+            })
+        except OSError:
+            return
+        if classes:
+            print(f"  classes in this file: {', '.join(classes[:6])}", file=sys.stderr)
+        print(f"  or scan them all:  veripp scan {args.source}", file=sys.stderr)
+        return
 
     try:
         names = [n for n in function_definitions(args.source.read_text(errors="replace"))

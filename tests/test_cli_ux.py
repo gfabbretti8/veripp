@@ -245,3 +245,31 @@ class TestCompletions:
 
     def test_an_unknown_shell_is_rejected(self) -> None:
         assert run("completion", "powershell").returncode == 2
+
+
+class TestMistypedTarget:
+    """Function and class names are the two things people mistype most, and
+    the file already contains the correct spelling."""
+
+    def test_a_mistyped_function_suggests_the_real_one(self) -> None:
+        result = run("verify", "examples/off_by_one.cpp", "--function", "sumArray")
+        assert result.returncode == 2
+        assert "sum_array" in result.stderr
+
+    def test_a_mistyped_class_suggests_a_class_not_a_function(self) -> None:
+        """It used to answer "class Ringbuffer not found -- this file defines
+        push, pop, size", which names the wrong kind of thing and hides a
+        one-letter fix."""
+        result = run("verify", "examples/ring_buffer.cpp", "--class", "Ringbuffer")
+        assert result.returncode == 2
+        assert "RingBuffer" in result.stderr
+        for method in ("push", "pop", "size"):
+            assert f"did you mean: {method}" not in result.stderr
+
+    def test_an_unrecognisable_class_lists_the_classes(self) -> None:
+        result = run("verify", "examples/ring_buffer.cpp", "--class", "Zebra")
+        assert "RingBuffer" in result.stderr
+
+    def test_a_file_with_no_classes_says_so(self) -> None:
+        result = run("verify", "examples/off_by_one.cpp", "--class", "Foo")
+        assert "no class" in result.stderr
