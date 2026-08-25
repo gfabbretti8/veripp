@@ -7,7 +7,9 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
-## Unreleased
+## 0.2.0
+
+Usable on a codebase that already has findings.
 
 ### Added
 - `veripp accept` records current findings to a `.veripp-baseline`, and
