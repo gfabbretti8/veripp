@@ -42,7 +42,9 @@ class TestKeyStability:
         from veripp.baseline import key_for
 
         key = key_for(tmp_path / "src" / "a.c", "f", "overflow", root=tmp_path)
-        assert key.file == "src/a.c"
+        # Windows renders it with backslashes; the point is that it is
+        # relative, not which separator the platform prefers.
+        assert key.file.replace("\\", "/") == "src/a.c"
 
     def test_a_path_outside_the_root_is_kept_as_is(self, tmp_path) -> None:
         from veripp.baseline import key_for

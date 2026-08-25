@@ -70,13 +70,17 @@ class TestDocumentShape:
 
     def test_paths_are_relative_to_the_checkout(self) -> None:
         """An absolute path from the runner matches no file in the diff."""
-        finding = [{"file": "/repo/src/a.c", "line": 1, "function": "f",
+        # Build the paths from the platform's own root: "/repo" is not an
+        # absolute path on Windows, so relative_to never matches there and the
+        # test fails on a path convention rather than on the code.
+        root = Path.cwd() / "repo"
+        finding = [{"file": str(root / "src" / "a.c"), "line": 1, "function": "f",
                     "property": "overflow", "cwes": []}]
         from veripp.sarif import build
 
-        log = build(finding, root=Path("/repo"), version="0")
+        log = build(finding, root=root, version="0")
         uri = log["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-        assert uri == "src/a.c"
+        assert uri.replace("\\", "/") == "src/a.c"
 
     def test_the_message_carries_the_bound(self) -> None:
         """A consumer shows only this text. A reader must not take a bounded

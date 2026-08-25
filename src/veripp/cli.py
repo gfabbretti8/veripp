@@ -51,13 +51,19 @@ class _Parser(argparse.ArgumentParser):
     block, which is the least readable moment to show someone thirty flags.
     """
 
+    #: Set once the subcommands exist. Recovering them from argparse's error
+    #: text instead was version-dependent: 3.12 and 3.14 word "choose from"
+    #: differently, so the regex silently matched nothing and the command list
+    #: printed empty -- visible only on a runner with a different Python.
+    commands: tuple[str, ...] = ()
+
     def error(self, message: str) -> NoReturn:
         import difflib
 
-        match = re.search(r"invalid choice: '([^']+)' \(choose from (.+)\)", message)
+        match = re.search(r"invalid choice: '([^']+)'", message)
         if match:
             typo = match.group(1)
-            choices = re.findall(r"'([^']+)'", match.group(2))
+            choices = list(self.commands)
             close = difflib.get_close_matches(typo, choices, n=1, cutoff=0.5)
             hint = f"\n\nDid you mean:  {self.prog} {close[0]}" if close else ""
             sys.stderr.write(
@@ -237,6 +243,10 @@ def main(argv: list[str] | None = None) -> int:
         help="report soundness holes but exit 0 anyway (for CI pinned to a "
         "release with a known, accepted hole)",
     )
+
+    # argparse knows the commands; take them from it rather than from the
+    # wording of its error messages.
+    parser.commands = tuple(sub.choices)
 
     args = parser.parse_args(argv)
 

@@ -170,6 +170,7 @@ class TestScanEscalation:
 
 
 class TestAdviceIsTimely:
+    @pytest.mark.esbmc
     def test_no_llm_hint_on_a_proof(self, capsys, src, monkeypatch):
         """Telling someone their counterexamples will not be triaged is advice
         about a problem they do not have when the answer is 'verified'."""

@@ -936,3 +936,37 @@ class TestEncodingIsExplicit:
             "these use the platform default encoding, which breaks on "
             f"Windows: {offenders}"
         )
+
+
+class TestCommandListComesFromTheParser:
+    """The unknown-command message lists the real subcommands.
+
+    It used to recover them by regex over argparse's own error text, which is
+    worded differently across Python versions: on 3.12 the pattern matched
+    nothing and the message printed "Commands:" followed by nothing at all.
+    Invisible on the development machine, which runs 3.14.
+    """
+
+    def test_no_regex_over_argparse_prose(self) -> None:
+        code = "\n".join(
+            line for line in read("src/veripp/cli.py").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "choose from" not in code, (
+            "the command list must come from the parser, not from the wording "
+            "of an argparse error message"
+        )
+
+    def test_the_message_lists_every_command(self) -> None:
+        import subprocess
+        import sys as _sys
+
+        result = subprocess.run(
+            [_sys.executable, "-m", "veripp.cli", "definitely-not-a-command"],
+            capture_output=True, text=True, cwd=ROOT, timeout=300,
+        )
+        assert result.returncode == 2
+        for command in ("verify", "scan", "harness", "doctor", "accept"):
+            assert command in result.stderr, (
+                f"'{command}' missing from:\n{result.stderr}"
+            )

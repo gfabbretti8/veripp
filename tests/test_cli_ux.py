@@ -134,6 +134,7 @@ class TestColour:
     when it is missed.
     """
 
+    @pytest.mark.esbmc
     def test_plain_when_piped(self) -> None:
         """capture_output means no TTY, which is also every script and CI log."""
         out = run("verify", "examples/off_by_one.cpp", "--function", "sum_array").stdout
@@ -199,6 +200,7 @@ class TestJsonOut:
     """--json replaces stdout; --json-out adds a file. CI needs both, and
     should not have to verify twice to get them."""
 
+    @pytest.mark.esbmc
     def test_writes_the_report_and_keeps_readable_output(self, tmp_path) -> None:
         out = tmp_path / "r.json"
         result = run(
@@ -210,6 +212,7 @@ class TestJsonOut:
 
         assert json.loads(out.read_text(encoding="utf-8"))["outcome"]
 
+    @pytest.mark.esbmc
     def test_works_for_scan_too(self, tmp_path) -> None:
         out = tmp_path / "s.json"
         run("scan", "examples/ring_buffer.cpp", "--json-out", str(out))
