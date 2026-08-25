@@ -81,6 +81,9 @@ a hypothesis, not an answer.
 # a whole file, in parallel, machine-readable
 veripp scan src/parser.c --jobs 4 --json
 
+# both at once: a readable log AND a report for later, from one run
+veripp scan src/parser.c --json-out report.json
+
 # a function that needs its build flags
 veripp verify src/parser.c --function parse --compile-commands build/compile_commands.json
 
