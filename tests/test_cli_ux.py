@@ -186,3 +186,62 @@ class TestJsonOut:
         block = action[action.index("Run veripp"):]
         assert block.count("veripp verify") == 1, "veripp verify invoked more than once"
         assert block.count("veripp scan") == 1, "veripp scan invoked more than once"
+
+
+class TestCompletions:
+    """Completions generated from the parser, so they cannot drift.
+
+    Hand-written ones rot silently: a flag is added, the script is not
+    updated, and the shell suggests options that no longer exist.
+    """
+
+    @pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
+    def test_generates_without_error(self, shell) -> None:
+        result = run("completion", shell)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip()
+
+    def test_bash_script_is_valid_and_registers(self, tmp_path) -> None:
+        import shutil
+        import subprocess as sp
+
+        if not shutil.which("bash"):
+            pytest.skip("bash")
+        path = tmp_path / "c.bash"
+        path.write_text(run("completion", "bash").stdout)
+        assert sp.run(["bash", "-n", str(path)], capture_output=True).returncode == 0
+        loaded = sp.run(
+            ["bash", "-c", f"source {path} && complete -p veripp"],
+            capture_output=True, text=True,
+        )
+        assert "_veripp" in loaded.stdout
+
+    def test_zsh_script_is_valid(self, tmp_path) -> None:
+        import shutil
+        import subprocess as sp
+
+        if not shutil.which("zsh"):
+            pytest.skip("zsh")
+        path = tmp_path / "c.zsh"
+        path.write_text(run("completion", "zsh").stdout)
+        result = sp.run(["zsh", "-n", str(path)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
+    def test_completions_track_the_real_flags(self, shell) -> None:
+        """The point of generating them: a new flag appears automatically.
+
+        fish spells long options `-l json-out`, without the leading dashes,
+        so match the flag name rather than its bash/zsh spelling.
+        """
+        out = run("completion", shell).stdout
+        for flag in ("json-out", "function", "assume", "unwind"):
+            assert flag in out, f"{shell} completion is missing --{flag}"
+
+    def test_lists_every_subcommand(self) -> None:
+        out = run("completion", "bash").stdout
+        for command in ("verify", "harness", "scan", "doctor"):
+            assert command in out
+
+    def test_an_unknown_shell_is_rejected(self) -> None:
+        assert run("completion", "powershell").returncode == 2

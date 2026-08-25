@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn
 
-from . import __version__
+from . import __version__, term
 from .agent import AgentReport, Budget, verify_with_agent
 from .compdb import CompDBError, entry_for, find_database
 from .cppsig import SignatureError
@@ -143,6 +143,18 @@ def main(argv: list[str] | None = None) -> int:
         "out of it (0 disables; each round costs another solver run)",
     )
 
+    c = sub.add_parser(
+        "completion",
+        help="print a shell completion script",
+        description="Print a completion script for your shell.\n\n"
+                    "  bash:  eval \"$(veripp completion bash)\"\n"
+                    "  zsh:   eval \"$(veripp completion zsh)\"\n"
+                    "  fish:  veripp completion fish | source\n\n"
+                    "Add the line to your shell's rc file to keep it.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    c.add_argument("shell", choices=("bash", "zsh", "fish"))
+
     d = sub.add_parser("doctor", help="check that dependencies are available")
     d.add_argument(
         "--allow-unsound",
@@ -159,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
         print(OVERVIEW, end="")
         return 0
 
+    if args.command == "completion":
+        print(_completion_script(args.shell, sub))
+        return 0
     if args.command == "doctor":
         return _doctor(allow_unsound=args.allow_unsound)
     if not args.source.exists():
@@ -407,7 +422,14 @@ def _scan(args) -> int:
                 "refused": "skip"}.get(result.outcome, result.outcome)
         if result.artifact:
             mark = "artifact"
-        print(f"[{done:4d}/{total}] {mark:>10}  {result.name}", file=sys.stderr)
+        # Pad before colouring: escape codes have width on the terminal but
+        # not on the screen, so padding a coloured string misaligns the column.
+        painted = {
+            "PROVED": ("green",), "COUNTEREX": ("red", "bold"),
+        }.get(mark, ("dim",) if mark in ("skip", "artifact") else ("yellow",))
+        print(f"[{done:4d}/{total}] "
+              f"{term.style(f'{mark:>10}', *painted, stream=sys.stderr)}  {result.name}",
+              file=sys.stderr)
         seen.append(result.name)
 
     report = scan(args.source, config, options, jobs=args.jobs, progress=progress,
@@ -448,6 +470,115 @@ def _emit(args, payload: dict, readable: str) -> None:
     path = getattr(args, "json_out", None)
     if path:
         Path(path).write_text(json.dumps(payload, indent=2, default=str))
+
+
+def _completion_script(shell: str, sub) -> str:
+    """A completion script generated from the parser itself.
+
+    Hand-written completions rot: a flag gets added, nobody updates the script,
+    and the shell quietly suggests options that no longer exist. Walking the
+    real parser means the completions are correct by construction.
+    """
+    commands = [name for name in sub.choices if name != "completion"]
+
+    # argparse keeps each subcommand's one-line help on the _SubParsersAction,
+    # not on the subparser, and `description` is usually empty -- indexing
+    # splitlines()[0] on it raises.
+    helps = {
+        action.dest: (action.help or action.dest)
+        for action in getattr(sub, "_choices_actions", [])
+    }
+
+    def describe(name: str) -> str:
+        return (helps.get(name) or name).splitlines()[0][:60] or name
+    flags: dict[str, list[str]] = {}
+    for name, parser in sub.choices.items():
+        flags[name] = sorted(
+            option
+            for action in parser._actions
+            for option in action.option_strings
+            if option.startswith("--")
+        )
+
+    if shell == "bash":
+        cases = "\n".join(
+            f'    {name}) opts="{" ".join(flags[name])}" ;;' for name in sub.choices
+        )
+        return f"""# veripp bash completion. eval "$(veripp completion bash)"
+_veripp() {{
+  local cur prev cmd opts
+  cur="${{COMP_WORDS[COMP_CWORD]}}"
+  prev="${{COMP_WORDS[COMP_CWORD-1]}}"
+  cmd="${{COMP_WORDS[1]}}"
+
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=($(compgen -W "{" ".join(commands)} completion --help --version" -- "$cur"))
+    return
+  fi
+  if [ "$cmd" = "completion" ]; then
+    COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
+    return
+  fi
+  case "$prev" in
+    --compile-commands|--link|--include-file|--json-out) COMPREPLY=($(compgen -f -- "$cur")); return ;;
+    -I) COMPREPLY=($(compgen -d -- "$cur")); return ;;
+  esac
+  case "$cmd" in
+{cases}
+  esac
+  if [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "$opts" -- "$cur"))
+  else
+    COMPREPLY=($(compgen -f -X '!*.@(c|cc|cpp|cxx|h|hpp)' -- "$cur") $(compgen -d -- "$cur"))
+  fi
+}}
+complete -F _veripp veripp"""
+
+    if shell == "zsh":
+        described = "\n".join(
+            f"      '{name}:{describe(name)}'"
+            for name in commands
+        )
+        per_command = "\n".join(
+            f"    {name}) _arguments {' '.join(repr(f) for f in flags[name])} '*:file:_files' ;;"
+            for name in sub.choices
+        )
+        return f"""#compdef veripp
+# veripp zsh completion. eval "$(veripp completion zsh)"
+_veripp() {{
+  local -a commands
+  commands=(
+{described}
+      'completion:print a shell completion script'
+  )
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
+  case "${{words[2]}}" in
+    completion) _values 'shell' bash zsh fish ;;
+{per_command}
+  esac
+}}
+compdef _veripp veripp"""
+
+    all_flags = sorted({flag for group in flags.values() for flag in group})
+    lines = [
+        "# veripp fish completion. veripp completion fish | source",
+        "complete -c veripp -f",
+    ]
+    for name in commands:
+        help_text = describe(name)
+        lines.append(
+            f"complete -c veripp -n '__fish_use_subcommand' -a {name} -d {help_text!r}"
+        )
+    lines.append(
+        "complete -c veripp -n '__fish_use_subcommand' -a completion "
+        "-d 'print a shell completion script'"
+    )
+    for flag in all_flags:
+        lines.append(f"complete -c veripp -n 'not __fish_use_subcommand' -l {flag[2:]}")
+    return "\n".join(lines)
 
 
 def _config_for(args) -> VerifyConfig:
@@ -767,7 +898,9 @@ def _doctor(allow_unsound: bool = False) -> int:
         print("soundness self-check (known-failing programs must be rejected):")
         try:
             for name, ok in check_soundness(esbmc).items():
-                print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
+                mark = (term.style("ok  ", "green") if ok
+                        else term.style("FAIL", "red", "bold"))
+                print(f"  {mark}  {name}")
                 if not ok:
                     unsound.append(name)
         except RuntimeError as exc:

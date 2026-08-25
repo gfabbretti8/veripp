@@ -98,6 +98,14 @@ brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
 right command for your machine and architecture, and probes your checker for
 known soundness holes.
 
+Shell completions are generated from the CLI itself, so they cannot fall out
+of step with it:
+
+```bash
+eval "$(veripp completion bash)"      # or zsh
+veripp completion fish | source
+```
+
 ## Quick start
 
 ```bash
