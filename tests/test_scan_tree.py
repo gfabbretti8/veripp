@@ -175,3 +175,52 @@ class TestTreeWithCompilationDatabase:
                      "--compile-commands", "build/compile_commands.json", cwd=project)
         assert result.returncode == 2
         assert "not in" in result.stderr
+
+
+class TestOnlyFilter:
+    """`--only` turns a twenty-minute scan into a five-second one while
+    iterating on a single area of a codebase."""
+
+    @staticmethod
+    def _file(tmp_path):
+        (tmp_path / "m.c").write_text(
+            "int parse_header(int x){ return x; }\n"
+            "int parse_body(int x){ return x; }\n"
+            "int write_out(int x){ return x; }\n"
+        )
+        return tmp_path
+
+    @pytest.mark.esbmc
+    def test_a_glob_selects_a_subset(self, tmp_path) -> None:
+        result = run("scan", "m.c", "--only", "parse_*", cwd=self._file(tmp_path))
+        assert result.returncode == 0
+        assert "2 function definitions" in result.stdout, result.stdout[-400:]
+
+    @pytest.mark.esbmc
+    def test_globs_are_repeatable(self, tmp_path) -> None:
+        result = run("scan", "m.c", "--only", "parse_header", "--only", "write_*",
+                     cwd=self._file(tmp_path))
+        assert "2 function definitions" in result.stdout
+
+    @pytest.mark.esbmc
+    def test_an_exact_name_works(self, tmp_path) -> None:
+        result = run("scan", "m.c", "--only", "write_out", cwd=self._file(tmp_path))
+        assert "1 function definition" in result.stdout
+
+    def test_a_glob_matching_nothing_is_an_error(self, tmp_path) -> None:
+        """Silently scanning everything after a typo'd glob would be worse
+        than failing: the user would think they had checked one function and
+        actually have checked all of them, or none."""
+        result = run("scan", "m.c", "--only", "nope_*", cwd=self._file(tmp_path))
+        assert result.returncode == 2
+        assert "matched no function" in result.stderr
+
+    @pytest.mark.esbmc
+    def test_across_a_tree_a_file_with_no_match_is_skipped(self, tmp_path) -> None:
+        """Not an error there: most files in a tree legitimately contain
+        nothing matching."""
+        (tmp_path / "a.c").write_text("int parse_one(int x){ return x; }\n")
+        (tmp_path / "b.c").write_text("int unrelated(int x){ return x; }\n")
+        result = run("scan", str(tmp_path), "--only", "parse_*", cwd=tmp_path)
+        assert result.returncode == 0
+        assert "Scanned 1 file" in result.stdout, result.stdout[-400:]

@@ -344,6 +344,7 @@ bounded proof, and why a vacuous result is not a pass.
 ```bash
 veripp scan src/            # every .c/.cc/.cpp/.cxx underneath
 veripp scan . --jobs 8
+veripp scan src/ --only 'parse_*'   # just the ones you are working on
 ```
 
 Build trees, vendored dependencies and dotted directories are skipped

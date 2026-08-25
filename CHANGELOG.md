@@ -34,6 +34,14 @@ run, and refuses to back results from one that cannot detect a planted bug.
   covered by a baseline are emitted as suppressed rather than dropped, so code
   scanning shows them as accepted instead of pretending they are gone, and
   fingerprints are keyed like the baseline so a finding survives code moving.
+- `veripp scan --only 'parse_*'` verifies just the functions matching a glob
+  (repeatable). A glob matching nothing is an error rather than a silent
+  full scan.
+- Counterexamples of the form "Incorrect alignment when accessing data object"
+  are classified as harness artifacts. They come from allocating through a
+  function pointer the checker could not resolve — 14 of cJSON's 33
+  counterexamples were this one pattern, and none of them said anything about
+  cJSON.
 - `npx veripp-skill` installs the agent skill with nothing but Node.
 
 ## 0.1.3

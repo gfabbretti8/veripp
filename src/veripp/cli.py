@@ -135,6 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
     s.add_argument("--json", action="store_true", help="machine-readable output")
     s.add_argument(
+        "--only", action="append", default=[], metavar="GLOB",
+        help="verify only functions matching this glob (repeatable): "
+             "--only 'parse_*' --only '*_decode'",
+    )
+    s.add_argument(
         "--sarif", type=Path, default=None, metavar="PATH",
         help="write findings as SARIF, for GitHub code scanning "
              "(baselined findings are marked suppressed, not dropped)",
@@ -552,6 +557,28 @@ def _findings_from(reports) -> list:
     return keys
 
 
+def _selected_names(args, source: Path) -> list[str] | None:
+    """The functions --only asks for, or None for all of them.
+
+    Returns an empty list when the patterns match nothing, which the caller
+    reports rather than silently scanning everything -- a typo'd glob that
+    quietly verified the whole file would be worse than an error.
+    """
+    patterns = getattr(args, "only", None)
+    if not patterns:
+        return None
+    from fnmatch import fnmatch
+
+    from .cppsig import function_definitions
+
+    try:
+        defined = [n for n in function_definitions(source.read_text(errors="replace"))
+                   if n != "main"]
+    except OSError:
+        return None
+    return [n for n in defined if any(fnmatch(n, p) for p in patterns)]
+
+
 def _write_sarif(args, reports) -> None:
     """Emit SARIF if asked. Never fatal: a reporting format must not cost
     someone a verification result they already paid for."""
@@ -787,8 +814,12 @@ def _scan_tree(args) -> int:
 
         try:
             config, options = settings_for(source, first=index == 1)
+            selected = _selected_names(args, source)
+            if selected is not None and not selected:
+                continue  # nothing here matches; not an error across a tree
             reports.append(scan(source, config, options, jobs=args.jobs,
-                                progress=progress, escalations=args.escalations))
+                                progress=progress, escalations=args.escalations,
+                                only=selected))
         except Exception as exc:  # one unreadable file must not lose the rest
             print(f"  skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
 
@@ -872,8 +903,15 @@ def _scan(args) -> int:
               file=sys.stderr)
         seen.append(result.name)
 
+    selected = _selected_names(args, args.source)
+    if selected is not None and not selected:
+        print(f"error: --only {' '.join(args.only)} matched no function in "
+              f"{args.source}", file=sys.stderr)
+        print(f"  list them with:  veripp scan {args.source}", file=sys.stderr)
+        return EXIT_USAGE
+
     report = scan(args.source, config, options, jobs=args.jobs, progress=progress,
-                  escalations=args.escalations)
+                  escalations=args.escalations, only=selected)
 
     scan_payload = {
             "source": str(report.source),
