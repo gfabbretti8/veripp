@@ -880,3 +880,13 @@ class TestNpxPackage:
         for version in ("'18'", "'20'", "'22'"):
             assert version in ci, f"node {version} not in the CI matrix"
         assert "npm pack" in ci, "pack decides which files reach a user"
+
+    def test_the_installer_tests_do_not_hardcode_a_layout(self) -> None:
+        """The comparison against the source skill was pinned to /tmp, which
+        existed only in the Docker harness. On a GitHub runner it compared
+        against a file that was not there and reported "SKILL.md differs from
+        source" -- a true statement about the wrong thing, and green locally."""
+        text = read("npm/test-install.sh")
+        assert "/tmp/skills" not in text
+        assert "SKILL_SOURCE" in text, "the source path must be resolvable"
+        assert "$PWD/skills/veripp/SKILL.md" in text

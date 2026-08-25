@@ -12,6 +12,18 @@
 # that --dry-run writes nothing, and that a failure is a clear message rather
 # than a stack trace.
 pass=0; fail=0
+
+# Resolve the source skill before anything cds elsewhere. This used to be a
+# hardcoded /tmp/skills path that existed only in the Docker harness, so on a
+# GitHub runner the comparison was against a file that was not there --
+# reported as "SKILL.md differs from source", which is a true statement about
+# the wrong thing.
+SKILL_SOURCE="${SKILL_SOURCE:-$PWD/skills/veripp/SKILL.md}"
+if [ ! -f "$SKILL_SOURCE" ]; then
+  echo "cannot find the source skill at $SKILL_SOURCE" >&2
+  echo "run from the repository root, or set SKILL_SOURCE" >&2
+  exit 2
+fi
 ck(){ if [ "$2" = "$3" ]; then echo "  ok   $1"; pass=$((pass+1));
       else echo "  FAIL $1 (want rc=$2 got rc=$3)"; fail=$((fail+1)); fi; }
 has(){ if [ -e "$1" ]; then echo "  ok   $2"; pass=$((pass+1));
@@ -30,7 +42,7 @@ has /tmp/proj/.claude/skills/veripp/install.sh "carries the installer script"
 [ -x /tmp/proj/.claude/skills/veripp/install.sh ] \
   && { echo "  ok   install.sh stays executable"; pass=$((pass+1)); } \
   || { echo "  FAIL install.sh lost its executable bit"; fail=$((fail+1)); }
-cmp -s /tmp/skills/veripp/SKILL.md /tmp/proj/.claude/skills/veripp/SKILL.md \
+cmp -s "$SKILL_SOURCE" /tmp/proj/.claude/skills/veripp/SKILL.md \
   && { echo "  ok   SKILL.md copied byte-for-byte"; pass=$((pass+1)); } \
   || { echo "  FAIL SKILL.md differs from source"; fail=$((fail+1)); }
 
