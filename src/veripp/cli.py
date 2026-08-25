@@ -179,17 +179,30 @@ def main(argv: list[str] | None = None) -> int:
         help="verify every function in a file that veripp can harness",
     )
     _add_common_args(s)
-    s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
+    s.add_argument(
+        "--jobs", "-j", type=int, default=4,
+        help=_adv("parallel verifications"),
+    )
+    # Accepted, and a no-op: scan never calls an LLM. Someone who learned
+    # --no-llm on `verify` should not be stopped by its sibling, and the help
+    # says plainly that there was nothing to turn off.
+    s.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="accepted for symmetry with `verify`; scan never calls an LLM",
+    )
     s.add_argument("--json", action="store_true", help="machine-readable output")
     s.add_argument(
         "--cache", type=Path, default=None, metavar="DIR",
-        help=f"reuse verdicts for files that have not changed (default: "
-             f"{DEFAULT_CACHE_DIR}; --no-cache to disable). The key covers the "
-             "file, its local headers, linked sources, the bounds and the "
-             "checker version, so a stale verdict cannot be served",
+        help=_adv(
+            f"reuse verdicts for files that have not changed (default: "
+            f"{DEFAULT_CACHE_DIR}; --no-cache to disable). The key covers the "
+            "file, its local headers, linked sources, the bounds and the "
+            "checker version, so a stale verdict cannot be served"
+        ),
     )
     s.add_argument("--no-cache", action="store_true",
-                   help="verify everything, ignoring any cached verdicts")
+                   help=_adv("verify everything, ignoring any cached verdicts"))
     s.add_argument(
         "--only", action="append", default=[], metavar="GLOB",
         help="verify only functions matching this glob (repeatable): "
@@ -216,8 +229,10 @@ def main(argv: list[str] | None = None) -> int:
         "--escalations",
         type=int,
         default=1,
-        help="how many times to widen the unwind bound when a function runs "
-        "out of it (0 disables; each round costs another solver run)",
+        help=_adv(
+            "how many times to widen the unwind bound when a function runs "
+            "out of it (0 disables; each round costs another solver run)"
+        ),
     )
 
     c = sub.add_parser(
@@ -255,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_common_args(a)
     a.add_argument("--jobs", type=int, default=4, help="parallel verifications")
     a.add_argument("--escalations", type=int, default=1,
-                   help="extra attempts with larger bounds")
+                   help=_adv("extra attempts with larger bounds"))
     a.add_argument("--quiet", action="store_true", help="only the summary")
     a.add_argument("--json", action="store_true", help="machine-readable output")
     a.add_argument("--json-out", metavar="PATH", help=argparse.SUPPRESS)

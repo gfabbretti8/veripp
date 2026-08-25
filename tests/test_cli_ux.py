@@ -524,3 +524,33 @@ class TestEveryEsbmcFeatureStaysReachable:
             capture_output=True, text=True, cwd=ROOT,
         )
         assert out.returncode == 0, out.stderr
+
+
+class TestFlagsMeanTheSameThingEverywhere:
+    """A flag learned on one command should not error on its sibling.
+
+    `--no-llm` existed on `verify` and not on `scan`, so a scripted
+    `veripp scan ... --no-llm` failed with a usage error -- which is how a
+    corpus measurement here "completed" in two seconds having measured
+    nothing.
+    """
+
+    def test_no_llm_is_accepted_by_scan(self, tmp_path):
+        src = tmp_path / "s.c"
+        src.write_text("int f(int x){ return x; }\n")
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "scan", str(src), "--no-llm"],
+            capture_output=True, text=True, cwd=ROOT, timeout=600,
+        )
+        assert "unrecognized arguments" not in out.stderr, out.stderr
+        assert out.returncode != 2, out.stderr
+
+    def test_scan_says_it_never_calls_an_llm(self):
+        # Accepting the flag silently would imply scan otherwise uses AI.
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "scan", "--help"],
+            capture_output=True, text=True, cwd=ROOT,
+        ).stdout
+        # argparse wraps help text at the column, so the phrase can be split
+        # across lines; compare on normalised whitespace.
+        assert "never calls an LLM" in " ".join(out.split())
