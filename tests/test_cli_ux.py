@@ -433,3 +433,48 @@ class TestBarePathJustWorks:
         result = run("no-such-file.c")
         assert result.returncode == 2
         assert "unknown command" in result.stderr or "not found" in result.stderr
+
+
+class TestTheSurfaceAsksForAVerdict:
+    """The default help must stay small enough to read.
+
+    The user's objection to the previous design was that veripp exposed a
+    configuration when it should ask for a verdict. Every ESBMC knob is still
+    reachable via --help-all; what is bounded here is how much a newcomer has
+    to read before they can run the tool.
+    """
+
+    def _flags(self, *argv):
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", *argv],
+            capture_output=True, text=True, cwd=ROOT,
+        ).stdout
+        return set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", out))
+
+    @pytest.mark.parametrize("cmd", ["verify", "scan"])
+    def test_default_help_is_short(self, cmd):
+        shown = self._flags(cmd, "--help")
+        assert len(shown) <= 16, (
+            f"`veripp {cmd} --help` lists {len(shown)} flags; the default "
+            "surface is meant to express intent, not configuration. Put "
+            "tuning knobs behind _adv() so they appear in --help-all."
+        )
+
+    @pytest.mark.parametrize("cmd", ["verify", "scan"])
+    def test_nothing_is_actually_removed(self, cmd):
+        shown = self._flags(cmd, "--help")
+        every = self._flags(cmd, "--help-all")
+        assert every > shown, "--help-all must reveal strictly more"
+        for knob in ("--unwind", "--timeout", "--std", "--compile-commands"):
+            assert knob in every, f"{knob} must remain reachable"
+
+    def test_hidden_flags_still_parse(self, tmp_path):
+        # Hidden must mean "not advertised", never "not accepted".
+        src = tmp_path / "t.c"
+        src.write_text("int f(int x){ return x; }\n")
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "harness", str(src),
+             "--function", "f", "--unwind", "4", "--max-array-len", "3"],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        assert out.returncode == 0, out.stderr

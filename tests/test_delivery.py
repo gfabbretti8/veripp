@@ -194,9 +194,14 @@ class TestSkill:
         }
 
         advertised: set[str] = set()
+        # --help-all, not --help: tuning flags are deliberately hidden from
+        # the default listing so a newcomer reads a verdict question rather
+        # than a configuration. They still exist, and SKILL.md may still
+        # recommend them, so the complete surface is what must be checked.
         for sub in ([], ["verify"], ["scan"], ["harness"], ["doctor"]):
+            flag = "--help" if not sub else "--help-all"
             result = subprocess.run(
-                [sys.executable, "-m", "veripp.cli", *sub, "--help"],
+                [sys.executable, "-m", "veripp.cli", *sub, flag],
                 capture_output=True,
                 text=True,
                 cwd=ROOT,

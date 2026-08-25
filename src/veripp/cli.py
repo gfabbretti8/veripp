@@ -79,9 +79,15 @@ class _Parser(argparse.ArgumentParser):
 
 
 OVERVIEW = """\
-veripp proves C/C++ functions free of overflow, out-of-bounds access, null
-dereference and division by zero -- or hands you an input that breaks them.
-You do not write the harness; veripp generates it from the signature.
+veripp proves C/C++ functions free of undefined behaviour -- or hands you an
+input that breaks them. You do not write the harness and you do not choose
+the checks; veripp generates the harness from the signature, picks the
+properties, and widens the bounds until it can answer.
+
+Checked by default: arithmetic overflow, out-of-bounds access, null and
+invalid pointers, division by zero, memory leaks, uninitialised reads,
+undefined shifts, and NaN. Every result names the checks it ran under.
+Functions with loops are also asked whether they terminate.
 
   veripp doctor                       is the checker present, and is it sound?
   veripp scan   src/                  every function under a directory
@@ -96,7 +102,8 @@ so CI fails only on what appears afterwards:
 
 Exit codes: 0 verified   1 counterexample   2 usage   3 inconclusive
 
-Full options:  veripp <command> --help
+Full options:  veripp <command> --help       the flags that express intent
+               veripp <command> --help-all   every ESBMC bound and build knob
 """
 
 
@@ -111,6 +118,17 @@ def main(argv: list[str] | None = None) -> int:
     # and a mismatch for anything capturing the output, which decodes with the
     # platform default and would then fail on our bytes. errors="replace"
     # keeps the platform's encoding, never raises, and loses at most a dash.
+    # --help-all has to be known before the parser is built, because whether
+    # a flag is hidden is baked into its help= at construction time. Read it
+    # off argv directly rather than parsing twice.
+    global _SHOW_ADVANCED
+    _probe = list(sys.argv[1:] if argv is None else argv)
+    _SHOW_ADVANCED = "--help-all" in _probe
+    if _SHOW_ADVANCED:
+        # Let argparse print the (now unhidden) help for the right command.
+        _probe = ["--help" if a == "--help-all" else a for a in _probe]
+        argv = _probe
+
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")
@@ -332,8 +350,27 @@ def main(argv: list[str] | None = None) -> int:
     return _verify(args)
 
 
+#: Every ESBMC knob stays reachable -- the point of veripp is access to the
+#: whole checker, not a curated subset. But a first-time user should be asked
+#: for a verdict, not a configuration, so the tuning flags leave the default
+#: --help and live behind --help-all. Nothing is removed; the surface a
+#: newcomer must read drops to the handful of flags that express intent.
+_SHOW_ADVANCED = False
+
+
+def _adv(help_text: str) -> str:
+    """Mark a flag as advanced: still parsed, hidden unless --help-all."""
+    return help_text if _SHOW_ADVANCED else argparse.SUPPRESS
+
+
 def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False) -> None:
     p.add_argument("source", type=Path)
+    p.add_argument(
+        "--help-all",
+        action="store_true",
+        help="show every tuning flag, including the ESBMC bounds and build "
+        "options hidden from this list",
+    )
     what = p.add_argument_group("what to verify")
     bounds = p.add_argument_group(
         "bounds", "every result states the bounds it was obtained under"
@@ -358,7 +395,7 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         "--max-calls",
         type=int,
         default=HarnessOptions.max_calls,
-        help="length of the generated call sequence for --class",
+        help=_adv("length of the generated call sequence for --class"),
     )
     what.add_argument(
         "--assert",
@@ -371,29 +408,38 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
     )
     bounds.add_argument(
         "--unwind", type=int, default=32,
-        help="loop unwinding bound (default 32)",
+        help=_adv(
+            "starting loop unwinding bound (default 32). Not a cap: when a "
+            "result is inconclusive veripp widens it, and finally switches "
+            "to k-induction to escape boundedness. Every result reports the "
+            "bound it was actually obtained under."
+        ),
     )
-    bounds.add_argument("--timeout", type=int, default=120, help="per-attempt timeout (s)")
-    build.add_argument("--std", default=_DEFAULT_STD)
+    bounds.add_argument(
+        "--timeout", type=int, default=120, help=_adv("per-attempt timeout (s)")
+    )
+    build.add_argument("--std", default=_DEFAULT_STD, help=_adv("language standard"))
     bounds.add_argument(
         "--max-array-len",
         type=int,
         default=HarnessOptions.max_array_len,
-        help="harness bound on generated buffer lengths",
+        help=_adv("harness bound on generated buffer lengths"),
     )
     build.add_argument(
         "--compile-commands",
         type=Path,
         metavar="PATH",
-        help="clang compilation database (or a directory holding one). "
-        "Include paths, defines and the language standard for the target file "
-        "are taken from it. Auto-discovered near the source if not given; "
-        "--no-compile-commands disables that.",
+        help=_adv(
+            "clang compilation database (or a directory holding one). "
+            "Include paths, defines and the language standard for the target "
+            "file are taken from it. Auto-discovered near the source if not "
+            "given; --no-compile-commands disables that."
+        ),
     )
     build.add_argument(
         "--no-compile-commands",
         action="store_true",
-        help="do not look for a compilation database",
+        help=_adv("do not look for a compilation database"),
     )
     build.add_argument(
         "--link",
@@ -401,38 +447,55 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         type=Path,
         default=[],
         metavar="SOURCE",
-        help="also compile this translation unit. Needed when the target "
-        "calls a function defined elsewhere: an unlinked callee is assumed to "
-        "have no side effects, which is unsound. Repeatable.",
+        help=_adv(
+            "also compile this translation unit. Needed when the target calls "
+            "a function defined elsewhere: an unlinked callee is assumed to "
+            "have no side effects, which is unsound. Repeatable."
+        ),
     )
-    build.add_argument("-I", "--include", action="append", type=Path, default=[])
-    build.add_argument("-D", "--define", action="append", default=[], help="preprocessor macro")
+    build.add_argument(
+        "-I", "--include", action="append", type=Path, default=[],
+        help=_adv("additional include directory"),
+    )
+    build.add_argument(
+        "-D", "--define", action="append", default=[],
+        help=_adv("preprocessor macro"),
+    )
     build.add_argument(
         "--include-file",
         action="append",
         default=[],
         metavar="HEADER",
-        help="force-include a header before the source (e.g. a libc/typedef shim "
-        "for a symbol esbmclibc lacks); repeatable",
+        help=_adv(
+            "force-include a header before the source (e.g. a libc/typedef "
+            "shim for a symbol esbmclibc lacks); repeatable"
+        ),
     )
     bounds.add_argument(
         "--max-struct-depth",
         type=int,
         default=HarnessOptions.max_struct_depth,
-        help="how far to follow pointer fields when building an object; "
-        "beyond it they are null, which is reported as an assumption",
+        help=_adv(
+            "how far to follow pointer fields when building an object; beyond "
+            "it they are null, which is reported as an assumption"
+        ),
     )
     bounds.add_argument(
         "--no-initializers",
         action="store_true",
-        help="fill object parameters field by field instead of calling the "
-        "library's own initialiser. Broader, but admits field combinations "
-        "the type's invariants forbid, so expect failures no caller can cause.",
+        help=_adv(
+            "fill object parameters field by field instead of calling the "
+            "library's own initialiser. Broader, but admits field "
+            "combinations the type's invariants forbid, so expect failures "
+            "no caller can cause."
+        ),
     )
     bounds.add_argument(
         "--no-overflow-check",
         action="store_true",
-        help="disable arithmetic overflow checking (isolate other properties)",
+        help=_adv(
+            "disable arithmetic overflow checking (isolate other properties)"
+        ),
     )
     bounds.add_argument(
         "--assume",
