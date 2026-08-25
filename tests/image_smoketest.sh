@@ -152,6 +152,37 @@ esac
 out=$(run scan safe.c)
 check "scan a file" 0 $? "$out"
 
+# A source tree with a compilation database: the shape of a real project, and
+# the exact path that shipped broken in 0.1.2. The database is keyed by
+# translation unit and the harness include path starts at the file's own
+# directory, so a tree scan that resolves either once against the root
+# silently loses every file's flags -- or aborts before verifying anything.
+mkdir -p "$work/proj/src" "$work/proj/inc" "$work/proj/build"
+printf '#define LIMIT 4\n' > "$work/proj/inc/cfg.h"
+printf '#include "cfg.h"\nint at(const int*a,int i){ if(i<0||i>=LIMIT) return 0; return a[i]; }\n' \
+  > "$work/proj/src/a.c"
+# Not in the database: a tree always has some. It must be scanned anyway.
+printf 'int helper(int x){ if(x<0) return 0; return x; }\n' > "$work/proj/src/extra.c"
+cat > "$work/proj/build/compile_commands.json" <<JSON
+[{"directory":"/src/proj/build","file":"/src/proj/src/a.c",
+  "command":"cc -I/src/proj/inc -c /src/proj/src/a.c"}]
+JSON
+chmod -R a+rX "$work/proj"
+
+out=$(run scan proj/src --compile-commands proj/build/compile_commands.json)
+rc=$?
+case "$out" in
+  *"is not in"*|*"PARSING ERROR"*|*"file not found"*)
+    printf '  FAIL tree scan with a compilation database:\n%s\n' "$out"; fail=$((fail+1)) ;;
+  *)
+    check "scan a tree with a compilation database" 0 "$rc" "$out"
+    case "$out" in
+      *"2 files"*) printf '  ok   both files scanned, including one absent from the database\n'
+                   pass=$((pass+1)) ;;
+      *) printf '  FAIL expected 2 files scanned:\n%s\n' "$out"; fail=$((fail+1)) ;;
+    esac ;;
+esac
+
 out=$(run harness safe.c --function clamp)
 check "harness prints without verifying" 0 $? "$out"
 case "$out" in

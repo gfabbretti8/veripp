@@ -295,6 +295,22 @@ class TestSmokeTest:
         mode = (ROOT / self.PATH).stat().st_mode
         assert mode & stat.S_IXUSR, f"{self.PATH} must be executable; CI runs it directly"
 
+    def test_covers_a_tree_with_a_compilation_database(self) -> None:
+        """The shape of a real project, and the exact path that shipped
+        broken in 0.1.2: the tree scan resolved the database once against the
+        root, matched nothing, and aborted before verifying anything.
+
+        Verified this check discriminates before relying on it -- 15 passed /
+        1 failed against the pre-fix image, 17/0 after.
+        """
+        text = read(self.PATH)
+        assert "compile_commands.json" in text
+        assert "--compile-commands" in text
+        assert "is not in" in text, (
+            "the database-miss message must be treated as a failure, not as "
+            "an ordinary non-zero exit"
+        )
+
     def test_checks_a_proof_and_a_counterexample(self) -> None:
         text = read(self.PATH)
         assert "doctor" in text
