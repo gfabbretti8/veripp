@@ -41,11 +41,30 @@ class VerifyConfig:
     timeout_s: int = 120
     k_induction: bool = False
     incremental_bmc: bool = False
+    # Every check below is on by default because it catches undefined
+    # behaviour -- a real bug in anyone's C -- and was measured not to fire on
+    # correct code. The measurement matters: an unmeasured check produced 14
+    # of cJSON's 33 findings once, all of them noise, and a tool whose loudest
+    # output is its own artifacts trains people to stop reading it.
     overflow_check: bool = True
-    unsigned_overflow_check: bool = False  # unsigned wraparound is defined behaviour
     bounds_check: bool = True
     pointer_check: bool = True
     div_by_zero_check: bool = True
+    memory_leak_check: bool = True
+    uninitialised_check: bool = True
+    ub_shift_check: bool = True
+
+    #: Off by default, and this is a judgement rather than an oversight:
+    #: unsigned wraparound is DEFINED behaviour in C. djb2 (`h * 33u + c`) is
+    #: correct code, and this check reports it as a failure. Wanted only if
+    #: you believe your own code should never wrap.
+    unsigned_overflow_check: bool = False
+
+    #: Termination is a liveness property, not a safety one, and needs its own
+    #: ESBMC mode. Never folded into "verified": a k-induction proof reports
+    #: SUCCESSFUL for a function that loops forever, because an infinite loop
+    #: violates no assertion.
+    termination: bool = False
     extra_args: list[str] = field(default_factory=list)
     include_dirs: list[Path] = field(default_factory=list)
     defines: list[str] = field(default_factory=list)
@@ -77,6 +96,18 @@ class VerifyConfig:
             args.append("--overflow-check")
         if self.unsigned_overflow_check:
             args.append("--unsigned-overflow-check")
+        if self.memory_leak_check:
+            args.append("--memory-leak-check")
+        if self.uninitialised_check:
+            args.append("--uninitialised-vars-check")
+        # ESBMC's --ub-shift-check implicitly turns arithmetic overflow
+        # checking back on, so passing it alongside --no-overflow-check would
+        # silently ignore what the user asked for. They travel together: if
+        # overflow checking is off, this goes off with it.
+        if self.ub_shift_check and self.overflow_check:
+            args.append("--ub-shift-check")
+        if self.termination:
+            args.append("--termination")
         # Bounds, pointer and division checks are on by default in ESBMC and
         # have no positive flag; the negative flags below let a config disable
         # them explicitly.
@@ -109,6 +140,10 @@ class VerifyConfig:
                 ("bounds", self.bounds_check),
                 ("pointer", self.pointer_check),
                 ("div-by-zero", self.div_by_zero_check),
+                ("memory-leak", self.memory_leak_check),
+                ("uninitialised", self.uninitialised_check),
+                ("ub-shift", self.ub_shift_check and self.overflow_check),
+                ("termination", self.termination),
             )
             if on
         ]

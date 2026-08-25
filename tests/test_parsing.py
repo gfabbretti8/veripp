@@ -1,6 +1,8 @@
-import pytest
-
 """Parser tests against pinned real ESBMC 8.4 output (tests/golden/)."""
+
+from pathlib import Path
+
+import pytest
 
 from veripp.esbmc import Outcome, VerifyConfig, parse_output
 
@@ -193,3 +195,69 @@ def test_input_summary_collapses_arrays_and_truncates():
     assert "obj.name[*]" in summary[0]
     assert "(8 elements)" in summary[0]
     assert len(summary[0]) < 160  # truncated, not a wall of text
+
+
+class TestPropertySet:
+    """Which properties veripp asks the checker about.
+
+    Every check enabled by default catches undefined behaviour and was
+    measured against a bug/clean pair and against real code that already
+    verified. The ones left off are left off for a reason, not by oversight.
+    """
+
+    def test_undefined_behaviour_checks_are_on(self) -> None:
+        from veripp.esbmc import VerifyConfig
+
+        args = " ".join(str(a) for a in VerifyConfig().to_args(Path("x.c")))
+        for flag in ("--overflow-check", "--memory-leak-check",
+                     "--uninitialised-vars-check", "--ub-shift-check"):
+            assert flag in args, f"{flag} should be on by default"
+
+    def test_unsigned_overflow_is_off_by_default(self) -> None:
+        """Unsigned wraparound is DEFINED behaviour in C. djb2 -- `h*33u + c`
+        -- is correct code, and this check calls it a failure. Enabling it by
+        default would report non-bugs on every hash and checksum."""
+        from veripp.esbmc import VerifyConfig
+
+        args = " ".join(str(a) for a in VerifyConfig().to_args(Path("x.c")))
+        assert "--unsigned-overflow-check" not in args
+
+    def test_termination_is_not_folded_into_the_default(self) -> None:
+        """A liveness property, and one a safety proof says nothing about: a
+        k-induction run reports SUCCESSFUL for a function that loops forever,
+        because an infinite loop violates no assertion."""
+        from veripp.esbmc import VerifyConfig
+
+        args = " ".join(str(a) for a in VerifyConfig().to_args(Path("x.c")))
+        assert "--termination" not in args
+        assert "--termination" in " ".join(
+            str(a) for a in VerifyConfig(termination=True).to_args(Path("x.c"))
+        )
+
+    def test_ub_shift_never_overrides_a_disabled_overflow_check(self) -> None:
+        """ESBMC's --ub-shift-check implicitly re-enables arithmetic overflow
+        checking. Passing both would silently ignore --no-overflow-check --
+        the tool disregarding an instruction it was given. It broke the CVE
+        demo, where the whole point is isolating a division by zero from an
+        unrelated overflow.
+        """
+        from veripp.esbmc import VerifyConfig
+
+        args = " ".join(
+            str(a) for a in VerifyConfig(overflow_check=False).to_args(Path("x.c"))
+        )
+        assert "--overflow-check" not in args
+        assert "--ub-shift-check" not in args, (
+            "ub-shift silently turns overflow checking back on"
+        )
+
+    def test_the_verdict_names_every_check_that_ran(self) -> None:
+        """"verified" must never be ambiguous about what it covered."""
+        from veripp.esbmc import VerifyConfig
+
+        described = VerifyConfig().describe()
+        for name in ("overflow", "bounds", "pointer", "div-by-zero",
+                     "memory-leak", "uninitialised", "ub-shift"):
+            assert name in described, f"{name} missing from: {described}"
+        # And a check that did not run must not be listed.
+        assert "ub-shift" not in VerifyConfig(overflow_check=False).describe()
