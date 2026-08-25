@@ -233,6 +233,7 @@ class TestScanAsksAboutTerminationToo:
     `verify` most people would never see it.
     """
 
+    @pytest.mark.esbmc
     def test_a_loop_is_asked_and_a_straight_line_is_not(self, tmp_path):
         src = tmp_path / "m.c"
         src.write_text(
