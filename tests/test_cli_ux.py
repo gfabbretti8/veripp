@@ -87,3 +87,72 @@ class TestMistakes:
         assert "required: source" in result.stderr
         assert "--help" in result.stderr
         assert result.stderr.count("\n") <= 4, result.stderr
+
+
+class TestColour:
+    """Colour on the verdict line, and nowhere it can leak.
+
+    Every rule here is one other tools already follow, so nobody has to learn
+    ours -- and every one of them is a way colour breaks someone's pipeline
+    when it is missed.
+    """
+
+    def test_plain_when_piped(self) -> None:
+        """capture_output means no TTY, which is also every script and CI log."""
+        out = run("verify", "examples/off_by_one.cpp", "--function", "sum_array").stdout
+        assert "Result: counterexample" in out
+        assert "\033[" not in out, "ANSI escapes leaked into a pipe"
+
+    def test_no_color_beats_force_color(self, monkeypatch) -> None:
+        from veripp import term
+
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert term.colour_enabled(_FakeTTY()) is False
+
+    def test_force_color_overrides_a_missing_tty(self, monkeypatch) -> None:
+        from veripp import term
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        assert term.colour_enabled(_NotATTY()) is True
+
+    def test_dumb_terminals_get_nothing(self, monkeypatch) -> None:
+        from veripp import term
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
+        monkeypatch.setenv("TERM", "dumb")
+        assert term.colour_enabled(_FakeTTY()) is False
+
+    def test_style_is_a_no_op_when_colour_is_off(self, monkeypatch) -> None:
+        from veripp import term
+
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert term.style("verified", "green", "bold") == "verified"
+
+    def test_a_proof_and_a_refutation_look_different(self, monkeypatch) -> None:
+        from veripp import term
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        assert term.verdict("verified") != term.verdict("counterexample")
+
+    def test_inconclusive_is_not_dressed_as_a_pass(self, monkeypatch) -> None:
+        """The result people most often misread as success."""
+        from veripp import term
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        for weak in ("unwind_limit", "timeout", "unknown", "parse_error"):
+            assert "\033[32m" not in term.verdict(weak), f"{weak} rendered as green"
+
+
+class _FakeTTY:
+    def isatty(self) -> bool:
+        return True
+
+
+class _NotATTY:
+    def isatty(self) -> bool:
+        return False

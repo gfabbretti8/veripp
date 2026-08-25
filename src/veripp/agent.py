@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from . import term
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
 from .harness import HarnessError, generate, reachability_variant
 from .llm import LLMClient, NullLLM
@@ -78,8 +79,12 @@ class AgentReport:
         )
 
     def summary(self) -> str:
-        headline = "VACUOUS (nothing was actually checked)" if self.vacuous \
-            else self.final.outcome.value
+        if self.vacuous:
+            headline = term.style(
+                "VACUOUS (nothing was actually checked)", "yellow", "bold"
+            )
+        else:
+            headline = term.verdict(self.final.outcome.value)
         lines = [f"Result: {headline}", f"  {self.final.config.describe()}"]
         if self.vacuous:
             lines.append(
