@@ -15,3 +15,9 @@ benchmarks/results
 demo/*/build
 Dockerfile
 .dockerignore
+
+# The npx installer ships to npm, not into the image. The image already has
+# veripp; carrying a script whose job is to install the skill elsewhere is
+# dead weight in every layer.
+package.json
+npm/

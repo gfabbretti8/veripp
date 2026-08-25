@@ -806,3 +806,77 @@ class TestTestsActuallyRun:
             "run pytest with -rs in CI: a test that silently stops running is "
             "a test that stops protecting anything"
         )
+
+
+class TestNpxPackage:
+    """`npx veripp-skill` — reach for people who will never pip install a
+    Python tool. The package installs the skill, not the verifier."""
+
+    def test_manifest_is_valid_and_named_for_what_it_installs(self) -> None:
+        import json
+
+        pkg = json.loads(read("package.json"))
+        assert pkg["name"] == "veripp-skill", (
+            "not 'veripp': someone typing `npx veripp` expecting the verifier "
+            "would get a skill installer instead"
+        )
+        assert pkg["bin"] == {"veripp-skill": "npm/install-skill.mjs"}
+        assert pkg["license"] == "Apache-2.0"
+
+    def test_ships_the_skill_and_nothing_extraneous(self) -> None:
+        import json
+
+        files = json.loads(read("package.json"))["files"]
+        assert "skills/" in files and "npm/" in files
+        for excluded in ("src/", "tests/", "benchmarks/", "Dockerfile"):
+            assert excluded not in files
+
+    def test_the_version_tracks_the_project(self) -> None:
+        import json
+
+        npm_version = json.loads(read("package.json"))["version"]
+        py_version = re.search(
+            r'^version = "([^"]+)"', read("pyproject.toml"), re.M
+        ).group(1)
+        assert npm_version == py_version, (
+            f"package.json {npm_version} vs pyproject {py_version}"
+        )
+
+    def test_the_installer_is_executable_and_dependency_free(self) -> None:
+        import json
+
+        script = ROOT / "npm/install-skill.mjs"
+        assert script.stat().st_mode & stat.S_IXUSR
+        assert script.read_text().startswith("#!/usr/bin/env node")
+        pkg = json.loads(read("package.json"))
+        assert not pkg.get("dependencies"), (
+            "an installer with dependencies is slower to npx and more to trust"
+        )
+
+    def test_requires_a_node_with_the_apis_it_uses(self) -> None:
+        import json
+
+        engines = json.loads(read("package.json"))["engines"]["node"]
+        assert engines == ">=18", f"fs.cpSync needs 18; engines says {engines}"
+
+    def test_behaviour_is_covered_by_a_runnable_script(self) -> None:
+        import subprocess
+
+        for path in ("npm/test-install.sh", "tests/npx_docker.sh"):
+            assert (ROOT / path).stat().st_mode & stat.S_IXUSR, path
+        result = subprocess.run(
+            ["sh", "-n", str(ROOT / "npm/test-install.sh")],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        checks = read("npm/test-install.sh")
+        for behaviour in ("--global", "--dir", "--dry-run", "--force",
+                          "executable", "byte-for-byte"):
+            assert behaviour in checks, f"npm tests do not cover {behaviour}"
+
+    def test_ci_runs_the_installer_on_several_node_versions(self) -> None:
+        ci = read(".github/workflows/ci.yml")
+        assert "npx-installer" in ci
+        for version in ("'18'", "'20'", "'22'"):
+            assert version in ci, f"node {version} not in the CI matrix"
+        assert "npm pack" in ci, "pack decides which files reach a user"

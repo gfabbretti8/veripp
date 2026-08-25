@@ -7,6 +7,15 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## Unreleased
+
+### Added
+- `npx veripp-skill` installs the agent skill with nothing but Node — into
+  `./.claude/skills/veripp`, or `--global` for every project. It installs the
+  skill, not the verifier, and says so: the verifier is a Python program
+  needing ESBMC, and the skill's own `install.sh` reports what getting it
+  would cost before doing anything.
+
 ## 0.1.3
 
 ### Fixed

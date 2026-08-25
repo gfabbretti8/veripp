@@ -1,0 +1,16 @@
+{
+  "name": "veripp-skill",
+  "version": "0.1.3",
+  "description": "Install the veripp agent skill: prove C/C++ functions free of overflow, out-of-bounds access, null dereference and division by zero.",
+  "bin": { "veripp-skill": "npm/install-skill.mjs" },
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "files": ["npm/", "skills/", "README.md", "LICENSE"],
+  "keywords": ["claude", "claude-code", "skill", "agent", "formal-verification",
+               "model-checking", "esbmc", "c", "cpp", "memory-safety"],
+  "license": "Apache-2.0",
+  "author": "Giovanni Fabbretti",
+  "homepage": "https://github.com/gfabbretti8/veripp",
+  "repository": { "type": "git", "url": "git+https://github.com/gfabbretti8/veripp.git" },
+  "bugs": { "url": "https://github.com/gfabbretti8/veripp/issues" }
+}

@@ -280,7 +280,18 @@ Roughly 450 MB (amd64) and 530 MB (arm64), most of it ESBMC itself.
 
 ## As a skill for coding agents
 
-In Claude Code, install it from this repository:
+The quickest way, needing nothing but Node:
+
+```bash
+npx veripp-skill            # this project
+npx veripp-skill --global   # every project
+```
+
+That installs the skill only. The verifier is a Python program that needs
+ESBMC; the skill carries a script that works out how to get it and reports
+what that would cost before touching anything.
+
+In Claude Code you can also install it as a plugin from this repository:
 
 ```
 /plugin marketplace add gfabbretti8/veripp

@@ -78,3 +78,32 @@ jobs:
           cd "$(mktemp -d)"   # nowhere near the source tree
           veripp doctor | tee doctor.txt
           grep -q 'contracts header: /' doctor.txt
+
+  npx-installer:
+    name: npx installer
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Pack and install for real: `npm pack` is what decides which files
+      # reach a user, and a skill whose SKILL.md was left out of `files`
+      # installs an empty directory without erroring.
+      - name: Pack and install globally
+        run: |
+          npm pack
+          npm install -g ./veripp-skill-*.tgz
+
+      - name: The packed tarball must contain the skill
+        run: |
+          tar tzf veripp-skill-*.tgz | grep -q 'package/skills/veripp/SKILL.md'
+          tar tzf veripp-skill-*.tgz | grep -q 'package/skills/veripp/install.sh'
+
+      - name: Behaviour
+        run: sh npm/test-install.sh
