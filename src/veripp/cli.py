@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from . import __version__, term
+from .cache import DEFAULT_DIR as DEFAULT_CACHE_DIR
 from .baseline import (
     DEFAULT_NAME as DEFAULT_BASELINE,
     Baseline,
@@ -134,6 +135,15 @@ def main(argv: list[str] | None = None) -> int:
     _add_common_args(s)
     s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
     s.add_argument("--json", action="store_true", help="machine-readable output")
+    s.add_argument(
+        "--cache", type=Path, default=None, metavar="DIR",
+        help=f"reuse verdicts for files that have not changed (default: "
+             f"{DEFAULT_CACHE_DIR}; --no-cache to disable). The key covers the "
+             "file, its local headers, linked sources, the bounds and the "
+             "checker version, so a stale verdict cannot be served",
+    )
+    s.add_argument("--no-cache", action="store_true",
+                   help="verify everything, ignoring any cached verdicts")
     s.add_argument(
         "--only", action="append", default=[], metavar="GLOB",
         help="verify only functions matching this glob (repeatable): "
@@ -557,6 +567,60 @@ def _findings_from(reports) -> list:
     return keys
 
 
+def _cache_for(args):
+    """The cache to use, or None."""
+    if getattr(args, "no_cache", False):
+        return None
+    from .cache import Cache
+
+    return Cache(Path(getattr(args, "cache", None) or DEFAULT_CACHE_DIR))
+
+
+def _cache_key(args, source: Path, config, options) -> str:
+    from .cache import esbmc_version, key_for
+    from .cppsig import included_names
+    from .esbmc import find_esbmc
+
+    # Local headers and linked sources are inputs: a change in either can flip
+    # this file's verdict without touching it.
+    extra: list[Path] = [Path(p).resolve() for p in getattr(args, "link", [])]
+    try:
+        for name in included_names(source.read_text(errors="replace")):
+            for directory in [source.parent, *getattr(args, "include", [])]:
+                candidate = Path(directory) / name
+                if candidate.is_file():
+                    extra.append(candidate.resolve())
+                    break
+    except OSError:
+        pass
+
+    return key_for(
+        source, config=config, options=options,
+        veripp_version=__version__,
+        checker_version=esbmc_version(find_esbmc()),
+        extra_files=extra,
+    )
+
+
+def _report_from_cache(source: Path, payload: dict):
+    """Rebuild a ScanReport from a cached entry."""
+    from .scan import FunctionResult, ScanReport
+
+    report = ScanReport(source=source, candidates=payload.get("candidates", 0))
+    for item in payload.get("results", []):
+        report.results.append(FunctionResult(**item))
+    return report
+
+
+def _cache_payload(report) -> dict:
+    from dataclasses import asdict
+
+    return {
+        "candidates": report.candidates,
+        "results": [asdict(r) for r in report.results],
+    }
+
+
 def _selected_names(args, source: Path) -> list[str] | None:
     """The functions --only asks for, or None for all of them.
 
@@ -767,6 +831,7 @@ def _scan_tree(args) -> int:
         return EXIT_USAGE
 
     reports: list = []
+    reused = 0
 
     # Everything derived from the source has to be derived per file. A
     # compilation database is keyed by translation unit, and the harness's
@@ -817,9 +882,25 @@ def _scan_tree(args) -> int:
             selected = _selected_names(args, source)
             if selected is not None and not selected:
                 continue  # nothing here matches; not an error across a tree
-            reports.append(scan(source, config, options, jobs=args.jobs,
-                                progress=progress, escalations=args.escalations,
-                                only=selected))
+
+            # --only asks for a subset, so its result is not this file's
+            # verdict and must not be cached as one.
+            cache = _cache_for(args) if selected is None else None
+            key = _cache_key(args, source, config, options) if cache else ""
+            cached = cache.get(key) if cache else None
+            if cached is not None:
+                reports.append(_report_from_cache(source, cached))
+                reused += 1
+                if not args.quiet and not args.json:
+                    print("  (cached)", file=sys.stderr)
+                continue
+
+            report = scan(source, config, options, jobs=args.jobs,
+                          progress=progress, escalations=args.escalations,
+                          only=selected)
+            if cache:
+                cache.put(key, _cache_payload(report))
+            reports.append(report)
         except Exception as exc:  # one unreadable file must not lose the rest
             print(f"  skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
 
@@ -841,6 +922,10 @@ def _scan_tree(args) -> int:
             for r in reports
         ],
     }
+    if reused and not args.quiet and not args.json:
+        print(f"\n  {reused} of {len(sources)} file"
+              f"{'s' if len(sources) != 1 else ''} were unchanged and reused "
+              "from the cache", file=sys.stderr)
     _write_sarif(args, reports)
     verdict, extra = _apply_baseline(args, reports)
     payload.update(extra)
@@ -910,8 +995,20 @@ def _scan(args) -> int:
         print(f"  list them with:  veripp scan {args.source}", file=sys.stderr)
         return EXIT_USAGE
 
-    report = scan(args.source, config, options, jobs=args.jobs, progress=progress,
-                  escalations=args.escalations, only=selected)
+    cache = _cache_for(args) if selected is None else None
+    key = _cache_key(args, args.source, config, options) if cache else ""
+    cached = cache.get(key) if cache else None
+    if cached is not None:
+        report = _report_from_cache(args.source, cached)
+        if not args.quiet and not args.json:
+            print(f"  (cached: {args.source} unchanged since it was last "
+                  "verified)", file=sys.stderr)
+    else:
+        report = scan(args.source, config, options, jobs=args.jobs,
+                      progress=progress, escalations=args.escalations,
+                      only=selected)
+        if cache:
+            cache.put(key, _cache_payload(report))
 
     scan_payload = {
             "source": str(report.source),

@@ -281,6 +281,24 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src:ro" \
 
 Roughly 450 MB (amd64) and 530 MB (arm64), most of it ESBMC itself.
 
+### Repeat runs are cached
+
+A second scan reuses verdicts for files that have not changed, which is what
+makes this affordable on every push rather than nightly. The key covers the
+file, the local headers it includes, any linked sources, the bounds, the
+harness options and the checker's own version — so a stale verdict cannot be
+served. `--no-cache` verifies everything; `--cache DIR` moves it.
+
+Deliberately *not* keyed on the function body, which would be unsound:
+
+```c
+static int limit(void) { return 4; }
+int at(const int *a, int i) { if (i<0 || i>=limit()) return 0; return a[i]; }
+```
+
+`at` verifies. Change `limit` to return 99 and `at` — byte-identical — yields a
+counterexample.
+
 ## As a skill for coding agents
 
 The quickest way, needing nothing but Node:
@@ -318,6 +336,7 @@ bounded proof, and why a vacuous result is not a pass.
 veripp scan src/            # every .c/.cc/.cpp/.cxx underneath
 veripp scan . --jobs 8
 veripp scan src/ --only 'parse_*'   # just the ones you are working on
+veripp scan src/                    # unchanged files are reused from cache
 ```
 
 Build trees, vendored dependencies and dotted directories are skipped

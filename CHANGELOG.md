@@ -42,6 +42,12 @@ run, and refuses to back results from one that cannot detect a planted bug.
   function pointer the checker could not resolve — 14 of cJSON's 33
   counterexamples were this one pattern, and none of them said anything about
   cJSON.
+- Repeat scans reuse verdicts for unchanged files, turning minutes per commit
+  into seconds. The key covers the translation unit, its local headers, linked
+  sources, bounds, harness options and the checker version. Deliberately not
+  keyed on the function body, which is unsound: a function can be
+  byte-identical and change verdict when a callee changes, and a body hash
+  would serve the stale "verified".
 - `npx veripp-skill` installs the agent skill with nothing but Node.
 
 ### Changed

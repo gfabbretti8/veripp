@@ -7,3 +7,6 @@ build/
 .pytest_cache/
 *.inv.cpp
 *.fix.cpp
+
+# Cached verdicts; keyed on inputs, safe to delete.
+.veripp-cache/
