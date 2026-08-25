@@ -613,6 +613,39 @@ class TestActHarness:
         assert "$HOME" in text
         assert "/tmp/veripp-act" not in text
 
+    def test_enumerates_only_keys_under_jobs(self) -> None:
+        """A two-space-key grep across the whole file also matches `push:`
+        under `on:`, and act then tries to run a job by that name. Scoping to
+        the jobs: block fixes it without needing a YAML parser -- a local dev
+        harness should not require a Python package to list four names."""
+        text = read(self.PATH)
+        assert "/^jobs:/" in text, "job names must be read from the jobs: block"
+        assert "yaml" not in text.lower(), "the harness should not need PyYAML"
+
+    def test_the_enumeration_actually_matches_the_workflow(self) -> None:
+        import subprocess
+
+        script = re.search(r"jobs=\$\(awk '(.*?)' \.github", read(self.PATH), re.S)
+        assert script, "could not find the awk enumeration"
+        result = subprocess.run(
+            ["awk", script.group(1), ".github/workflows/action-selftest.yml"],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        found = set(result.stdout.split())
+        yaml = pytest.importorskip("yaml")
+        expected = set(
+            yaml.safe_load(read(".github/workflows/action-selftest.yml"))["jobs"]
+        )
+        assert found == expected, f"awk found {found}, workflow defines {expected}"
+
+    def test_skips_the_job_it_structurally_cannot_run(self) -> None:
+        """refuses-a-lying-checker installs its own broken checker at the very
+        path the harness mounts a working one onto, read-only. It needs the
+        absence of a checker; the harness exists to supply one."""
+        text = read(self.PATH)
+        assert "refuses-a-lying-checker" in text
+        assert "INCOMPATIBLE" in text
+
     def test_relies_on_the_actions_reuse_step(self) -> None:
         """The harness only works because the action prefers an ESBMC already
         on PATH. If that step is ever dropped, this stops testing anything."""

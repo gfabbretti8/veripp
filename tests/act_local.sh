@@ -63,6 +63,40 @@ opts=(
   --dns 1.1.1.1
 )
 
+# One job is structurally incompatible with this harness: it installs its own
+# deliberately-broken checker at /usr/local/bin/esbmc to prove the soundness
+# gate rejects it, and that is the very path we mount a working checker onto,
+# read-only. The job needs the absence of a checker; the harness exists to
+# supply one. Run it on GitHub, or by hand without the mounts.
+INCOMPATIBLE="refuses-a-lying-checker"
+
+if [ -z "$JOB" ]; then
+  # Job names are the two-space keys *after* the top-level `jobs:` line.
+  # Grepping for two-space keys across the whole file also matches `push:`
+  # under `on:`, and act then tries to run a job by that name. Done with awk
+  # rather than a YAML parser so the harness needs nothing installed.
+  jobs=$(awk '
+    /^jobs:/        { in_jobs = 1; next }
+    /^[^[:space:]]/ { in_jobs = 0 }
+    in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+      gsub(/[[:space:]:]/, "", $0); print
+    }
+  ' .github/workflows/action-selftest.yml | grep -v "^$INCOMPATIBLE$")
+
+  if [ -z "$jobs" ]; then
+    echo "could not read job names from the workflow" >&2
+    exit 1
+  fi
+  echo "== running: $(echo "$jobs" | tr '\n' ' ')"
+  echo "== each job reinstalls uv in a fresh container; allow several minutes"
+  echo "== skipping $INCOMPATIBLE (needs no checker on PATH; see comment above)"
+  failed=0
+  for job in $jobs; do
+    "$0" "$job" || failed=1
+  done
+  exit "$failed"
+fi
+
 args=(
   push -W .github/workflows/action-selftest.yml
   --container-architecture "$PLATFORM"
