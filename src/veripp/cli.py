@@ -254,6 +254,15 @@ def main(argv: list[str] | None = None) -> int:
     # wording of its error messages.
     parser.commands = tuple(sub.choices)
 
+    # `veripp src/` means `veripp scan src/`. The premise of this tool is that
+    # it makes the decisions, and "which subcommand" is the first one a user
+    # should not have to make: pointed at code, the useful thing to do is
+    # check it. Explicit subcommands still work.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] not in sub.choices and not argv[0].startswith("-"):
+        if Path(argv[0]).exists():
+            argv = ["scan", *argv]
+
     args = parser.parse_args(argv)
 
     # `veripp` on its own is someone finding out what this is. Show them,

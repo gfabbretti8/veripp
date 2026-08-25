@@ -397,3 +397,39 @@ class TestScanNextStep:
         body = "int clamp(int x){ if(x<0) return 0; if(x>100) return 100; return x; }\n"
         out = self._scan(tmp_path, body).stdout
         assert "next:" not in out, "nothing to do, so say nothing"
+
+
+class TestBarePathJustWorks:
+    """`veripp src/` means `veripp scan src/`.
+
+    The premise of this tool is that it makes the decisions. "Which
+    subcommand" is the first one a user should not have to make: pointed at
+    code, the useful thing to do is check it.
+    """
+
+    @pytest.mark.esbmc
+    def test_a_bare_directory_scans_it(self) -> None:
+        result = run("examples/")
+        assert result.returncode in (0, 1)
+        assert "Scanned" in result.stdout, result.stderr[-300:]
+
+    @pytest.mark.esbmc
+    def test_a_bare_file_scans_it(self) -> None:
+        result = run("examples/ring_buffer.cpp")
+        assert result.returncode == 0
+        assert "PROVED" in result.stdout + result.stderr
+
+    def test_an_explicit_subcommand_is_untouched(self) -> None:
+        assert "usage" in run("scan", "--help").stdout.lower()
+
+    def test_a_typo_is_still_a_typo(self) -> None:
+        """A mistyped command must not be mistaken for a missing path, or the
+        did-you-mean disappears."""
+        result = run("scna", "foo.c")
+        assert result.returncode == 2
+        assert "veripp scan" in result.stderr
+
+    def test_a_path_that_does_not_exist_is_not_swallowed(self) -> None:
+        result = run("no-such-file.c")
+        assert result.returncode == 2
+        assert "unknown command" in result.stderr or "not found" in result.stderr
