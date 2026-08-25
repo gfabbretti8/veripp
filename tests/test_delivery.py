@@ -618,9 +618,17 @@ class TestActHarness:
         under `on:`, and act then tries to run a job by that name. Scoping to
         the jobs: block fixes it without needing a YAML parser -- a local dev
         harness should not require a Python package to list four names."""
-        text = read(self.PATH)
-        assert "/^jobs:/" in text, "job names must be read from the jobs: block"
-        assert "yaml" not in text.lower(), "the harness should not need PyYAML"
+        # Judge the code, not the comment that explains it -- the fourth
+        # time a test in this repo has been fooled by prose quoting the thing
+        # it checks for.
+        code = "\n".join(
+            line for line in read(self.PATH).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "/^jobs:/" in code, "job names must be read from the jobs: block"
+        assert "import yaml" not in code and "yaml.safe_load" not in code, (
+            "a local dev harness should not need PyYAML to list four job names"
+        )
 
     def test_the_enumeration_actually_matches_the_workflow(self) -> None:
         import subprocess
