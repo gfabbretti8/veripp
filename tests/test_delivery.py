@@ -173,12 +173,13 @@ class TestSkill:
         import sys
 
         text = read(self.PATH)
-        # `docker run --rm` and friends are not veripp flags.
-        docker_flags = {"--rm", "--platform", "--entrypoint", "--user"}
+        # Flags belonging to other commands the skill mentions -- docker, and
+        # the skill's own install.sh -- are not veripp flags.
+        foreign = {"--rm", "--platform", "--entrypoint", "--user", "--yes"}
         referenced = {
             flag
             for flag in re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", text)
-            if flag not in docker_flags
+            if flag not in foreign
         }
 
         advertised: set[str] = set()
@@ -536,3 +537,48 @@ class TestSystemHeadersAreReachable:
             "the smoke test must fail loudly on a frontend parse error rather "
             "than accept it as an ordinary non-zero exit"
         )
+
+
+class TestSkillInstaller:
+    """The skill can bootstrap veripp, but must not do it behind the user's
+    back: every route is a large download or a source build."""
+
+    PATH = "skills/veripp/install.sh"
+
+    def test_is_executable_and_valid_bash(self) -> None:
+        import subprocess
+
+        assert (ROOT / self.PATH).stat().st_mode & stat.S_IXUSR
+        result = subprocess.run(
+            ["bash", "-n", str(ROOT / self.PATH)], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_does_nothing_without_an_explicit_yes(self) -> None:
+        text = read(self.PATH)
+        assert "--yes" in text
+        assert 'DO_IT=0' in text, "the default must be a dry report"
+
+    def test_refuses_the_unsound_homebrew_formula(self) -> None:
+        """`brew install esbmc` is 8.4, which carries esbmc#6508."""
+        text = read(self.PATH)
+        assert "brew install --HEAD esbmc" in text
+        assert not re.search(r"^\s*plan \"brew install esbmc\"", text, re.M)
+
+    def test_skill_tells_the_agent_to_ask_first(self) -> None:
+        skill = read("skills/veripp/SKILL.md")
+        assert "install.sh" in skill
+        assert "before running" in skill and "--yes" in skill
+
+    def test_installer_runs_dry_and_changes_nothing(self) -> None:
+        import subprocess
+
+        result = subprocess.run(
+            ["bash", str(ROOT / self.PATH)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/tmp"},
+        )
+        assert result.returncode in (0, 3, 4), result.stdout + result.stderr
+        assert "Re-run with --yes" in result.stdout or "image" in result.stdout
