@@ -119,6 +119,40 @@ mkdir -p ~/tmp
 SMOKE_TMPDIR=$HOME/tmp PLATFORM=linux/amd64 ./tests/image_smoketest.sh veripp:test
 ```
 
+## After the image is published
+
+Two things are NOT done by tagging, and the README's instructions are wrong
+until the first one is:
+
+**1. Make the package public.** A package inherits its repository's
+visibility, so a private repo publishes a private image and
+`docker run ghcr.io/gfabbretti8/veripp` fails for everyone else. There is no
+REST endpoint for this — change it in the UI:
+
+    https://github.com/users/gfabbretti8/packages/container/veripp/settings
+
+Confirm it worked without any credentials at all:
+
+```bash
+curl -s "https://ghcr.io/token?scope=repository:gfabbretti8/veripp:pull&service=ghcr.io" \
+  | grep -q '"token"' && echo public || echo still private
+```
+
+While it is private that request returns `UNAUTHORIZED`.
+
+**2. To pull it yourself**, `gh auth token` is not enough — it lacks
+`read:packages`, and the pull fails with `403 Forbidden` even though
+`docker login` succeeds:
+
+```bash
+gh auth refresh -s read:packages
+gh auth token | docker login ghcr.io -u <you> --password-stdin
+```
+
+The release workflow does not need either of these: it pushes with
+`GITHUB_TOKEN` and verifies the manifest in-job, which is what the
+"Verify both architectures are in the manifest" step reports.
+
 ## Version
 
 `pyproject.toml` is the only place the version lives. Bump it before building;
