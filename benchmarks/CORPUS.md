@@ -230,3 +230,37 @@ against unconstrained nondeterministic doubles it reports every division.
 `--unsigned-overflow-check` stays off: unsigned wraparound is *defined*
 behaviour and hashing code such as djb2 relies on it, so it would report
 correct code as broken.
+
+## What the stricter check set cost
+
+The recorded "32 of cJSON's 117" predates both the check-set change and the
+unwind default moving 8 -> 32, so comparing it to a fresh run would confound
+two variables. Re-run with the same build and the same `unwind=32`, differing
+only in which checks were enabled:
+
+| checks | proved of 117 |
+|---|---|
+| four (overflow, bounds, pointer, div-by-zero) | **32** |
+| eight (the four above + memory-leak, uninitialised, ub-shift, nan) | **31** |
+
+Quadrupling the properties cost exactly one proof, and the one it cost is
+`internal_malloc`:
+
+```c
+static void * CJSON_CDECL internal_malloc(size_t size)
+{
+    return malloc(size);
+}
+```
+
+Under `--memory-leak-check` this reports `forgotten memory: dynamic_1_array` —
+the harness calls it and never frees the result, which is a property of the
+harness, not of cJSON. veripp already classifies it that way, so it lands in
+HARNESS ARTIFACT rather than being presented as a bug:
+
+> the failing property is in the generated harness itself, not in the code
+> under test
+
+That is the shape of answer this measurement was for. A check that costs one
+proof out of 32, and costs it to a correctly-labelled artifact rather than to
+a finding a user has to triage, is one that can be on by default.

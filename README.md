@@ -148,12 +148,14 @@ proved**, 99 of lodepng's 260, 32 of cJSON's 117 — free of overflow,
 out-of-bounds, null dereference and division by zero for any input within the
 stated bounds.
 
-> These counts were obtained with the four checks veripp ran at the time.
-> It now checks eight properties by default (adding memory leaks,
-> uninitialised reads, undefined shifts and NaN), and a stricter check set
-> can only prove *fewer* functions, never more. Treat the numbers above as
-> an upper bound until the corpus is re-run; the per-check false-positive
-> measurements behind the newer checks are in
+> Those counts were taken with the four checks veripp ran at the time. It
+> now checks eight properties by default. Re-running cJSON with the same
+> build and bounds, changing only the check set: **32 proved under four
+> checks, 31 under eight** — the stricter set cost exactly one proof, and
+> cost it to `internal_malloc`, whose body is `return malloc(size)` and
+> which the memory-leak check flags because the *harness* never frees.
+> veripp labels that a harness artifact rather than a bug. Details and the
+> per-check false-positive measurements are in
 > [benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md). Full table, and the veripp bugs each library exposed, in
 [benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md). See `ROADMAP.md` for what is not done, and
 **Known limits** below for what to expect before you point it at your code.
