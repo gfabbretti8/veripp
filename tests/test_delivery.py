@@ -13,11 +13,22 @@ from __future__ import annotations
 import os
 import re
 import stat
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+#: POSIX-only delivery artifacts: shell scripts and their executable bit.
+#: Windows has neither -- NTFS has no execute permission and there is no
+#: /bin/sh -- so these assertions cannot hold there and would not mean
+#: anything if they did. The scripts they cover run on Linux and macOS.
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="shell scripts and the executable bit are POSIX concepts",
+)
+
 
 
 def read(name: str) -> str:
@@ -269,6 +280,7 @@ class TestManifestRehearsal:
 
     PATH = "tests/manifest_rehearsal.sh"
 
+    @posix_only
     def test_is_executable_and_valid_bash(self) -> None:
         import subprocess
 
@@ -291,6 +303,7 @@ class TestManifestRehearsal:
 class TestSmokeTest:
     PATH = "tests/image_smoketest.sh"
 
+    @posix_only
     def test_is_executable(self) -> None:
         mode = (ROOT / self.PATH).stat().st_mode
         assert mode & stat.S_IXUSR, f"{self.PATH} must be executable; CI runs it directly"
@@ -561,6 +574,7 @@ class TestSkillInstaller:
 
     PATH = "skills/veripp/install.sh"
 
+    @posix_only
     def test_is_executable_and_valid_bash(self) -> None:
         import subprocess
 
@@ -586,6 +600,7 @@ class TestSkillInstaller:
         assert "install.sh" in skill
         assert "before running" in skill and "--yes" in skill
 
+    @posix_only
     def test_installer_runs_dry_and_changes_nothing(self) -> None:
         import subprocess
 
@@ -607,6 +622,7 @@ class TestActHarness:
 
     PATH = "tests/act_local.sh"
 
+    @posix_only
     def test_is_executable_and_valid_bash(self) -> None:
         import subprocess
 
@@ -842,6 +858,7 @@ class TestNpxPackage:
             f"package.json {npm_version} vs pyproject {py_version}"
         )
 
+    @posix_only
     def test_the_installer_is_executable_and_dependency_free(self) -> None:
         import json
 
@@ -859,6 +876,7 @@ class TestNpxPackage:
         engines = json.loads(read("package.json"))["engines"]["node"]
         assert engines == ">=18", f"fs.cpSync needs 18; engines says {engines}"
 
+    @posix_only
     def test_behaviour_is_covered_by_a_runnable_script(self) -> None:
         import subprocess
 
