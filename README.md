@@ -229,9 +229,28 @@ pattern veripp targets), runs `veripp doctor` so a broken checker fails the job
 rather than producing quiet non-proofs, then scans. Set `function:` to verify
 one target, `args:` for `-I`/`-D`/`--link`/`--unwind`.
 
-Start with `fail-on: never`. A generated harness produces leads that still need
-triage, and a verifier that reddens the build on its first day gets removed on
-its second.
+On an existing codebase, record what is already there first — otherwise the
+first run fails on everything it finds and the check gets removed:
+
+```bash
+veripp accept src/ --baseline .veripp-baseline   # commit this
+```
+
+```yaml
+- uses: gfabbretti8/veripp@main
+  with:
+    source: src/
+    baseline: .veripp-baseline
+```
+
+Now the job goes red only on findings that are **not** in the baseline. The
+file is JSON and meant to be reviewed in the pull request that adds it: each
+entry is a risk somebody decided to carry. When a finding stops occurring,
+veripp says so, because an entry that matches nothing still grants permission
+to whatever matches it later.
+
+`fail-on: never` remains for a first look, but a check that can never fail is
+a check nobody reads.
 
 ## In a container
 

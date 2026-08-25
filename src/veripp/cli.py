@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import NoReturn
 
 from . import __version__, term
+from .baseline import (
+    DEFAULT_NAME as DEFAULT_BASELINE,
+    Baseline,
+    BaselineError,
+    key_for,
+)
 from .agent import AgentReport, Budget, verify_with_agent
 from .compdb import CompDBError, entry_for, find_database
 from .cppsig import SignatureError
@@ -129,6 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--jobs", "-j", type=int, default=4, help="parallel verifications")
     s.add_argument("--json", action="store_true", help="machine-readable output")
     s.add_argument(
+        "--baseline", type=Path, default=None, metavar="PATH",
+        help="findings recorded here are reported but do not fail the run; "
+             f"write one with `veripp accept` (default name: {DEFAULT_BASELINE})",
+    )
+    s.add_argument(
         "--json-out",
         metavar="PATH",
         help="also write the JSON report here, keeping the readable output "
@@ -154,6 +165,34 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     c.add_argument("shell", choices=("bash", "zsh", "fish"))
+
+    a = sub.add_parser(
+        "accept",
+        help="record current findings as known, so CI fails only on new ones",
+        description=(
+            "Scan and write the findings to a baseline file.\n\n"
+            "Pointed at an existing codebase a verifier reports everything at "
+            "once, and a check that goes red on day one is removed on day two. "
+            "Accept what is already there, then `veripp scan --baseline` fails "
+            "only on what appears afterwards.\n\n"
+            "The file is JSON and meant to be reviewed: each entry is a risk "
+            "someone decided to carry."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    # `source` comes from _add_common_args below, which every scanning
+    # subcommand shares.
+    a.add_argument("--baseline", type=Path, default=None,
+                   help=f"where to write it (default: {DEFAULT_BASELINE})")
+    a.add_argument("--reason", default="",
+                   help="why these are being accepted; recorded on every entry")
+    _add_common_args(a)
+    a.add_argument("--jobs", type=int, default=4, help="parallel verifications")
+    a.add_argument("--escalations", type=int, default=1,
+                   help="extra attempts with larger bounds")
+    a.add_argument("--quiet", action="store_true", help="only the summary")
+    a.add_argument("--json", action="store_true", help="machine-readable output")
+    a.add_argument("--json-out", metavar="PATH", help=argparse.SUPPRESS)
 
     d = sub.add_parser("doctor", help="check that dependencies are available")
     d.add_argument(
@@ -214,6 +253,9 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_USAGE
     except OSError:
         pass
+
+    if args.command == "accept":
+        return _accept(args)
 
     if args.command == "scan":
         return _scan(args)
@@ -496,6 +538,144 @@ def discover_sources(root: Path) -> list[Path]:
     return found
 
 
+def _findings_from(reports) -> list:
+    """Every counterexample across one or more scan reports, as baseline keys."""
+    keys = []
+    for report in reports:
+        for result in report.counterexamples:
+            keys.append(key_for(report.source, result.name, result.detail))
+    return keys
+
+
+def _baseline_for(args):
+    """The baseline to apply, or None. An explicitly named one that cannot be
+    read is fatal; a default one that is simply absent is not."""
+    named = getattr(args, "baseline", None)
+    if named is None:
+        return None
+    try:
+        return Baseline.load(named)
+    except BaselineError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(EXIT_USAGE) from exc
+
+
+def _apply_baseline(args, reports) -> tuple[int, dict]:
+    """The exit code once accepted findings are discounted, plus JSON fields."""
+    found = _findings_from(reports)
+    baseline = _baseline_for(args)
+    if baseline is None:
+        return (EXIT_COUNTEREXAMPLE if found else EXIT_VERIFIED), {}
+
+    new, known = baseline.split(found)
+    stale = baseline.stale(found)
+    return (EXIT_COUNTEREXAMPLE if new else EXIT_VERIFIED), {
+        "baseline": str(args.baseline),
+        "new_findings": [k.as_dict() for k in new],
+        "known_findings": [k.as_dict() for k in known],
+        "stale_baseline_entries": [k.as_dict() for k in stale],
+    }
+
+
+def _baseline_note(args, reports) -> str:
+    """What the baseline changed about this run, in words."""
+    baseline = _baseline_for(args)
+    if baseline is None:
+        return ""
+    new, known = baseline.split(_findings_from(reports))
+    stale = baseline.stale(_findings_from(reports))
+
+    lines = ["", f"  baseline: {args.baseline}"]
+    if known:
+        lines.append(f"    {len(known)} known finding"
+                     f"{'s' if len(known) != 1 else ''}, not failing this run")
+    if new:
+        lines.append(f"    {len(new)} NEW finding"
+                     f"{'s' if len(new) != 1 else ''}:")
+        for key in new[:10]:
+            lines.append(f"      {key.file}: {key.function} — {key.property}")
+        if len(new) > 10:
+            lines.append(f"      ... and {len(new) - 10} more")
+        lines.append("")
+        lines.append("    Fix them, or accept them deliberately:")
+        lines.append(f"      veripp accept {args.source} --baseline {args.baseline}")
+    elif known:
+        lines.append("    no new findings")
+    if stale:
+        # An entry matching nothing still grants permission, and will go on
+        # granting it to whatever matches later.
+        lines.append(f"    {len(stale)} baseline entr"
+                     f"{'ies' if len(stale) != 1 else 'y'} no longer occur; "
+                     "re-run `veripp accept` to drop them")
+    return "\n".join(lines)
+
+
+def _accept(args) -> int:
+    """Record what is already there."""
+    destination = args.baseline or Path(DEFAULT_BASELINE)
+
+    reports = _collect_reports(args)
+    if reports is None:
+        return EXIT_USAGE
+
+    keys = _findings_from(reports)
+    baseline = Baseline()
+    signatures = {
+        key_for(r.source, f.name, f.detail): f.signature
+        for r in reports for f in r.counterexamples
+    }
+    from .baseline import Entry
+    from datetime import date
+
+    today = date.today().isoformat()
+    for key in keys:
+        baseline.entries[key] = Entry(
+            key=key, signature=signatures.get(key, ""),
+            accepted=today, reason=args.reason,
+        )
+    baseline.save(destination)
+
+    print(f"\nAccepted {len(keys)} finding{'s' if len(keys) != 1 else ''} "
+          f"into {destination}")
+    if keys:
+        print("  Review it before committing: each entry is a risk someone")
+        print("  decided to carry, and nothing will fail CI for it again.")
+    print(f"\n  veripp scan {args.source} --baseline {destination}")
+    print("      now fails only on findings that are not in there.")
+    return EXIT_VERIFIED
+
+
+def _collect_reports(args):
+    """Scan one file or a whole tree, returning the reports."""
+    if args.source.is_dir():
+        sources = discover_sources(args.source)
+        if not sources:
+            print(f"error: no C or C++ source files under {args.source}",
+                  file=sys.stderr)
+            return None
+    else:
+        sources = [args.source]
+
+    import copy
+
+    reports = []
+    for index, source in enumerate(sources, 1):
+        per_file = copy.copy(args)
+        per_file.source = source
+        per_file._compdb_quiet = index > 1
+        per_file._compdb_optional = True
+        if not args.quiet and not args.json and len(sources) > 1:
+            print(f"[{index}/{len(sources)}] {source}", file=sys.stderr)
+        try:
+            reports.append(scan(
+                source, _config_for(per_file), _harness_options(per_file),
+                jobs=args.jobs, escalations=args.escalations,
+            ))
+        except Exception as exc:
+            print(f"  skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
+    return reports
+
+
 def _scan_tree(args) -> int:
     """Scan every C/C++ file under a directory.
 
@@ -587,8 +767,11 @@ def _scan_tree(args) -> int:
             for r in reports
         ],
     }
-    _emit(args, payload, _tree_summary(args.source, reports))
-    return EXIT_COUNTEREXAMPLE if payload["counterexamples"] else EXIT_VERIFIED
+    verdict, extra = _apply_baseline(args, reports)
+    payload.update(extra)
+    _emit(args, payload,
+          _tree_summary(args.source, reports) + _baseline_note(args, reports))
+    return verdict
 
 
 def _tree_summary(root: Path, reports: list) -> str:
@@ -664,8 +847,10 @@ def _scan(args) -> int:
             "inconclusive": [{"function": r.name, "outcome": r.outcome} for r in report.inconclusive],
             "not_harnessable": report.refusal_reasons(),
     }
-    _emit(args, scan_payload, report.summary())
-    return EXIT_VERIFIED if not report.counterexamples else EXIT_COUNTEREXAMPLE
+    verdict, extra = _apply_baseline(args, [report])
+    scan_payload.update(extra)
+    _emit(args, scan_payload, report.summary() + _baseline_note(args, [report]))
+    return verdict
 
 
 def _emit(args, payload: dict, readable: str) -> None:

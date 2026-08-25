@@ -15,6 +15,14 @@ inputs:
     description: 'Extra veripp arguments (-I, -D, --link, --unwind, --timeout ...).'
     required: false
     default: ''
+  baseline:
+    description: >-
+      Path to a .veripp-baseline written by `veripp accept`. Findings recorded
+      there are reported but do not fail the job, so the check goes red only on
+      what appears afterwards. Without one, a first run on an existing codebase
+      fails on everything it finds and the check gets removed.
+    required: false
+    default: ''
   fail-on:
     description: >-
       When to fail the job. "counterexample" (default) fails only on findings;
@@ -137,6 +145,7 @@ runs:
         VERIPP_FUNCTION: ${{ inputs.function }}
         VERIPP_ARGS: ${{ inputs.args }}
         VERIPP_FAIL_ON: ${{ inputs.fail-on }}
+        VERIPP_BASELINE: ${{ inputs.baseline }}
       run: |
         set -uo pipefail
         # GitHub runs composite `shell: bash` steps as `bash -e -o pipefail`,
@@ -154,6 +163,16 @@ runs:
         # from a single run. Running twice -- once for each -- doubled the
         # verification cost of every job, which on a real codebase is minutes,
         # not seconds.
+        baseline_args=""
+        if [ -n "$VERIPP_BASELINE" ]; then
+          if [ ! -f "$VERIPP_BASELINE" ]; then
+            echo "::error::baseline '$VERIPP_BASELINE' not found. Create it with:"
+            echo "::error::  veripp accept <source> --baseline $VERIPP_BASELINE"
+            exit 2
+          fi
+          baseline_args="--baseline $VERIPP_BASELINE"
+        fi
+
         # shellcheck disable=SC2086
         if [ -n "$VERIPP_FUNCTION" ]; then
           uv run --project "$GITHUB_ACTION_PATH" \
@@ -161,7 +180,7 @@ runs:
             --json-out "$report" $VERIPP_ARGS
         else
           uv run --project "$GITHUB_ACTION_PATH" \
-            veripp scan "$VERIPP_SOURCE" --json-out "$report" $VERIPP_ARGS
+            veripp scan "$VERIPP_SOURCE" --json-out "$report" $baseline_args $VERIPP_ARGS
         fi
         status=$?
         set -e

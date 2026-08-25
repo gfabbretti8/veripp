@@ -16,6 +16,20 @@ run, and refuses to back results from one that cannot detect a planted bug.
   needing ESBMC, and the skill's own `install.sh` reports what getting it
   would cost before doing anything.
 
+## Unreleased
+
+### Added
+- `veripp accept` records current findings to a `.veripp-baseline`, and
+  `veripp scan --baseline` fails only on findings absent from it. Pointed at an
+  existing codebase a verifier reports everything at once — cJSON gives 33
+  counterexamples on the first run — so a blocking check gets removed on day
+  two and a non-blocking one gets ignored. Findings are keyed on
+  (file, function, property), never on line numbers, so moving code does not
+  resurrect accepted findings. Accepted entries that stop occurring are
+  reported, since an entry matching nothing still grants permission to whatever
+  matches it later. The GitHub Action takes a `baseline:` input.
+- `npx veripp-skill` installs the agent skill with nothing but Node.
+
 ## 0.1.3
 
 ### Fixed
