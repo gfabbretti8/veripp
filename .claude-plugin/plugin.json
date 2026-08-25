@@ -2,7 +2,7 @@
   "name": "veripp",
   "displayName": "veripp",
   "description": "Prove C/C++ functions free of overflow, out-of-bounds, null dereference and division by zero -- or get a concrete input that triggers one. The harness is generated, not hand-written.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "Apache-2.0",
   "repository": "https://github.com/gfabbretti8/veripp",
   "keywords": [

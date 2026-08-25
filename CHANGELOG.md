@@ -7,7 +7,9 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
-## Unreleased
+## 0.1.2
+
+Scanning a project rather than a file.
 
 ### Added
 - `veripp scan DIR` scans every C/C++ file under a directory, which is what
