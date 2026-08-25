@@ -176,3 +176,57 @@ someone pointing veripp at ordinary C:
 
 The lesson is worth stating plainly: coverage measured on one codebase
 measures that codebase. The bugs live in the idioms it happens not to use.
+
+## Which checks are on by default, and why
+
+The rule for turning a check on: it has to be measured on real code first,
+because a check that fires on correct code buries the findings that matter.
+Each was A/B'd one flag at a time against a deliberately minimal baseline (no
+overflow, no bounds) so that only the flag under test could explain a flip. An
+earlier attempt at this left `--overflow-check` in the baseline, so
+arithmetic-heavy functions failed for overflow reasons and the failure was
+wrongly charged to the check being measured.
+
+### Measured on cJSON (117 functions, 33 with a clean baseline)
+
+| flag | flips on clean code | fires at all? | default |
+|---|---|---|---|
+| `--struct-fields-check` | 0 / 33 (0%) | no trigger found | **off** |
+| `--unchecked-return-value-check` | 0 / 33 (0%) | no trigger found | **off** |
+| `--dead-store-check` | 0 / 33 (0%) | yes, advisory only | **off** |
+
+A 0% false-positive rate is *not* on its own a reason to enable a check. Zero
+flips is equally consistent with "never fires", so each flag was also run
+against code written specifically to trigger it:
+
+* `--dead-store-check` works. On `int x = 5; x = 7;` it emits
+  `dead store: assignment to x never read` with CWE-563 — and the verdict
+  stays SUCCESSFUL. ESBMC's own help says "emit advisory notes", and that is
+  exactly what it does. It is a lint, not a property. veripp's contract is a
+  verdict, so shipping advisory notes inside a proof result would dilute the
+  one thing the output is for.
+* `--struct-fields-check` and `--unchecked-return-value-check` produced no
+  finding on any of the 33 real functions, nor on two hand-written triggers
+  each (an over-sized read through a cast, a `memcpy` past a field's length;
+  an unchecked `malloc`, an unchecked `fopen` followed by `fread`). No claim
+  is made that they are useless — only that no evidence was found that they
+  do anything here, and a check that cannot be shown to work is not one to
+  turn on for everybody.
+
+All three stay reachable:
+
+```bash
+veripp verify file.c --function f --esbmc-arg --dead-store-check
+```
+
+### Already on by default
+
+`--overflow-check`, `--bounds-check`, `--pointer-check`,
+`--div-by-zero-check`, `--memory-leak-check`, `--uninitialised-check`,
+`--ub-shift-check`, `--nan-check`. `--nan-check` is usable only because
+veripp writes the harness and constrains float inputs to finite values;
+against unconstrained nondeterministic doubles it reports every division.
+
+`--unsigned-overflow-check` stays off: unsigned wraparound is *defined*
+behaviour and hashing code such as djb2 relies on it, so it would report
+correct code as broken.
