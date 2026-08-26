@@ -1,5 +1,8 @@
 """Parser tests against pinned real ESBMC 8.4 output (tests/golden/)."""
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -355,3 +358,39 @@ class TestTermination:
         src.write_text("/* we loop for each element, conceptually */\nint f(void){return 0;}\n")
         target = SimpleNamespace(source=src, function="f")
         assert agent._might_not_terminate(target) is False
+
+
+@pytest.mark.esbmc
+class TestANonTerminatingFunctionNeverReadsAsVerified:
+    """The acceptance test for the termination work.
+
+    Raw ESBMC reports SUCCESSFUL under --k-induction for `while (n != 0)
+    n -= 2;` with n odd -- a loop that never finishes. Two things stop that
+    reaching a user as "verified": the termination question always forces
+    --termination rather than reading an inherited verdict (pinned by
+    TestTermination), and veripp's default check set is rich enough that the
+    inductive step does not converge here at all.
+
+    The second is incidental and could change with an ESBMC release; the
+    first is the guarantee. This test watches the user-visible outcome.
+    """
+
+    def test_it_reads_as_inconclusive(self, tmp_path):
+        src = tmp_path / "spin.c"
+        src.write_text(
+            "unsigned spin(void) {\n"
+            "    unsigned n = 7;\n"
+            "    while (n != 0) { n -= 2; }\n"
+            "    return n;\n"
+            "}\n"
+        )
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "verify", str(src),
+             "--function", "spin", "--unwind", "2", "--no-llm", "--json"],
+            capture_output=True, text=True, timeout=900,
+        )
+        payload = json.loads(out.stdout)
+        assert payload["outcome"] != "verified", (
+            "a function that never terminates was reported as verified"
+        )
+        assert payload["terminates"] is not True
