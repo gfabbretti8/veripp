@@ -17,6 +17,7 @@ with them, all three were triaged correctly.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -64,6 +65,13 @@ class LLMError(Exception):
 
     Triage catches this and degrades to conservative offline behaviour; it must
     never abort a verification run.
+    """
+
+
+class _CapRefused(Exception):
+    """The endpoint rejected the request because it carried a token cap.
+
+    Internal to the transport: `_ask` catches it and retries uncapped.
     """
 
 
@@ -321,26 +329,49 @@ class OpenAICompatibleLLM(PromptedLLM):
             )
 
     def _ask(self, system: str, user: str, max_tokens: int = 16000) -> str:
-        payload = json.dumps({
+        payload = {
             "model": self._model,
             "max_tokens": max_tokens,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-        }).encode()
+        }
+        try:
+            return self._post(payload)
+        except _CapRefused:
+            # Some endpoints refuse any token cap: Gemini's OpenAI-compatible
+            # layer drops the connection without an HTTP status for models
+            # newer than 3.6-flash whenever max_tokens (or its successor
+            # max_completion_tokens) is present. The cap only bounds spend,
+            # so retry uncapped rather than lose the provider.
+            del payload["max_tokens"]
+            return self._post(payload)
+
+    def _post(self, payload: dict) -> str:
+        data = json.dumps(payload).encode()
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         request = urllib.request.Request(
-            f"{self._base_url}/chat/completions", data=payload, headers=headers
+            f"{self._base_url}/chat/completions", data=data, headers=headers
         )
+        capped = "max_tokens" in payload
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 body = json.loads(response.read().decode())
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:200]
+            if capped and exc.code == 400 and "max_tokens" in detail:
+                raise _CapRefused from exc
             raise LLMError(f"{self.PROVIDER} API error {exc.code}: {detail}") from exc
+        except (http.client.HTTPException, ConnectionError) as exc:
+            # urllib raises these raw when the server drops the connection
+            # mid-request -- they are not URLErrors.
+            if capped:
+                raise _CapRefused from exc
+            raise LLMError(
+                f"{self._base_url} closed the connection: {exc}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise LLMError(f"could not reach {self._base_url}: {exc}") from exc
         except json.JSONDecodeError as exc:

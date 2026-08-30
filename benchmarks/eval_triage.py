@@ -72,6 +72,7 @@ class Score:
     correct_kind: int = 0
     correct_loop: int = 0
     total: int = 0
+    unavailable: int = 0
     seconds: float = 0.0
     detail: list[str] = field(default_factory=list)
 
@@ -80,6 +81,7 @@ class Score:
             f"{self.model:22} classification {self.correct_kind}/{self.total}   "
             f"solver accepted {self.correct_loop}/{self.total}   "
             f"{self.seconds:5.1f}s"
+            + (f"   UNAVAILABLE on {self.unavailable}" if self.unavailable else "")
         )
 
 
@@ -102,7 +104,6 @@ def evaluate(model: str, corpus: Path, timeout: int, base_url: str | None) -> Sc
         if not source.is_file():
             score.detail.append(f"  {case.function}: SKIPPED (missing {source})")
             continue
-        score.total += 1
         started = time.monotonic()
         target = TargetInfo(source=source, function=case.function)
         harness = generate(source, case.function, target.options)
@@ -118,6 +119,18 @@ def evaluate(model: str, corpus: Path, timeout: int, base_url: str | None) -> Sc
         )
         score.seconds += time.monotonic() - started
 
+        # A model that never answered was not graded -- the pipeline degrades
+        # to its conservative offline default, and scoring that default would
+        # make a quota error indistinguishable from a wrong model.
+        if report.diagnosis is not None and report.diagnosis.llm_error:
+            score.unavailable += 1
+            score.detail.append(
+                f"  {case.function}: UNAVAILABLE, not graded "
+                f"({report.diagnosis.llm_error})"
+            )
+            continue
+
+        score.total += 1
         kind = report.diagnosis.kind if report.diagnosis else "(none)"
         accepted = bool(report.accepted_preconditions)
         score.correct_kind += kind == case.expected_kind
@@ -168,7 +181,11 @@ def main() -> int:
         "\nA wrong proposal costs a retry, not soundness -- the solver rejects it.\n"
         "So compare hit rate against price, not correctness against perfection."
     )
-    perfect = [s for s in scores if s.correct_kind == s.total == s.correct_loop]
+    perfect = [
+        s for s in scores
+        if s.total and not s.unavailable
+        and s.correct_kind == s.total == s.correct_loop
+    ]
     return 0 if perfect else 1
 
 

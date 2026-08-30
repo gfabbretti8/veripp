@@ -8,6 +8,7 @@ standard library so veripp stays dependency-free and works against a local
 model with no account at all.
 """
 
+import io
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -147,6 +148,83 @@ class TestOpenAICompatibleTransport:
         client = OpenAICompatibleLLM(model="m", base_url="http://127.0.0.1:1/v1")
         with pytest.raises(LLMError, match="could not reach"):
             client.classify(context)
+
+
+class _CapDroppingServer(_Server):
+    """Gemini's OpenAI-compatible layer, as observed on 2026-08-30: any
+    request carrying a token cap gets the connection closed with no HTTP
+    response at all (models newer than 3.6-flash)."""
+
+    def __init__(self, reply="missing_assumption", drop_always=False):
+        super().__init__(reply=reply)
+        self.drop_always = drop_always
+        outer = self
+        inner_post = self.httpd.RequestHandlerClass.do_POST
+
+        class Handler(self.httpd.RequestHandlerClass):
+            def do_POST(self):
+                length = int(self.headers["Content-Length"])
+                payload = json.loads(self.rfile.read(length))
+                if outer.drop_always or "max_tokens" in payload:
+                    outer.requests.append({"payload": payload, "dropped": True})
+                    self.close_connection = True
+                    return  # no status line, nothing: a dropped connection
+                # replay the body for the stock handler
+                body = json.dumps(payload).encode()
+                self.rfile = io.BytesIO(body)
+                self.headers.replace_header("Content-Length", str(len(body)))
+                inner_post(self)
+
+        self.httpd.RequestHandlerClass = Handler
+
+
+class TestTokenCapRefusal:
+    def _client(self, server):
+        return OpenAICompatibleLLM(model="m", base_url=server.url, provider="test")
+
+    def test_a_dropped_capped_request_is_retried_without_the_cap(self, context):
+        with _CapDroppingServer("missing_assumption") as server:
+            assert self._client(server).classify(context) == "missing_assumption"
+        assert server.requests[0].get("dropped")
+        retried = server.requests[-1]["payload"]
+        assert "max_tokens" not in retried
+        assert "max_completion_tokens" not in retried
+
+    def test_a_connection_dropped_either_way_is_an_llm_error_not_a_crash(self, context):
+        with _CapDroppingServer(drop_always=True) as server:
+            with pytest.raises(LLMError, match="closed the connection"):
+                self._client(server).classify(context)
+
+    def test_a_400_naming_the_cap_is_retried_without_it(self, context):
+        class Server(_Server):
+            def __init__(self):
+                super().__init__(reply="missing_assumption")
+                outer = self
+                inner_post = self.httpd.RequestHandlerClass.do_POST
+
+                class Handler(self.httpd.RequestHandlerClass):
+                    def do_POST(self):
+                        length = int(self.headers["Content-Length"])
+                        payload = json.loads(self.rfile.read(length))
+                        if "max_tokens" in payload:
+                            outer.requests.append({"payload": payload})
+                            data = b'{"error":"max_tokens is not supported"}'
+                            self.send_response(400)
+                            self.send_header("Content-Length", str(len(data)))
+                            self.end_headers()
+                            self.wfile.write(data)
+                            return
+                        body = json.dumps(payload).encode()
+                        self.rfile = io.BytesIO(body)
+                        self.headers.replace_header(
+                            "Content-Length", str(len(body)))
+                        inner_post(self)
+
+                self.httpd.RequestHandlerClass = Handler
+
+        with Server() as server:
+            assert self._client(server).classify(context) == "missing_assumption"
+        assert "max_tokens" not in server.requests[-1]["payload"]
 
 
 def test_every_provider_shares_one_set_of_prompts():

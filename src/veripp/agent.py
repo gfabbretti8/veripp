@@ -19,7 +19,7 @@ from pathlib import Path
 from . import term
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
 from .harness import HarnessError, generate, reachability_variant
-from .llm import LLMClient, NullLLM
+from .llm import LLMClient, LLMError, NullLLM
 from .triage import Diagnosis, TargetInfo, triage_counterexample
 
 
@@ -365,7 +365,11 @@ def verify_with_agent(
                 unwind_idx += 1
                 continue
             # Ladder exhausted: ask the LLM for loop invariants / lemmas.
-            proposal = llm.propose_invariants(source, result)
+            # An unreachable LLM means no proposal, not an aborted run.
+            try:
+                proposal = llm.propose_invariants(source, result)
+            except LLMError:
+                proposal = None
             if proposal is not None:
                 source = proposal
                 config = replace(config, k_induction=True)
@@ -375,7 +379,10 @@ def verify_with_agent(
             )
 
         if result.outcome is Outcome.PARSE_ERROR:
-            fixed = llm.propose_frontend_fix(source, result)
+            try:
+                fixed = llm.propose_frontend_fix(source, result)
+            except LLMError:
+                fixed = None
             if fixed is not None:
                 source = fixed
                 continue
