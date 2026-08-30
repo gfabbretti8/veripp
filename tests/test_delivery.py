@@ -536,6 +536,46 @@ class TestCveDemo:
         assert "Result: verified" in output, output[-2000:]
 
 
+class TestCveOffline:
+    """The same CVE as TestCveDemo, but on the vendored verbatim function so
+    it runs in CI with no clone. TestCveDemo needs the network and skips
+    without it; this one must never skip, so a break in the CVE story is
+    always caught somewhere.
+    """
+
+    FIX = ROOT / "demo/cve-2019-13223/predict_point.c"
+
+    def test_the_fixture_is_present_and_names_its_provenance(self) -> None:
+        text = self.FIX.read_text(encoding="utf-8")
+        assert "CVE-2019-13223" in text
+        # A vendored copy is only trustworthy if it says where it came from.
+        assert "nothings/stb" in text and "2c980bb" in text
+
+    @pytest.mark.esbmc
+    def test_veripp_finds_the_divide_by_zero(self) -> None:
+        from veripp.cli import EXIT_COUNTEREXAMPLE
+
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "verify", str(self.FIX),
+             "--function", "predict_point", "--no-overflow-check", "--no-llm"],
+            capture_output=True, text=True, timeout=900,
+        )
+        assert out.returncode == EXIT_COUNTEREXAMPLE, out.stdout[-1500:]
+        assert "division by zero" in out.stdout, out.stdout[-1500:]
+
+    @pytest.mark.esbmc
+    def test_the_documented_precondition_removes_it(self) -> None:
+        from veripp.cli import EXIT_VERIFIED
+
+        out = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "verify", str(self.FIX),
+             "--function", "predict_point", "--no-overflow-check", "--no-llm",
+             "--assume", "x1 != x0"],
+            capture_output=True, text=True, timeout=900,
+        )
+        assert out.returncode == EXIT_VERIFIED, out.stdout[-1500:]
+
+
 class TestSystemHeadersAreReachable:
     """esbmc's bundled libc headers `#include_next` onto clang's resource
     headers. If those are absent, every translation unit that touches a real
