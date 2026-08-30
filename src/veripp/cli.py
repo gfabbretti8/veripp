@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         "--model",
         metavar="PROVIDER:MODEL",
         help="LLM used for triage, e.g. anthropic:claude-opus-5, "
-        "openai:gpt-4o-mini, gemini:gemini-2.0-flash, groq:llama-3.3-70b-versatile, "
+        "openai:gpt-4o-mini, gemini:gemini-3.6-flash, groq:llama-3.3-70b-versatile, "
         "ollama:llama3.1 (local, no account). Defaults to $VERIPP_LLM_MODEL.",
     )
     v.add_argument(
@@ -183,13 +183,31 @@ def main(argv: list[str] | None = None) -> int:
         "--jobs", "-j", type=int, default=4,
         help=_adv("parallel verifications"),
     )
-    # Accepted, and a no-op: scan never calls an LLM. Someone who learned
-    # --no-llm on `verify` should not be stopped by its sibling, and the help
-    # says plainly that there was nothing to turn off.
     s.add_argument(
         "--no-llm",
         action="store_true",
-        help="accepted for symmetry with `verify`; scan never calls an LLM",
+        help="skip the LLM triage pass over counterexamples",
+    )
+    s.add_argument(
+        "--model",
+        metavar="PROVIDER:MODEL",
+        help="LLM used to triage counterexamples after the mechanical pass; "
+        "every proposal is re-checked by the solver. Same values as "
+        "`verify --model`. Defaults to $VERIPP_LLM_MODEL.",
+    )
+    s.add_argument(
+        "--llm-base-url",
+        metavar="URL",
+        help="OpenAI-compatible endpoint for any provider not built in. "
+        "Defaults to $VERIPP_LLM_BASE_URL.",
+    )
+    s.add_argument(
+        "--retry-budget", type=int, default=120, metavar="SECONDS",
+        help=_adv(
+            "wall-clock budget for re-trying inconclusive functions on the "
+            "full escalation ladder (wider bounds, k-induction), cheapest "
+            "first; 0 disables the second pass"
+        ),
     )
     s.add_argument("--json", action="store_true", help="machine-readable output")
     s.add_argument(
@@ -759,7 +777,10 @@ def _report_from_cache(source: Path, payload: dict):
     """Rebuild a ScanReport from a cached entry."""
     from .scan import FunctionResult, ScanReport
 
-    report = ScanReport(source=source, candidates=payload.get("candidates", 0))
+    report = ScanReport(source=source, candidates=payload.get("candidates", 0),
+                        triaged=payload.get("triaged", False),
+                        retried=payload.get("retried", 0),
+                        settled=payload.get("settled", 0))
     for item in payload.get("results", []):
         report.results.append(FunctionResult(**item))
     return report
@@ -770,6 +791,9 @@ def _cache_payload(report) -> dict:
 
     return {
         "candidates": report.candidates,
+        "triaged": report.triaged,
+        "retried": report.retried,
+        "settled": report.settled,
         "results": [asdict(r) for r in report.results],
     }
 
@@ -963,6 +987,79 @@ def _collect_reports(args):
     return reports
 
 
+def _scan_llm(args):
+    """The scan's triage client (or None), plus the note explaining why not.
+
+    Same default as `verify`: whatever provider has credentials, nothing if
+    none do. The note is held back and shown only when counterexamples exist
+    -- triage advice is useless for a scan where everything proved.
+    """
+    if getattr(args, "no_llm", False):
+        return None, None
+    llm, note = _make_llm(args)
+    return (None, note) if isinstance(llm, NullLLM) else (llm, note)
+
+
+def _triage_progress(args):
+    def cb(done: int, total: int, r) -> None:
+        if args.quiet or args.json:
+            return
+        mark, paint = {
+            "preconditioned": ("PRECOND", ("green",)),
+        }.get(r.outcome) or (
+            ("real bug", ("red", "bold")) if r.triage_kind == "real_bug"
+            else ("no triage", ("dim",)) if r.triage_error
+            else (r.triage_kind or "untriaged", ("yellow",))
+        )
+        print(f"  [triage {done:2d}/{total}] "
+              f"{term.style(f'{mark:>10}', *paint, stream=sys.stderr)}  "
+              f"{r.name}", file=sys.stderr)
+    return cb
+
+
+def _retry_progress(args):
+    def cb(done: int, total: int, r) -> None:
+        if args.quiet or args.json:
+            return
+        mark, paint = {
+            "verified": ("PROVED", ("green",)),
+            "counterexample": ("COUNTEREX", ("red", "bold")),
+        }.get(r.outcome, ("unsettled", ("dim",)))
+        print(f"  [retry  {done:2d}/{total}] "
+              f"{term.style(f'{mark:>10}', *paint, stream=sys.stderr)}  "
+              f"{r.name}", file=sys.stderr)
+    return cb
+
+
+def _cache_serves(payload: dict, llm, retry_budget: int) -> bool:
+    """Whether a cached verdict answers the question this run is asking.
+
+    A cached scan without the triage or retry pass is still sound, but it
+    cannot answer a run that asked for them; serving it would silently drop
+    the feature. The reverse serves fine -- extra labels are solver-backed
+    or clearly marked as opinions, and settled results are settled.
+    """
+    if llm is not None and not payload.get("triaged") and any(
+        item.get("outcome") == "counterexample" and not item.get("artifact")
+        for item in payload.get("results", [])
+    ):
+        return False
+    if retry_budget > 0 and not payload.get("retried") and any(
+        item.get("outcome") in ("timeout", "unwind_limit", "unknown")
+        for item in payload.get("results", [])
+    ):
+        return False
+    return True
+
+
+def _triage_note(args, llm_note, reports) -> None:
+    if llm_note and not args.quiet and not args.json and any(
+        r.counterexamples for r in reports
+    ):
+        print(f"\nnote: counterexamples were not triaged ({llm_note})",
+              file=sys.stderr)
+
+
 def _scan_tree(args) -> int:
     """Scan every C/C++ file under a directory.
 
@@ -1012,6 +1109,8 @@ def _scan_tree(args) -> int:
               f"{'s' if len(sources) != 1 else ''} under {args.source}",
               file=sys.stderr)
 
+    llm, llm_note = _scan_llm(args)
+
     for index, source in enumerate(sources, 1):
         if not args.quiet and not args.json:
             print(f"\n[{index}/{len(sources)}] {source}", file=sys.stderr)
@@ -1041,6 +1140,10 @@ def _scan_tree(args) -> int:
             cache = _cache_for(args) if selected is None else None
             key = _cache_key(args, source, config, options) if cache else ""
             cached = cache.get(key) if cache else None
+            if cached is not None and not _cache_serves(
+                cached, llm, args.retry_budget
+            ):
+                cached = None
             if cached is not None:
                 reports.append(_report_from_cache(source, cached))
                 reused += 1
@@ -1050,7 +1153,10 @@ def _scan_tree(args) -> int:
 
             report = scan(source, config, options, jobs=args.jobs,
                           progress=progress, escalations=args.escalations,
-                          only=selected)
+                          only=selected, llm=llm,
+                          triage_progress=_triage_progress(args),
+                          retry_budget=args.retry_budget,
+                          retry_progress=_retry_progress(args))
             if cache:
                 cache.put(key, _cache_payload(report))
             reports.append(report)
@@ -1063,8 +1169,14 @@ def _scan_tree(args) -> int:
         "candidates": sum(r.candidates for r in reports),
         "proved": sum(len(r.proved) for r in reports),
         "counterexamples": [
-            {"file": str(r.source), "function": f.name, "property": f.detail}
+            {"file": str(r.source), "function": f.name, "property": f.detail,
+             "triage": f.triage_kind}
             for r in reports for f in r.counterexamples
+        ],
+        "preconditioned": [
+            {"file": str(r.source), "function": f.name,
+             "preconditions": f.preconditions}
+            for r in reports for f in r.preconditioned
         ],
         "inconclusive": sum(len(r.inconclusive) for r in reports),
         "artifacts": sum(len(r.artifacts) for r in reports),
@@ -1084,11 +1196,13 @@ def _scan_tree(args) -> int:
     payload.update(extra)
     _emit(args, payload,
           _tree_summary(args.source, reports) + _baseline_note(args, reports))
+    _triage_note(args, llm_note, reports)
     return verdict
 
 
 def _tree_summary(root: Path, reports: list) -> str:
     total_cx = sum(len(r.counterexamples) for r in reports)
+    total_pre = sum(len(r.preconditioned) for r in reports)
     lines = [
         "",
         f"Scanned {len(reports)} file{'s' if len(reports) != 1 else ''} under {root}",
@@ -1096,9 +1210,19 @@ def _tree_summary(root: Path, reports: list) -> str:
         "",
         f"  PROVED           {sum(len(r.proved) for r in reports):4d}",
         f"  COUNTEREXAMPLE   {total_cx:4d}",
+        *([f"  PRECONDITIONED   {total_pre:4d}  safe under a solver-accepted "
+           "precondition -- confirm callers guarantee it"] if total_pre else []),
         f"  INCONCLUSIVE     {sum(len(r.inconclusive) for r in reports):4d}",
         f"  HARNESS ARTIFACT {sum(len(r.artifacts) for r in reports):4d}",
     ]
+    if total_pre:
+        lines += ["", "  preconditions the solver accepted:"]
+        for report in reports:
+            for f in report.preconditioned:
+                lines.append(
+                    f"    {report.source}: {f.name}: "
+                    + " && ".join(f.preconditions)
+                )
     if total_cx:
         lines += ["", "  files with findings:"]
         for report in reports:
@@ -1148,9 +1272,12 @@ def _scan(args) -> int:
         print(f"  list them with:  veripp scan {args.source}", file=sys.stderr)
         return EXIT_USAGE
 
+    llm, llm_note = _scan_llm(args)
     cache = _cache_for(args) if selected is None else None
     key = _cache_key(args, args.source, config, options) if cache else ""
     cached = cache.get(key) if cache else None
+    if cached is not None and not _cache_serves(cached, llm, args.retry_budget):
+        cached = None
     if cached is not None:
         report = _report_from_cache(args.source, cached)
         if not args.quiet and not args.json:
@@ -1159,7 +1286,10 @@ def _scan(args) -> int:
     else:
         report = scan(args.source, config, options, jobs=args.jobs,
                       progress=progress, escalations=args.escalations,
-                      only=selected)
+                      only=selected, llm=llm,
+                      triage_progress=_triage_progress(args),
+                      retry_budget=args.retry_budget,
+                      retry_progress=_retry_progress(args))
         if cache:
             cache.put(key, _cache_payload(report))
 
@@ -1170,9 +1300,20 @@ def _scan(args) -> int:
             "counterexamples": [
                 {"function": r.name, "signature": r.signature, "property": r.detail,
                  "assumptions": r.assumptions, "stubbed_calls": r.stubbed_calls,
-                 "file": r.file, "line": r.line, "column": r.column, "cwes": r.cwes}
+                 "file": r.file, "line": r.line, "column": r.column, "cwes": r.cwes,
+                 "triage": r.triage_kind, "triage_note": r.triage_note,
+                 "triage_error": r.triage_error}
                 for r in report.counterexamples
             ],
+            "preconditioned": [
+                {"function": r.name, "signature": r.signature,
+                 "property": r.detail, "preconditions": r.preconditions,
+                 "triage": r.triage_kind}
+                for r in report.preconditioned
+            ],
+            "triaged": report.triaged,
+            "retried": report.retried,
+            "settled": report.settled,
             "artifacts": [
                 {"function": r.name, "property": r.detail, "why": r.artifact}
                 for r in report.artifacts
@@ -1192,6 +1333,7 @@ def _scan(args) -> int:
     verdict, extra = _apply_baseline(args, [report])
     scan_payload.update(extra)
     _emit(args, scan_payload, report.summary() + _baseline_note(args, [report]))
+    _triage_note(args, llm_note, [report])
     return verdict
 
 

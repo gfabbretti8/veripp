@@ -545,12 +545,18 @@ class TestFlagsMeanTheSameThingEverywhere:
         assert "unrecognized arguments" not in out.stderr, out.stderr
         assert out.returncode != 2, out.stderr
 
-    def test_scan_says_it_never_calls_an_llm(self):
-        # Accepting the flag silently would imply scan otherwise uses AI.
+    def test_scan_documents_its_triage_pass(self):
+        # scan triages counterexamples with an LLM since 0.4; the help must
+        # say so, say the solver re-checks proposals, and offer the off
+        # switch -- silence on any of these misleads someone deciding
+        # whether a scan will call out to a model.
         out = subprocess.run(
             [sys.executable, "-m", "veripp.cli", "scan", "--help"],
             capture_output=True, text=True, cwd=ROOT,
         ).stdout
-        # argparse wraps help text at the column, so the phrase can be split
+        # argparse wraps help text at the column, so phrases can be split
         # across lines; compare on normalised whitespace.
-        assert "never calls an LLM" in " ".join(out.split())
+        flat = " ".join(out.split())
+        assert "triage counterexamples" in flat
+        assert "re-checked by the solver" in flat
+        assert "skip the LLM triage pass" in flat

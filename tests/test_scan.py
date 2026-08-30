@@ -158,7 +158,11 @@ class TestScanEscalation:
             timeout_s=90, unwind=2,
             include_dirs=[contracts_include_dir(), p.parent],
         )
-        return scan(p, config, HarnessOptions(), jobs=1, escalations=escalations)
+        # retry_budget=0: this class tests the in-pass widening knob alone;
+        # the retry pass would settle the bound either way (its own tests
+        # live in test_scan_triage.py).
+        return scan(p, config, HarnessOptions(), jobs=1,
+                    escalations=escalations, retry_budget=0)
 
     def test_without_escalation_the_bound_is_hit(self, tmp_path):
         outcomes = {r.name: r.outcome for r in self._scan(tmp_path, 0).results}

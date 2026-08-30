@@ -10,6 +10,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 from dataclasses import dataclass, field
 import re
+import time
 from pathlib import Path
 
 from .cppsig import (
@@ -22,8 +23,9 @@ from dataclasses import replace as _replace
 
 from .esbmc import Outcome, VerifyConfig, run
 from .harness import HarnessError, HarnessOptions, generate
+from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
-from .triage import mechanical_artifact
+from .triage import TargetInfo, mechanical_artifact
 
 
 @dataclass
@@ -50,6 +52,14 @@ class FunctionResult:
     #: disagreeing about one function is the bug this file already guards
     #: against for the unwind ladder.
     terminates: bool | None = None
+    #: LLM triage of a counterexample. The kind is the model's judgement and
+    #: is only ever a label; the outcome moves to "preconditioned" solely
+    #: when the solver verified the function under the proposal and the
+    #: vacuity probe confirmed something was actually checked.
+    triage_kind: str | None = None
+    triage_note: str = ""
+    triage_error: str | None = None
+    preconditions: list[str] = field(default_factory=list)
 
     @property
     def proved(self) -> bool:
@@ -61,6 +71,14 @@ class ScanReport:
     source: Path
     results: list[FunctionResult] = field(default_factory=list)
     candidates: int = 0
+    #: Whether an LLM triage pass ran over the counterexamples. Cached
+    #: payloads carry it, so a cached untriaged scan is not passed off as
+    #: a triaged one.
+    triaged: bool = False
+    #: The second pass over inconclusives: how many were re-tried through
+    #: the full escalation ladder, and how many that settled.
+    retried: int = 0
+    settled: int = 0
 
     @property
     def terminating(self) -> list[FunctionResult]:
@@ -90,12 +108,22 @@ class ScanReport:
         return [r for r in self.results if r.artifact]
 
     @property
+    def preconditioned(self) -> list[FunctionResult]:
+        """Counterexamples that vanished under a solver-accepted precondition.
+
+        Never folded into `proved`: the safety claim is conditional on callers
+        actually guaranteeing the stated precondition, and the report says so.
+        """
+        return [r for r in self.results if r.outcome == "preconditioned"]
+
+    @property
     def refused(self) -> list[FunctionResult]:
         return [r for r in self.results if r.outcome == "refused"]
 
     @property
     def inconclusive(self) -> list[FunctionResult]:
-        done = {Outcome.VERIFIED.value, Outcome.COUNTEREXAMPLE.value, "refused"}
+        done = {Outcome.VERIFIED.value, Outcome.COUNTEREXAMPLE.value,
+                "refused", "preconditioned"}
         return [r for r in self.results if r.outcome not in done]
 
     def refusal_reasons(self) -> dict[str, int]:
@@ -140,11 +168,20 @@ class ScanReport:
                 )
             ] if self.terminating or self.termination_unproved else []),
             f"  COUNTEREXAMPLE   {len(self.counterexamples):4d}  "
-            "a property fails for some input -- triage each one",
+            + ("a property fails for some input -- triage each one"
+               if not self.triaged else
+               "a property fails for some input -- triaged below"),
+            *([
+                f"  PRECONDITIONED   {len(self.preconditioned):4d}  "
+                "safe under a stated precondition the solver accepted -- "
+                "confirm callers guarantee it"
+            ] if self.preconditioned else []),
             f"  HARNESS ARTIFACT {len(self.artifacts):4d}  "
             "failed because of how the harness was built, not the code",
             f"  INCONCLUSIVE     {len(self.inconclusive):4d}  "
-            "timed out, hit the unwind bound, or the frontend refused it",
+            "timed out, hit the unwind bound, or the frontend refused it"
+            + (f" ({self.settled} settled on a second, harder attempt)"
+               if self.settled else ""),
             f"  NOT HARNESSABLE  {len(self.refused):4d}  "
             "veripp could not build inputs for the signature",
         ]
@@ -152,12 +189,39 @@ class ScanReport:
             lines += ["", "  why functions were not harnessable:"]
             for reason, count in self.refusal_reasons().items():
                 lines.append(f"    {count:4d}  {reason}")
+        if self.preconditioned:
+            lines += ["", "  preconditions the solver accepted (each excludes "
+                          "the failing input and is satisfiable):"]
+            for r in sorted(self.preconditioned, key=lambda r: r.name):
+                lines.append(f"    {r.name}: " + " && ".join(r.preconditions))
         if self.counterexamples:
             lines += ["", "  counterexamples (most likely to matter first):"]
-            for r in sorted(self.counterexamples, key=lambda r: r.name)[:20]:
-                lines.append(f"    {r.name}: {r.detail}")
+            # With triage the ordering is informed: the model's judgement
+            # ranks, and only ranks -- an untriaged counterexample sorts
+            # above a "harness issue" verdict because a label from a model
+            # outranks nothing, and nothing outranks a solver.
+            rank = {"real_bug": 0, None: 1, "harness_issue": 2,
+                    "missing_assumption": 2}
+            tags = {"real_bug": "triage: real bug",
+                    "missing_assumption":
+                        "triage: needs a precondition, none accepted yet",
+                    "harness_issue": "triage: harness issue"}
+            ordered = sorted(
+                self.counterexamples,
+                key=lambda r: (rank.get(r.triage_kind, 1), r.name),
+            )
+            for r in ordered[:20]:
+                tag = tags.get(r.triage_kind)
+                lines.append(f"    {r.name}: {r.detail}"
+                             + (f"  [{tag}]" if tag else ""))
             if len(self.counterexamples) > 20:
                 lines.append(f"    ... and {len(self.counterexamples) - 20} more")
+            failed = [r for r in self.counterexamples if r.triage_error]
+            if failed:
+                lines.append(
+                    f"    (triage unavailable for {len(failed)}: "
+                    f"{failed[0].triage_error})"
+                )
 
         # End on something to do. A tally answers "what happened"; the reader's
         # actual question is "what now", and the answer differs by result.
@@ -171,11 +235,22 @@ class ScanReport:
         where = self.source
 
         if self.counterexamples:
-            first = sorted(self.counterexamples, key=lambda r: r.name)[0]
+            rank = {"real_bug": 0, None: 1, "harness_issue": 2,
+                    "missing_assumption": 2}
+            first = sorted(
+                self.counterexamples,
+                key=lambda r: (rank.get(r.triage_kind, 1), r.name),
+            )[0]
             return (
                 f"  next:  veripp verify {where} --function {first.name}\n"
                 "         to see the failing input. A counterexample holds in the\n"
                 "         generated harness; check a caller can really reach it."
+            )
+        if self.preconditioned:
+            return (
+                "  next:  the preconditions above are load-bearing. Make each one\n"
+                "         real -- an assert in the function, or a documented caller\n"
+                "         contract -- or the proof is conditional on nothing."
             )
         if self.inconclusive:
             return (
@@ -285,8 +360,26 @@ def scan(
     only: list[str] | None = None,
     progress=None,
     escalations: int = 1,
+    llm: LLMClient | None = None,
+    triage_progress=None,
+    retry_budget: int = 120,
+    retry_progress=None,
 ) -> ScanReport:
-    """Harness and verify every function in `source` that veripp can model."""
+    """Harness and verify every function in `source` that veripp can model.
+
+    Two second passes follow the mechanical one, both through the agent loop
+    `verify` uses, so the two commands cannot disagree about a function:
+
+    - Inconclusives are re-tried on the full escalation ladder (wider
+      unwind, k-induction, incremental BMC for timeouts), cheapest first,
+      until `retry_budget` seconds are spent. This needs no LLM.
+    - With `llm`, counterexamples are then triaged: the model classifies
+      each one and may propose a precondition, which the solver re-checks
+      (vacuity probe included) before anything in the report changes.
+
+    The mechanical pass stays parallel and LLM-free, so functions that
+    prove outright never cost an API call.
+    """
     options = options or HarnessOptions()
     text = source.read_text(encoding="utf-8", errors="replace")
     # `main` is an entry point, not a target: harnessing it would just wrap
@@ -298,6 +391,7 @@ def scan(
         report.implementation_hint = _implementation_hint(source, text)
         return report
     workdir = scratch_dir("veripp-scan-")
+    harness_paths: dict[str, Path] = {}
 
     def one(name: str) -> FunctionResult:
         try:
@@ -312,6 +406,7 @@ def scan(
         )
         try:
             path = harness.write(workdir, tag=name)
+            harness_paths[name] = path
             result = run(path, config)
             # `verify` widens the bound when it runs out; without the same
             # here, `scan` reports "inconclusive" for functions `verify` would
@@ -360,4 +455,158 @@ def scan(
             if progress is not None:
                 progress(done, len(names), result)
     report.results.sort(key=lambda r: r.name)
+    if retry_budget > 0:
+        _retry_pass(report, config, options, llm or NullLLM(),
+                    harness_paths, retry_budget, retry_progress,
+                    escalations=escalations)
+    if llm is not None and not isinstance(llm, NullLLM):
+        _triage_pass(report, config, options, llm, harness_paths,
+                     triage_progress)
+        report.triaged = True
     return report
+
+
+#: Outcomes worth a harder second attempt. PARSE_ERROR is not: the frontend
+#: refused the translation unit itself, and no bound or strategy changes
+#: that. TOOL_ERROR is a broken invocation; retrying it retries the break.
+_RETRYABLE = (Outcome.TIMEOUT.value, Outcome.UNWIND_LIMIT.value,
+              Outcome.UNKNOWN.value)
+
+
+def _retry_pass(
+    report: ScanReport,
+    config: VerifyConfig,
+    options: HarnessOptions,
+    llm: LLMClient,
+    harness_paths: dict[str, Path],
+    budget_s: int,
+    progress=None,
+    escalations: int = 1,
+) -> None:
+    """Give inconclusives the escalation ladder `verify` would have used.
+
+    The mechanical pass widens the unwind bound once; `verify` goes further
+    -- another widening, k-induction to escape boundedness, incremental BMC
+    for timeouts. Cheapest candidates first, so a shared budget settles as
+    many as it can rather than sinking whole into one expensive timeout.
+
+    Every retry is seeded past the bounds the mechanical pass already
+    tried. On a large translation unit one checker run costs tens of
+    seconds, and measured on lodepng the polite restart-from-base spent the
+    whole default budget re-deriving known non-answers.
+    """
+    from .agent import Budget, verify_with_agent
+
+    candidates = sorted(
+        (r for r in report.results
+         if r.outcome in _RETRYABLE and r.name in harness_paths),
+        key=lambda r: r.duration_s or 0.0,
+    )
+    started = time.monotonic()
+    for done, r in enumerate(candidates, start=1):
+        remaining = budget_s - (time.monotonic() - started)
+        if remaining <= 5:
+            break
+        prior = r.duration_s or 0.0
+        if r.outcome == Outcome.TIMEOUT.value:
+            # A search that hit the limit needs more time, not the same
+            # time again -- measured on cJSON, same-limit retries settled
+            # exactly nothing. Quadruple it and let incremental BMC report
+            # shallow bugs early. That costs up to 4x the original run, so
+            # only attempt it when the budget can actually afford one.
+            if remaining < 4 * prior:
+                continue
+            seed = _replace(config, incremental_bmc=True, k_induction=False,
+                            timeout_s=config.timeout_s * 4)
+        else:
+            # The mechanical pass exhausted unwind * 4^escalations; the
+            # first new fact lives one widening beyond it. A wider bound
+            # costs more than the run that hit it, never less.
+            if remaining < 2 * prior:
+                continue
+            seed = _replace(config,
+                            unwind=config.unwind * 4 ** (escalations + 1))
+        report.retried += 1
+        try:
+            agent = verify_with_agent(
+                harness_paths[r.name], seed, llm=llm,
+                budget=Budget(max_attempts=6,
+                              wall_time_s=int(min(remaining, 240))),
+                assumptions=r.assumptions, harness=harness_paths[r.name],
+                target=TargetInfo(source=report.source, function=r.name,
+                                  options=options),
+            )
+        except (OSError, RuntimeError):
+            continue
+        final = agent.final
+        settled = final.outcome in (Outcome.VERIFIED, Outcome.COUNTEREXAMPLE)
+        if final.outcome is Outcome.VERIFIED and agent.vacuous:
+            settled = False  # nothing was actually checked
+        if settled:
+            prop = final.violated_property
+            r.outcome = final.outcome.value
+            r.detail = prop.description if prop else (final.error or "")
+            r.stubbed_calls = final.stubbed_calls
+            r.artifact = mechanical_artifact(final, harness_paths[r.name])
+            r.terminates = agent.terminates
+            r.file = prop.loc.file if prop and prop.loc else ""
+            r.line = prop.loc.line if prop and prop.loc else 0
+            r.column = prop.loc.column if prop and prop.loc else 0
+            r.cwes = list(getattr(prop, "cwes", []) or []) if prop else []
+            report.settled += 1
+        if progress is not None:
+            progress(done, len(candidates), r)
+
+
+def _triage_pass(
+    report: ScanReport,
+    config: VerifyConfig,
+    options: HarnessOptions,
+    llm: LLMClient,
+    harness_paths: dict[str, Path],
+    progress=None,
+) -> None:
+    """Run each counterexample through the agent loop `verify` uses.
+
+    Sequential on purpose: the mechanical pass already parallelised the
+    checker, and hammering a provider from `--jobs` threads trades rate-limit
+    errors for no latency win worth having.
+    """
+    from .agent import Budget, verify_with_agent
+
+    candidates = [
+        r for r in report.results
+        if r.outcome == Outcome.COUNTEREXAMPLE.value and not r.artifact
+        and r.name in harness_paths
+    ]
+    for done, r in enumerate(candidates, start=1):
+        target = TargetInfo(source=report.source, function=r.name,
+                            options=options)
+        try:
+            agent = verify_with_agent(
+                harness_paths[r.name], config, llm=llm,
+                # Tighter than verify's default: a scan multiplies whatever
+                # one function is allowed to cost.
+                budget=Budget(max_attempts=6, wall_time_s=240),
+                assumptions=r.assumptions, harness=harness_paths[r.name],
+                target=target,
+            )
+        except (OSError, RuntimeError) as exc:
+            r.triage_error = str(exc)
+            continue
+        diagnosis = agent.diagnosis
+        if diagnosis is not None:
+            if diagnosis.llm_error:
+                r.triage_error = diagnosis.llm_error
+            else:
+                r.triage_kind = diagnosis.kind
+                r.triage_note = diagnosis.explanation
+        if (
+            agent.final.outcome is Outcome.VERIFIED
+            and agent.accepted_preconditions
+            and not agent.vacuous
+        ):
+            r.outcome = "preconditioned"
+            r.preconditions = list(agent.accepted_preconditions)
+        if progress is not None:
+            progress(done, len(candidates), r)
