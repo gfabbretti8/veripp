@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import stat
 import sys
 from pathlib import Path
@@ -975,3 +976,46 @@ class TestCommandListComesFromTheParser:
             assert command in result.stderr, (
                 f"'{command}' missing from:\n{result.stderr}"
             )
+
+
+class TestReleaseWorkflow:
+    """Tagging vX.Y.Z is the release. These pin the properties that make
+    that safe, since nothing exercises the workflow until a real tag."""
+
+    WF = ROOT / ".github/workflows/release.yml"
+
+    def test_publish_cannot_run_before_the_tests(self) -> None:
+        text = self.WF.read_text(encoding="utf-8")
+        assert "needs: test" in text, (
+            "the publish job must be gated on the test job, or a tag on a "
+            "bad commit publishes before anything fails"
+        )
+
+    def test_it_uses_the_repository_secret(self) -> None:
+        assert "secrets.PYPI_TOKEN" in self.WF.read_text(encoding="utf-8")
+
+    def test_a_mislabelled_build_is_refused(self) -> None:
+        # The tag and pyproject version must be compared before upload.
+        text = self.WF.read_text(encoding="utf-8")
+        assert "pyproject.toml" in text and "refusing" in text
+
+    def test_the_sdist_promise_is_checked_in_the_workflow(self) -> None:
+        # README tells people to run examples/*.cpp; the workflow must not
+        # publish an sdist that dropped them.
+        assert "examples/" in self.WF.read_text(encoding="utf-8")
+
+    def test_locally_buildable_and_examples_ship(self, tmp_path) -> None:
+        """The workflow's build steps, run here, so a packaging regression
+        fails in CI on every push rather than at tag time."""
+        out = subprocess.run(
+            ["uv", "build", "--out-dir", str(tmp_path)],
+            capture_output=True, text=True, cwd=ROOT, timeout=900,
+        )
+        assert out.returncode == 0, out.stderr[-800:]
+        sdist = next(tmp_path.glob("*.tar.gz"))
+        import tarfile
+        with tarfile.open(sdist) as tar:
+            names = tar.getnames()
+        assert any("examples/off_by_one.cpp" in n for n in names), (
+            "sdist no longer carries the examples the README promises"
+        )

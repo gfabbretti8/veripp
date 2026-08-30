@@ -176,3 +176,29 @@ class TestReadmeWorkflows:
         pytest.importorskip("yaml")
         workflow = self._workflows()[0]
         assert workflow.get("permissions", {}).get("security-events") == "write"
+
+
+class TestDoctorHintsMatchTheInstall:
+    """`doctor` ends with "try:" suggestions. They must point at things the
+    user can actually run from where they are.
+
+    A PyPI install has no examples/ or demo/ on disk, so the repo-relative
+    hints would 404 -- and a first suggestion that fails teaches distrust of
+    everything after it.
+    """
+
+    def test_in_the_repo_the_file_hints_appear(self) -> None:
+        result = veripp("doctor")
+        assert "examples/off_by_one.cpp" in result.stdout
+
+    def test_outside_the_repo_no_file_is_advertised(self, tmp_path) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "veripp.cli", "doctor"],
+            capture_output=True, text=True, cwd=tmp_path, timeout=900,
+        )
+        assert result.returncode == 0, result.stdout[-500:]
+        assert "examples/" not in result.stdout, (
+            "doctor suggested a file that a pip install does not have"
+        )
+        # The pointer to where the examples live must survive the trim.
+        assert "github.com" in result.stdout

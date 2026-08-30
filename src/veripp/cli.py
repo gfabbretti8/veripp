@@ -1698,10 +1698,18 @@ def _doctor(allow_unsound: bool = False) -> int:
         return EXIT_USAGE
 
     print("\nready. try:")
-    print("  veripp verify examples/off_by_one.cpp --function sum_array   # finds a bug")
-    print("  veripp scan   examples/ring_buffer.cpp                       # a whole file")
-    if not unsound:
-        print("  ./demo/cve-2019-13223/run.sh                                 # a real CVE")
+    # The repo-relative suggestions are only honest when the files they name
+    # are actually here. A PyPI install has no examples/ or demo/ on disk, and
+    # a hint that 404s is worse than none -- it teaches distrust of the rest.
+    if Path("examples/off_by_one.cpp").exists():
+        print("  veripp verify examples/off_by_one.cpp --function sum_array   # finds a bug")
+        print("  veripp scan   examples/ring_buffer.cpp                       # a whole file")
+        if not unsound:
+            print("  ./demo/cve-2019-13223/run.sh                                 # a real CVE")
+    else:
+        print("  veripp path/to/file.c                # every function: proof or counterexample")
+        print("  veripp verify file.c --function f    # one function, with the failing input")
+        print("  examples and a real-CVE demo:  https://github.com/gfabbretti8/veripp")
     return EXIT_VERIFIED
 
 

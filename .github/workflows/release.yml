@@ -1,0 +1,107 @@
+name: release
+
+# Tagging v* publishes to PyPI -- after re-proving, in this same run, that the
+# thing being published works. A green ci run on the same commit is not enough
+# of a gate: workflows race, and a tag pushed seconds after a bad commit would
+# publish before ci finished failing.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  # Kept in lockstep with ci.yml -- see the comment there for why `weekly`
+  # and not the 8.4 release (esbmc#6508, silently missed OOB writes).
+  ESBMC_VERSION: weekly
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Cache ESBMC
+        id: cache-esbmc
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/esbmc
+          key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml') }}
+
+      - name: Install zsh, for the completion tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+
+      - name: Install ESBMC
+        if: steps.cache-esbmc.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/esbmc
+          curl -fsSL -o /tmp/esbmc.zip \
+            "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/esbmc-linux.zip"
+          unzip -q /tmp/esbmc.zip -d ~/.local/esbmc
+          chmod +x "$(find ~/.local/esbmc -name esbmc -type f | head -1)"
+
+      - name: Put ESBMC on PATH
+        run: dirname "$(find ~/.local/esbmc -name esbmc -type f | head -1)" >> "$GITHUB_PATH"
+
+      - run: uv sync --locked
+
+      # The soundness gate. A release built against a checker that silently
+      # misses a bug class would ship proofs that are not proofs.
+      - run: uv run veripp doctor
+
+      - run: uv run pytest -q -rs
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    # Publishing is the one irreversible step, so it gets its own job: a
+    # failure above stops before anything leaves the machine.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Tag must match pyproject version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag v$tag but pyproject.toml says $version -- refusing to publish a mislabelled build"
+            exit 1
+          fi
+
+      - run: uv build
+
+      # Catches the failure that is otherwise invisible until the project
+      # page is live: a README that does not render on PyPI.
+      - name: twine check
+        run: uv run --with twine twine check dist/*
+
+      # The README tells people to run examples/*.cpp, so they must ship.
+      - name: sdist carries the examples
+        run: tar tzf dist/*.tar.gz | grep -q examples/
+
+      # A re-pushed tag (or a re-run of this workflow) must not die on
+      # PyPI's "file already exists" -- skip-existing makes the re-run a
+      # no-op instead of a red X that looks like a broken release.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true
+
+      # Confirm the thing users will actually do works, against the real
+      # index. Retries because the index can lag the upload by a minute.
+      - name: uvx veripp from PyPI
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 10); do
+            if uvx --refresh "veripp==${version}" --version; then exit 0; fi
+            echo "not on the index yet, retry $i"; sleep 30
+          done
+          echo "::error::veripp ${version} never became installable from PyPI"
+          exit 1
