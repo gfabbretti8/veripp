@@ -22,27 +22,36 @@ never soundness.
 
 ## Get started
 
-Pick whichever suits you; all three run the same checker.
+```bash
+pip install veripp        # or, to run without installing:  uvx veripp
+```
+
+That gives you the `veripp` command. It drives the [ESBMC](https://esbmc.org)
+checker, which is a C++ binary rather than a Python package — so it must be on
+your `PATH`. `veripp doctor` tells you exactly how to get it for your machine,
+or skip that entirely with the container, which bundles a checker already
+vetted at build time:
 
 ```bash
-# 1. A container, needing nothing else installed
 docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
+```
 
-# 2. The CLI, if you have uv and ESBMC (see Requirements)
-uv run veripp scan src/parser.c
+Your coding agent can use veripp as a skill, needing only Node:
 
-# 3. As a skill your coding agent can use, needing only Node
+```bash
 npx veripp-skill
 ```
 
-Then, on this repository's own examples:
+Once the `veripp` command and a checker are in place:
 
 ```bash
-uv run veripp doctor                                                # is the checker sound?
-uv run veripp verify examples/ring_buffer.cpp --function push       # proves a postcondition
-uv run veripp verify examples/off_by_one.cpp  --function sum_array  # finds a real bug
-uv run veripp scan   src/                                           # a whole project
+veripp doctor                                                # is the checker sound?
+veripp verify examples/ring_buffer.cpp --function push       # proves a postcondition
+veripp verify examples/off_by_one.cpp  --function sum_array  # finds a real bug
+veripp scan   src/                                           # a whole project
 ```
+
+(In a checkout without an install, prefix these with `uv run`.)
 
 Exit codes: `0` verified, `1` counterexample, `2` usage, `3` inconclusive — so
 CI can act on the result. **An inconclusive run is not a pass.**
@@ -66,7 +75,8 @@ Exit codes: `0` verified, `1` counterexample, `2` usage error, `3` inconclusive.
 
 ## Requirements
 
-- [uv](https://docs.astral.sh/uv/) (it installs Python for you)
+- Python 3.10+. `pip install veripp` (or `uvx veripp` with
+  [uv](https://docs.astral.sh/uv/), which needs no separate Python).
 - [ESBMC](https://github.com/esbmc/esbmc/releases) built from master, or the
   [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build (which,
   despite the name, is cut infrequently — check its date).

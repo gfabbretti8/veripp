@@ -7,6 +7,52 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## 0.3.0
+
+Ask for a verdict, not a configuration.
+
+### Added
+- **Termination proving.** For a function with a loop, once safety holds veripp
+  asks whether it also terminates, and reports that on its own line — never
+  folded into "verified", because a safety proof says nothing about liveness.
+  A negative reads as "not proved", not "loops forever": ESBMC proves
+  termination but cannot refute it. Measured guard: raw ESBMC reports
+  SUCCESSFUL under `--k-induction` for a loop that never finishes, so the
+  termination question always forces `--termination` rather than trusting a
+  k-induction verdict. Reported by both `verify` and `scan`.
+- **k-induction is reached on its own.** When a bounded result stays
+  inconclusive, veripp widens the unwind bound and finally switches to
+  k-induction to escape boundedness — no flag to find. Every result still
+  states the mode it was obtained under.
+- **`--esbmc-arg`** forwards any flag straight to ESBMC, so every checker
+  feature stays reachable without a veripp flag per check. Anything passed this
+  way is named in the result line, since a raw flag can weaken a proof as
+  easily as strengthen it.
+- **Offline CVE demo.** `demo/cve-2019-13223/predict_point.c` carries the
+  vulnerable function verbatim (with its upstream commit), so the CVE — and its
+  test — reproduce with no network. `run.sh` still proves it on the whole
+  unmodified `stb_vorbis.c`.
+
+### Changed
+- **Eight undefined-behaviour checks on by default**, up from four: added
+  memory leaks, uninitialised reads, undefined shifts, and NaN. Each was
+  measured on real code before being turned on; on cJSON the stricter set cost
+  exactly one proof out of 32, and that one is a correctly-labelled harness
+  artifact, not a finding to triage. `--nan-check` is viable only because
+  veripp writes the harness and constrains float inputs to finite values.
+  Unsigned overflow stays off: wraparound is defined behaviour.
+- **The default `--help` asks for intent, not tuning.** `verify` dropped from
+  26 flags to 13, `scan` from 31 to 15. Nothing was removed — the bounds and
+  build knobs moved behind `veripp <command> --help-all`. A bare path
+  (`veripp src/`) scans it.
+- `veripp doctor` no longer suggests repo-relative example paths when run from
+  a `pip install`, where those files are not on disk.
+
+### Release
+- Pushing a `vX.Y.Z` tag now re-tests on that commit (with a real ESBMC and the
+  soundness probe), then publishes to PyPI and confirms the released version
+  installs from the index. See `RELEASING.md`.
+
 ## 0.2.0
 
 Usable on a codebase that already has findings.
