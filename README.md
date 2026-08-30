@@ -2,63 +2,46 @@
 
 **AI-operated formal verification for real C and C++ code.**
 
-`veripp` wraps the [ESBMC](https://esbmc.org) model checker in an LLM agent loop so that a
-regular C or C++ developer can run:
+veripp proves that a function is free of undefined behaviour — arithmetic
+overflow, out-of-bounds access, null and invalid pointers, division by zero,
+memory leaks, uninitialised reads, undefined shifts, NaN — or hands you a
+concrete input that breaks it. You point it at a function; it generates the
+verification harness, picks the properties, runs the [ESBMC](https://esbmc.org)
+model checker, and widens the bounds until it can answer.
 
 ```bash
 veripp verify src/parser.cpp --function parse_header
 ```
 
-and get back one of three things:
+That returns one of three things:
 
-1. **A proof** — the property holds (with the bounds and assumptions stated explicitly).
-2. **A bug** — a concrete counterexample trace, minimized and explained in plain language.
-3. **A question** — e.g. *"this fails only when `len == 0`; is `len > 0` a precondition?"*
+1. **A proof** — the properties hold, with the bounds and assumptions stated
+   explicitly.
+2. **A bug** — a concrete counterexample trace, minimized and explained in
+   plain language.
+3. **A question** — e.g. *"this fails only when `len == 0`; is `len > 0` a
+   precondition?"*
 
-The division of labor is strict: **the LLM only proposes, the solver disposes.**
-Harnesses, loop invariants, and preconditions suggested by the model are always
-checked by ESBMC before anything is reported. A hallucination costs a retry,
-never soundness.
+## Why
 
-## Get started
+Model checkers like ESBMC and CBMC are sound and mature, but they need an
+expert operator: someone to write the verification harness, guess loop
+invariants, interpret counterexample traces, and decide how to escalate. That
+labor is why formal verification is still a specialist activity.
 
-```bash
-pip install veripp        # or, to run without installing:  uvx veripp
-```
+veripp's bet is that an LLM can be that operator — and the solver keeps it
+honest. The division of labor is strict: **the LLM only proposes, the solver
+disposes.** Harnesses, loop invariants, and preconditions suggested by the
+model are always checked by ESBMC before anything is reported. A hallucination
+costs a retry, never soundness. The LLM is also optional: `--no-llm` runs the
+plain verifier pipeline with no model at all.
 
-That gives you the `veripp` command. It drives the [ESBMC](https://esbmc.org)
-checker, which is a C++ binary rather than a Python package — so it must be on
-your `PATH`. `veripp doctor` tells you exactly how to get it for your machine,
-or skip that entirely with the container, which bundles a checker already
-vetted at build time:
+## Examples
 
-```bash
-docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
-```
-
-Your coding agent can use veripp as a skill, needing only Node:
+Find a real off-by-one:
 
 ```bash
-npx veripp-skill
-```
-
-Once the `veripp` command and a checker are in place:
-
-```bash
-veripp doctor                                                # is the checker sound?
-veripp verify examples/ring_buffer.cpp --function push       # proves a postcondition
-veripp verify examples/off_by_one.cpp  --function sum_array  # finds a real bug
-veripp scan   src/                                           # a whole project
-```
-
-(In a checkout without an install, prefix these with `uv run`.)
-
-Exit codes: `0` verified, `1` counterexample, `2` usage, `3` inconclusive — so
-CI can act on the result. **An inconclusive run is not a pass.**
-
-## What a result looks like
-
-```
+$ veripp verify examples/off_by_one.cpp --function sum_array
 Result: counterexample
   bounded, unwind=8; checks: overflow, bounds, pointer, div-by-zero; std=c++17
 Assumptions (a result is only as good as these):
@@ -71,134 +54,217 @@ Counterexample inputs:
   ...
 ```
 
-Exit codes: `0` verified, `1` counterexample, `2` usage error, `3` inconclusive.
+Prove a postcondition:
 
-## Requirements
+```bash
+veripp verify examples/ring_buffer.cpp --function push
+```
 
-- Python 3.10+. `pip install veripp` (or `uvx veripp` with
-  [uv](https://docs.astral.sh/uv/), which needs no separate Python).
-- [ESBMC](https://github.com/esbmc/esbmc/releases) built from master, or the
-  [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build (which,
-  despite the name, is cut infrequently — check its date).
-  **Not the v8.4 release** — it carries
-  [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
-  out-of-bounds writes in ordinary container code. `veripp doctor` checks this
-  for you. On macOS: `brew install --HEAD esbmc`.
-- An LLM, only for triage — see below. `--no-llm` runs the plain verifier
-  pipeline with no model at all.
+Scan a whole file or project — every function veripp can harness:
 
-ESBMC is a C++ binary, not a Python package, so uv cannot install it. If you
-would rather not think about that at all, use the image — it carries a checker
-that has already passed the soundness probe at build time:
+```bash
+$ veripp scan src/lodepng.cpp
+  PROVED             99  no overflow, out-of-bounds, null deref or division by
+                         zero, within the stated bounds and assumptions
+  COUNTEREXAMPLE     61  a property fails for some input -- triage each one
+  HARNESS ARTIFACT    3  failed because of how the harness was built, not the code
+  INCONCLUSIVE       52  timed out, hit the unwind bound, or the frontend refused it
+  NOT HARNESSABLE    47  veripp could not build inputs for the signature
+```
+
+Or watch it rediscover a real CVE on unmodified upstream source:
+
+```bash
+./demo/cve-2019-13223/run.sh        # a few seconds, clones stb for you
+```
+
+That run finds [CVE-2019-13223](https://nvd.nist.gov/vuln/detail/CVE-2019-13223)
+— a division-by-zero in stb_vorbis's `predict_point()`, reachable from a
+crafted Ogg Vorbis file — then proves that the precondition the official fix
+enforces (`x1 != x0`) eliminates it. In agent mode the triage proposes that
+precondition itself; the solver confirms it. Details in
+[demo/cve-2019-13223](https://github.com/gfabbretti8/veripp/blob/main/demo/cve-2019-13223/README.md).
+
+Exit codes are CI-friendly: `0` verified, `1` counterexample, `2` usage error,
+`3` inconclusive. **An inconclusive run is not a pass.**
+
+## Installation
+
+veripp needs three things: Python 3.10+, the ESBMC checker, and (optionally)
+an LLM for triage.
+
+### 1. The `veripp` command
+
+```bash
+pip install veripp        # or, to run without installing:  uvx veripp
+```
+
+### 2. The ESBMC checker
+
+ESBMC is a C++ binary, not a Python package, so pip cannot install it — it
+must be on your `PATH`. Use a build from master or the
+[`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) release
+(which, despite the name, is cut infrequently — check its date). **Not the
+v8.4 release**: it carries
+[esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
+out-of-bounds writes in ordinary container code.
+
+```bash
+brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
+# Linux x86_64: download esbmc-linux.zip from the `weekly` release, unzip,
+# and put the binary on PATH.
+# Linux arm64: no prebuilt ESBMC is published; use the container image below.
+```
+
+Then check your setup:
+
+```bash
+veripp doctor
+```
+
+`doctor` verifies everything is present, prints the right install command for
+your machine and architecture, and — more importantly — probes your checker
+for known soundness holes by running known-*failing* programs through it and
+confirming it rejects them. A checker that answers "verified" on a program
+that provably fails is worse than none.
+
+### Or skip all of that: the container
+
+The image bundles a checker that has already passed the soundness probe at
+build time — an unsound image is never published:
 
 ```bash
 docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
 ```
 
-Otherwise install it yourself:
+It is multi-architecture (about 450 MB on amd64, 530 MB on arm64 — most of it
+ESBMC), runs as a non-root user, and never writes to your tree, so the mount
+can be read-only. See [Container notes](#container-notes) below.
 
-```bash
-brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
-# Linux x86_64: download esbmc-linux.zip from the `weekly` release above,
-# unzip it, and put the binary on PATH.
-# Linux arm64: no prebuilt ESBMC is published; use the image.
-```
+### 3. An LLM (optional)
 
-`veripp doctor` checks all of the above, tells you what is missing, prints the
-right command for your machine and architecture, and probes your checker for
-known soundness holes.
+Only used for triage, and any provider works — see
+[Bring your own model](#bring-your-own-model). Without one, `--no-llm` runs
+the deterministic pipeline.
 
-Shell completions are generated from the CLI itself, so they cannot fall out
-of step with it:
+### Shell completions
+
+Generated from the CLI itself, so they cannot fall out of step with it:
 
 ```bash
 eval "$(veripp completion bash)"      # or zsh
 veripp completion fish | source
 ```
 
-## Why
+## Usage
 
-Model checkers like ESBMC and CBMC are sound and mature, but they need an expert
-operator: someone to write the verification harness, guess loop invariants,
-interpret counterexample traces, and decide how to escalate. That labor is why
-formal verification is still a specialist activity. `veripp`'s bet is that an
-LLM can be that operator, and the solver keeps it honest.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ 4. Interface     CLI · JSON output · GitHub Action ·     │
-│                  cache keyed on function-body hash       │
-├─────────────────────────────────────────────────────────┤
-│ 3. Agent loop    attempt → triage → escalate (budgeted)  │
-│                  any LLM proposes preconditions; ESBMC   │
-│                  checks every one, and vacuous proofs    │
-│                  are rejected                            │
-├─────────────────────────────────────────────────────────┤
-│ 2. Specification implicit properties (overflow, bounds,  │
-│                  UB, null deref — free) + explicit       │
-│                  contracts via veripp/contracts.hpp      │
-├─────────────────────────────────────────────────────────┤
-│ 1. Ingestion     compile_commands.json for include paths │
-│                  and defines; harnesses built from the   │
-│                  signature; unlinked callees disclosed   │
-└─────────────────────────────────────────────────────────┘
-```
-
-## Status
-
-Working and used on real libraries. veripp harnesses a function, a whole class
-(as a call sequence), or every function in a file; reads `compile_commands.json`;
-triages counterexamples with any LLM; and refuses to call a vacuous or
-unsoundly-obtained result a proof.
-
-Measured across nine popular C libraries — **40 of libpng's 70 functions
-proved**, 99 of lodepng's 260, 32 of cJSON's 117 — free of overflow,
-out-of-bounds, null dereference and division by zero for any input within the
-stated bounds.
-
-> Those counts were taken with the four checks veripp ran at the time. It
-> now checks eight properties by default. Re-running cJSON with the same
-> build and bounds, changing only the check set: **32 proved under four
-> checks, 31 under eight** — the stricter set cost exactly one proof, and
-> cost it to `internal_malloc`, whose body is `return malloc(size)` and
-> which the memory-leak check flags because the *harness* never frees.
-> veripp labels that a harness artifact rather than a bug. Details and the
-> per-check false-positive measurements are in
-> [benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md). Full table, and the veripp bugs each library exposed, in
-[benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md). See `ROADMAP.md` for what is not done, and
-**Known limits** below for what to expect before you point it at your code.
-
-## See it find a real CVE
+### Verify one function
 
 ```bash
-./demo/cve-2019-13223/run.sh        # a few seconds, clones stb for you
+veripp verify src/parser.cpp --function parse_header
 ```
 
-veripp rediscovers [CVE-2019-13223](https://nvd.nist.gov/vuln/detail/CVE-2019-13223)
-— a division-by-zero in stb_vorbis's `predict_point()`, reachable from a crafted
-Ogg Vorbis file — on the real, unmodified upstream source, then proves that the
-precondition the official fix enforces (`x1 != x0`) eliminates it. In agent mode
-the triage proposes that precondition itself; the solver confirms it. See
-[demo/cve-2019-13223](https://github.com/gfabbretti8/veripp/blob/main/demo/cve-2019-13223/README.md).
+Use `--assume 'len > 0'` to state what real callers guarantee, `--unwind N`
+to widen the loop bound, `--link src/helper.cpp` to bring in callees defined
+in other translation units.
 
-## Bring your own model
+### Scan a file or a whole project
 
-> **How well does the triage actually work?** The path is validated end to end
-> against a real model, and a 7B local model scores 0/2 on the benchmark. No
-> hosted model has been graded here — see
-> [benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md)
-> for exactly what is and is not evidenced, and the one command that closes it.
+```bash
+veripp scan src/parser.cpp          # every function in one file
+veripp scan src/                    # every .c/.cc/.cpp/.cxx underneath
+veripp scan . --jobs 8
+veripp scan src/ --only 'parse_*'   # just the ones you are working on
+```
 
+Build trees, vendored dependencies and dotted directories are skipped
+(`build/`, `node_modules/`, `third_party/`, `.git/`, ...). Findings are
+grouped by file, `--json` gives machine-readable output, and the exit code is
+1 if anything anywhere failed.
 
-Triage works with any provider, and veripp needs no extra packages for most of
-them — everything except Anthropic speaks the OpenAI-compatible HTTP API,
+Functions the first pass cannot settle are re-tried, cheapest first, under a
+wall-clock budget (`--retry-budget`, default 120 seconds), with no LLM
+involved: an exhausted bound restarts one widening past the widest already
+tried and escalates to k-induction, and a timeout gets four times the time
+with incremental BMC. Retries that the remaining budget cannot afford are
+skipped rather than half-tried, and the summary says how many the second
+attempt settled. On a file whose individual checker runs are expensive, the
+default budget fits few retries — raise it when you can wait.
+
+With an LLM configured (`--model`, or `$VERIPP_LLM_MODEL`), scan then triages
+its counterexamples through the same agent loop `verify` uses: the model
+classifies each one, may propose a precondition, and the solver re-checks
+every proposal — vacuity probe included — before anything in the report
+changes. A counterexample that disappears under a solver-accepted
+precondition is reported as **PRECONDITIONED**, listed with the precondition
+to confirm against your callers, and never folded into PROVED. The rest are
+ranked with the model's verdict attached, likely real bugs first. The
+mechanical pass stays LLM-free, so functions that prove outright never cost
+an API call; `--no-llm` skips triage entirely.
+
+Repeat runs are cached: a second scan reuses verdicts for files that have not
+changed, which is what makes this affordable on every push rather than
+nightly. The cache key covers the file, the local headers it includes, any
+linked sources, the bounds, the harness options and the checker's own version
+— so a stale verdict cannot be served. `--no-cache` verifies everything;
+`--cache DIR` moves it.
+
+### Adopting veripp on an existing codebase
+
+The first run on existing code reports everything at once — cJSON gives 33
+counterexamples. Record what is already there, then fail only on what appears
+afterwards:
+
+```bash
+veripp accept src/ --baseline .veripp-baseline   # commit this
+veripp scan   src/ --baseline .veripp-baseline   # exits 1 only on new findings
+```
+
+The baseline is sorted JSON, meant to be reviewed in the pull request that
+adds it: each entry is a risk someone decided to carry, with the signature
+and date recorded beside it. Findings are keyed on (file, function, property)
+rather than line numbers, so moving code around does not resurrect an
+accepted finding. When one stops occurring, veripp says so — an entry that
+matches nothing still grants permission to whatever matches it later.
+
+### Real build setups
+
+veripp reads your build system rather than making you restate it. Point it at
+a source file and it finds the nearest `compile_commands.json` (including in
+`build/`) and takes include paths, defines and language standard from it:
+
+```bash
+veripp verify src/area.cpp --function area
+# note: using build/compile_commands.json (1 include dirs, 1 defines, -std=c++17)
+```
+
+`--compile-commands PATH` chooses one explicitly; `--no-compile-commands`
+ignores them.
+
+**Linking matters for soundness, not convenience.** ESBMC gives an undefined
+function a nondeterministic return value but assumes it does not write
+through its pointer arguments — so a callee defined in another translation
+unit is silently treated as side-effect-free. veripp detects those callees
+itself (ESBMC reports them for C but not C++) and names them:
+
+```
+STUBBED CALLS (no body was available): normalize. Their effects were not
+modelled, so this counterexample may be an artifact of the missing definition
+rather than a real bug -- check it first.
+```
+
+Add the defining source with `--link src/helper.cpp` (repeatable). That can
+be the difference between a false counterexample and a proof.
+
+### Bring your own model
+
+Triage works with any provider, and veripp needs no extra packages for most
+of them — everything except Anthropic speaks the OpenAI-compatible HTTP API,
 which veripp calls with the standard library.
 
 ```bash
 veripp verify src/parser.cpp --function parse   --model openai:gpt-4o-mini
-veripp verify src/parser.cpp --function parse   --model gemini:gemini-2.0-flash
+veripp verify src/parser.cpp --function parse   --model gemini:gemini-3.6-flash
 veripp verify src/parser.cpp --function parse   --model groq:llama-3.3-70b-versatile
 veripp verify src/parser.cpp --function parse   --model ollama:llama3.1   # local, no account
 veripp verify src/parser.cpp --function parse   --model anthropic:claude-opus-5
@@ -208,12 +274,17 @@ Built-in: `anthropic`, `openai`, `gemini`, `groq`, `together`, `deepseek`,
 `mistral`, `openrouter`, `ollama`, `lmstudio`. Anything else that speaks the
 same API — a self-hosted gateway, vLLM, Azure — works with
 `--llm-base-url https://…`. Defaults come from `$VERIPP_LLM_MODEL` and
-`$VERIPP_LLM_BASE_URL`; `veripp doctor` lists which providers have credentials.
+`$VERIPP_LLM_BASE_URL`; `veripp doctor` lists which providers have
+credentials.
 
-**A small model is a reasonable choice here.** Every proposal is re-checked by
+A small model is a reasonable choice here: every proposal is re-checked by
 ESBMC, so a wrong guess costs a retry, not a wrong answer.
 `benchmarks/eval_triage.py --models a,b,c` scores providers against known
-answers so you can pick on evidence.
+answers so you can pick on evidence. How well the triage works is measured,
+not asserted — the path is validated end to end against a real model, a 7B
+local model scores 0/2 on the benchmark, and no hosted model has been graded
+here yet. [benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md) states exactly what is
+and is not evidenced.
 
 ## In CI
 
@@ -224,17 +295,13 @@ answers so you can pick on evidence.
     fail-on: never      # report findings without failing, for a first run
 ```
 
-It installs ESBMC (the `weekly` build, since the release is unsound for a
-pattern veripp targets), runs `veripp doctor` so a broken checker fails the job
-rather than producing quiet non-proofs, then scans. Set `function:` to verify
-one target, `args:` for `-I`/`-D`/`--link`/`--unwind`.
+The action installs ESBMC (the `weekly` build, since the release is unsound
+for a pattern veripp targets), runs `veripp doctor` so a broken checker fails
+the job rather than producing quiet non-proofs, then scans. Set `function:`
+to verify one target, `args:` for `-I`/`-D`/`--link`/`--unwind`.
 
-On an existing codebase, record what is already there first — otherwise the
-first run fails on everything it finds and the check gets removed:
-
-```bash
-veripp accept src/ --baseline .veripp-baseline   # commit this
-```
+A full workflow with a baseline and SARIF annotations on the pull-request
+diff:
 
 ```yaml
 name: verify
@@ -270,84 +337,12 @@ jobs:
 
 `continue-on-error` plus the explicit final step is deliberate: without it a
 finding fails the job before the SARIF is uploaded, and the annotations that
-explain the failure never appear on the diff.
-
-With `sarif:` each finding becomes an annotation on the pull request diff
-instead of a line in a job log. Findings covered by the baseline are uploaded
-as *suppressed* rather than omitted, so code scanning shows them as accepted
-rather than pretending they are gone.
-
-Now the job goes red only on findings that are **not** in the baseline. The
-file is JSON and meant to be reviewed in the pull request that adds it: each
-entry is a risk somebody decided to carry. When a finding stops occurring,
-veripp says so, because an entry that matches nothing still grants permission
-to whatever matches it later.
+explain the failure never appear on the diff. Findings covered by the
+baseline are uploaded as *suppressed* rather than omitted, so code scanning
+shows them as accepted rather than pretending they are gone.
 
 `fail-on: never` remains for a first look, but a check that can never fail is
 a check nobody reads.
-
-## In a container
-
-```bash
-docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan src/parser.c
-```
-
-Nothing to install, and the checker inside has already been probed: the image
-build runs `veripp doctor` and fails if the bundled ESBMC cannot find a planted
-bug, so an unsound image is never published.
-
-The image is genuinely multi-architecture, and the two halves are not built the
-same way. ESBMC publishes a prebuilt Linux binary for x86_64 only. The one
-prebuilt arm64 Linux ESBMC that exists anywhere is the Homebrew bottle, pinned
-to the 8.4 release that silently misses out-of-bounds writes
-([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)) — shipping that
-would trade a loud failure for a quiet one. So the arm64 image compiles ESBMC
-from source, and arm64 users get the same soundness guarantee as everyone else.
-
-The container runs as a non-root user and never writes to your tree, so the
-mount can be read-only:
-
-```bash
-docker run --rm -v "$PWD:/src:ro" ghcr.io/gfabbretti8/veripp \
-    verify src/img.c --function scale --assume 'w > 0 && h > 0'
-```
-
-`--compile-commands` works too, even though your `compile_commands.json`
-records absolute paths from your machine and the tree is mounted at `/src`
-inside. veripp finds the entry by its trailing path components and rebases the
-whole thing — include dirs included — onto wherever the tree actually is. The
-same applies to a CI checkout that does not sit where the database was
-generated. If two entries match equally well it says so rather than guess.
-
-The container runs as a non-root user, which means it cannot read a project
-directory that is not readable by others — a tree under a `0700` home
-directory, typically. If `/src` comes up unreadable, veripp says so and you can
-run as yourself instead:
-
-```bash
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src:ro" \
-    ghcr.io/gfabbretti8/veripp scan src/parser.c
-```
-
-Roughly 450 MB (amd64) and 530 MB (arm64), most of it ESBMC itself.
-
-### Repeat runs are cached
-
-A second scan reuses verdicts for files that have not changed, which is what
-makes this affordable on every push rather than nightly. The key covers the
-file, the local headers it includes, any linked sources, the bounds, the
-harness options and the checker's own version — so a stale verdict cannot be
-served. `--no-cache` verifies everything; `--cache DIR` moves it.
-
-Deliberately *not* keyed on the function body, which would be unsound:
-
-```c
-static int limit(void) { return 4; }
-int at(const int *a, int i) { if (i<0 || i>=limit()) return 0; return a[i]; }
-```
-
-`at` verifies. Change `limit` to return 99 and `at` — byte-identical — yields a
-counterexample.
 
 ## As a skill for coding agents
 
@@ -358,11 +353,11 @@ npx veripp-skill            # this project
 npx veripp-skill --global   # every project
 ```
 
-That installs the skill only. The verifier is a Python program that needs
-ESBMC; the skill carries a script that works out how to get it and reports
-what that would cost before touching anything.
+That installs the skill only; the verifier is a Python program that needs
+ESBMC, and the skill carries a script that works out how to get it and
+reports what that would cost before touching anything.
 
-In Claude Code you can also install it as a plugin from this repository:
+In Claude Code you can also install it as a plugin:
 
 ```
 /plugin marketplace add gfabbretti8/veripp
@@ -370,8 +365,7 @@ In Claude Code you can also install it as a plugin from this repository:
 ```
 
 For any other agent, copy [`skills/veripp`](https://github.com/gfabbretti8/veripp/blob/main/skills/veripp) wherever it keeps
-skills. Either way the agent will reach for veripp when it is asked to verify
-or prove something about C/C++.
+skills.
 
 The skill exists to correct one specific instinct. An agent that knows ESBMC
 will try to hand-write a `main()` full of `__ESBMC_nondet_int()`, sprinkle
@@ -380,99 +374,51 @@ generates all of that from the signature, and re-checks it. The skill's first
 instruction is that the agent does not write the harness — plus how to read a
 bounded proof, and why a vacuous result is not a pass.
 
-## Scan a whole project
-
-```bash
-veripp scan src/            # every .c/.cc/.cpp/.cxx underneath
-veripp scan . --jobs 8
-veripp scan src/ --only 'parse_*'   # just the ones you are working on
-veripp scan src/                    # unchanged files are reused from cache
-```
-
-Build trees, vendored dependencies and dotted directories are skipped
-(`build/`, `node_modules/`, `third_party/`, `.git/`, ...), and headers are
-left alone because definitions live in the source file. The file count is
-printed before the work starts, findings are grouped by file, and the exit
-code is 1 if anything anywhere failed.
-
-## Adding veripp to code that already exists
-
-The first run on an existing codebase reports everything at once — cJSON gives
-33 counterexamples. Record what is already there, then fail only on what
-appears afterwards:
-
-```bash
-veripp accept src/ --baseline .veripp-baseline   # commit this
-veripp scan   src/ --baseline .veripp-baseline   # exits 1 only on new findings
-```
-
-The file is JSON, sorted, and meant to be reviewed in the pull request that
-adds it: each entry is a risk someone decided to carry, with the signature and
-the date recorded beside it. Findings are keyed on (file, function, property)
-rather than line numbers, so moving code around does not resurrect an accepted
-finding. When one stops occurring veripp says so, because an entry that matches
-nothing still grants permission to whatever matches it later.
-
-## Scan a whole file
-
-```bash
-veripp scan src/parser.cpp
-```
-
-Harnesses and verifies every function veripp can model, then reports what it
-proved, what produced counterexamples, and — importantly — what it could not
-reach and why:
+## How it works
 
 ```
-  PROVED             99  no overflow, out-of-bounds, null deref or division by
-                         zero, within the stated bounds and assumptions
-  COUNTEREXAMPLE     61  a property fails for some input -- triage each one
-  HARNESS ARTIFACT    3  failed because of how the harness was built, not the code
-  INCONCLUSIVE       52  timed out, hit the unwind bound, or the frontend refused it
-  NOT HARNESSABLE    47  veripp could not build inputs for the signature
+┌─────────────────────────────────────────────────────────┐
+│ 4. Interface     CLI · JSON output · GitHub Action ·     │
+│                  cache keyed on file + headers + bounds  │
+├─────────────────────────────────────────────────────────┤
+│ 3. Agent loop    attempt → triage → escalate (budgeted)  │
+│                  any LLM proposes preconditions; ESBMC   │
+│                  checks every one, and vacuous proofs    │
+│                  are rejected                            │
+├─────────────────────────────────────────────────────────┤
+│ 2. Specification implicit properties (overflow, bounds,  │
+│                  UB, null deref — free) + explicit       │
+│                  contracts via veripp/contracts.hpp      │
+├─────────────────────────────────────────────────────────┤
+│ 1. Ingestion     compile_commands.json for include paths │
+│                  and defines; harnesses built from the   │
+│                  signature; unlinked callees disclosed   │
+└─────────────────────────────────────────────────────────┘
 ```
 
-(That is real output from `veripp scan` on lodepng.cpp.)
+### Honest reporting
 
-`--json` for machine-readable output, `-j` for parallelism.
+Every "VERIFIED" result states its unwind bounds, stubbed calls, and harness
+assumptions. Bounded results are labeled bounded. Overclaiming is how
+verification tools lose trust permanently. Two places this bites in practice,
+both handled explicitly:
 
-## Real projects
+- ESBMC reports an exhausted unwind bound as `VERIFICATION FAILED` with an
+  "unwinding assertion" property. That means *the bound was too small*, not
+  *your code is broken*. veripp classifies it as inconclusive and widens the
+  bound instead of reporting a bug.
+- A generated harness always simplifies something — a bounded array length, a
+  default-constructed receiver, a non-null pointer. Every such simplification
+  is recorded and printed with the result. When the generator cannot model a
+  parameter soundly, it refuses to emit a harness rather than emit a
+  plausible-looking wrong one.
 
-veripp reads your build system rather than making you restate it. Point it at
-a source file and it finds the nearest `compile_commands.json` (including in
-`build/`), and takes that file's include paths, defines and language standard
-from it:
-
-```bash
-veripp verify src/area.cpp --function area
-# note: using build/compile_commands.json (1 include dirs, 1 defines, -std=c++17)
-```
-
-Use `--compile-commands PATH` to choose one, `--no-compile-commands` to ignore
-them.
-
-**Linking matters for soundness, not convenience.** ESBMC gives an undefined
-function a nondeterministic return value, but assumes it does not write
-through its pointer arguments. So a callee whose definition is in another
-translation unit is silently treated as side-effect-free. veripp detects those
-callees itself — ESBMC reports them for C but not for C++ — and names them:
-
-```
-STUBBED CALLS (no body was available): normalize. Their effects were not
-modelled, so this counterexample may be an artifact of the missing definition
-rather than a real bug -- check it first.
-```
-
-Add the defining source with `--link src/helper.cpp` (repeatable) and the run
-accounts for it. In the example above that is the difference between a false
-counterexample and a proof.
-
-## Vacuous proofs
+### Vacuous proofs are rejected
 
 A precondition that cannot be satisfied makes the target unreachable, and an
 unreachable program satisfies every property. ESBMC answers *"does this hold
 under these assumptions"* — it cannot notice the assumptions are impossible,
-and neither can a model that proposed them. Since the whole design lets an LLM
+and neither can the model that proposed them. Since the design lets an LLM
 suggest preconditions, that hole matters: a weak model fails toward
 over-constraining, and the solver applauds.
 
@@ -488,38 +434,56 @@ Result: VACUOUS (nothing was actually checked)
 
 It exits non-zero, so a vacuous proof can never pass CI.
 
-## Check your checker
+### Container notes
+
+The image is genuinely multi-architecture, and the two halves are not built
+the same way. ESBMC publishes a prebuilt Linux binary for x86_64 only; the
+one prebuilt arm64 Linux ESBMC that exists anywhere is the Homebrew bottle,
+pinned to the unsound 8.4 release. So the arm64 image compiles ESBMC from
+source, and arm64 users get the same soundness guarantee as everyone else.
+
+The container never writes to your tree, so the mount can be read-only:
 
 ```bash
-veripp doctor
+docker run --rm -v "$PWD:/src:ro" ghcr.io/gfabbretti8/veripp \
+    verify src/img.c --function scale --assume 'w > 0 && h > 0'
 ```
 
-runs known-*failing* programs through your ESBMC and confirms it rejects them.
-A model checker that answers "verified" on a program that provably fails is
-worse than none, because every result built on it is a false proof. ESBMC 8.4
-has one such hole ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508),
-fixed upstream but unreleased): an out-of-bounds write to a member array is
-missed when the index is another member of the same object reached through
-`this` or a pointer — the ordinary container idiom. `doctor` fails loudly
-rather than letting you build proofs on it.
+`--compile-commands` works even though your `compile_commands.json` records
+absolute paths from your machine and the tree is mounted at `/src` inside:
+veripp finds the entry by its trailing path components and rebases the whole
+thing — include dirs included — onto wherever the tree actually is. The same
+applies to a CI checkout that does not sit where the database was generated.
+If two entries match equally well, it says so rather than guess.
 
-## Honest-reporting policy
+The container runs as a non-root user, which means it cannot read a project
+directory that is not readable by others — a tree under a `0700` home
+directory, typically. If `/src` comes up unreadable, veripp says so, and you
+can run as yourself instead:
 
-Every "VERIFIED" result states its unwind bounds, stubbed calls, and harness
-assumptions. Bounded results are labeled bounded. Overclaiming is how
-verification tools lose trust permanently; we don't.
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src:ro" \
+    ghcr.io/gfabbretti8/veripp scan src/parser.c
+```
 
-Two places this bites in practice, both handled explicitly:
+## Results on real libraries
 
-- ESBMC reports an exhausted unwind bound as `VERIFICATION FAILED` with an
-  "unwinding assertion" property. That means *the bound was too small*, not
-  *your code is broken*. veripp classifies it as inconclusive and widens the
-  bound instead of reporting a bug.
-- A generated harness always simplifies something — a bounded array length, a
-  default-constructed receiver, a non-null pointer. Every such simplification
-  is recorded and printed with the result. When the generator cannot model a
-  parameter soundly it refuses to emit a harness rather than emit a
-  plausible-looking wrong one.
+Measured across nine popular C libraries: **40 of libpng's 70 functions
+proved**, 99 of lodepng's 260, 32 of cJSON's 117 — free of overflow,
+out-of-bounds, null dereference and division by zero for any input within the
+stated bounds.
+
+Those counts were taken with the four checks veripp ran at the time; it now
+checks eight properties by default. Re-running cJSON with the same build and
+bounds, changing only the check set: 32 proved under four checks, 31 under
+eight. The stricter set cost exactly one proof — to `internal_malloc`, whose
+body is `return malloc(size)` and which the memory-leak check flags because
+the *harness* never frees. veripp labels that a harness artifact rather than
+a bug.
+
+The full table, per-check false-positive measurements, and the veripp bugs
+each library exposed are in [benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md).
+What is not done yet is in [ROADMAP.md](https://github.com/gfabbretti8/veripp/blob/main/ROADMAP.md).
 
 ## Known limits
 
@@ -530,13 +494,13 @@ Read this before judging the output.
   value, including combinations no caller can construct — so it can report a
   failure that cannot happen in your program. veripp filters the mechanically
   decidable cases into a separate "harness artifact" count, but the rest are
-  leads, not findings. The proofs are the trustworthy half. Use `--assume` (or
-  an LLM) to state what real callers guarantee.
+  leads, not findings. The proofs are the trustworthy half. Use `--assume`
+  (or an LLM) to state what real callers guarantee.
 - **The released ESBMC is unsound for a common pattern.** v8.4 misses
-  out-of-bounds writes to a member array indexed by another member of the same
-  object ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508), fixed
-  upstream, unreleased). `veripp doctor` detects it and every affected result
-  says so. Use a master or `weekly` build.
+  out-of-bounds writes to a member array indexed by another member of the
+  same object ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508),
+  fixed upstream, unreleased). `veripp doctor` detects it and every affected
+  result says so. Use a master or `weekly` build.
 - **C and C-like C++ only.** ESBMC's C++ frontend does not digest STL-heavy
   code; tinyxml2 crashes it and jsoncpp will not parse. Codecs, parsers and
   embedded-style code work well.

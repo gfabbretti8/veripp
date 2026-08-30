@@ -7,6 +7,61 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## 0.4.0
+
+### Added
+- **`scan` re-tries its inconclusives.** Functions the mechanical pass could
+  not settle get a second attempt under a wall-clock budget
+  (`--retry-budget`, default 120s, 0 disables), cheapest first, with no LLM
+  needed. Each retry starts past what the first pass already established: a
+  bound that ran out is seeded one widening beyond the widest tried (then
+  k-induction), and a timeout gets four times the time with incremental
+  BMC — measured on cJSON, a timeout retried under the same limit settles
+  exactly nothing. A candidate the remaining budget provably cannot afford
+  is skipped rather than half-tried. The INCONCLUSIVE line reports how many
+  the second pass settled, and `accept` runs the same passes so a baseline
+  records what `scan` would find. Measured on lodepng: 51 inconclusive
+  before; at `--retry-budget 900`, two became proofs. The default budget is
+  a real help only on files whose checker runs are cheap — the summary
+  tells you what it did either way.
+- **`scan` triages its counterexamples.** With an LLM configured (`--model`,
+  or `$VERIPP_LLM_MODEL` — same default as `verify`), each counterexample
+  goes through the agent loop `verify` uses: the model classifies it and may
+  propose a precondition, which the solver re-checks, vacuity probe included,
+  before the report changes. A counterexample that disappears under a
+  solver-accepted precondition is reported as **PRECONDITIONED** with the
+  precondition listed — a conditional result, never folded into PROVED. The
+  rest are ranked with the model's verdict attached, likely real bugs first;
+  a triage the model could not perform says "triage unavailable" rather than
+  pretending an opinion. The mechanical pass stays parallel and LLM-free, so
+  functions that prove outright never cost an API call. `--no-llm`, formerly
+  a no-op accepted for symmetry, now actually turns something off. Cached
+  untriaged scans are re-verified rather than served when triage is asked
+  for.
+
+### Fixed
+- **Endpoints that refuse a token cap no longer break the provider.** Gemini's
+  OpenAI-compatible layer drops the connection — no HTTP status at all — for
+  models newer than `gemini-3.6-flash` whenever the request carries
+  `max_tokens` (or `max_completion_tokens`; observed 2026-08-30). The client
+  now retries such a request once without the cap, and a connection dropped
+  for any other reason becomes an `LLMError` instead of an unhandled
+  `RemoteDisconnected` that aborted the run.
+- **An unreachable LLM during escalation no longer aborts a verification.**
+  The agent loop's invariant and frontend-fix proposals now degrade to "no
+  proposal" on `LLMError`, honouring the same contract triage always had.
+- **`eval_triage.py` no longer grades a model that never answered.** An API
+  failure (quota, dropped connection) previously scored the pipeline's
+  conservative offline fallback as the model's answer — 0/2 for a model that
+  was never asked. Such cases now report `UNAVAILABLE` and are excluded from
+  the score, and a model with any unavailable case cannot count as perfect.
+
+### Changed
+- README rewritten around why → examples → installation → usage; duplicated
+  install, Docker and exit-code sections consolidated. The architecture
+  diagram no longer claims the cache is keyed on a function-body hash — it
+  never was, and the cache section beside it said so.
+
 ## 0.3.0
 
 Ask for a verdict, not a configuration.
