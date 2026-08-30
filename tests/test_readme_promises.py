@@ -185,12 +185,18 @@ class TestDoctorHintsMatchTheInstall:
     A PyPI install has no examples/ or demo/ on disk, so the repo-relative
     hints would 404 -- and a first suggestion that fails teaches distrust of
     everything after it.
+
+    Both cases need a checker: the "try:" block only prints once doctor is
+    "ready", so without ESBMC doctor exits early with install instructions
+    instead.
     """
 
+    @pytest.mark.esbmc
     def test_in_the_repo_the_file_hints_appear(self) -> None:
         result = veripp("doctor")
         assert "examples/off_by_one.cpp" in result.stdout
 
+    @pytest.mark.esbmc
     def test_outside_the_repo_no_file_is_advertised(self, tmp_path) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "veripp.cli", "doctor"],
