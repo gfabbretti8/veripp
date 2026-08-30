@@ -30,7 +30,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/esbmc
-          # The weekly tag is rolling, so the cache key carries the week.
+          # Keyed on this file's hash, not a date: bumping ESBMC_VERSION or
+          # editing this workflow rotates the cache. A silently re-cut `weekly`
+          # under the same name would keep the old binary -- acceptable because
+          # `veripp doctor` re-probes the checker's soundness on every run, so
+          # a regressed build fails the run rather than passing on a stale hit.
           key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml') }}
 
       # zsh is not on the runner image, and without it the zsh completion is
