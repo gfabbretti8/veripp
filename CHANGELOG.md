@@ -9,6 +9,8 @@ run, and refuses to back results from one that cannot detect a planted bug.
 
 ## 0.4.0
 
+A first scan you can read.
+
 ### Added
 - **`scan` re-tries its inconclusives.** Functions the mechanical pass could
   not settle get a second attempt under a wall-clock budget

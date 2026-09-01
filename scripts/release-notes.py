@@ -26,6 +26,11 @@ def main() -> int:
     )
     if not section:
         sys.exit(f"CHANGELOG.md has no section for {version}")
+    # The changelog is UTF-8 prose -- arrows, em dashes -- and this output is
+    # piped straight into `gh release create`. Windows defaults stdout to
+    # cp1252, which cannot encode all of it, so a release note would fail to
+    # print for the character it happened to contain.
+    sys.stdout.reconfigure(encoding="utf-8")
     print(section.group(1).strip())
     return 0
 

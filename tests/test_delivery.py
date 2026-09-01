@@ -776,6 +776,26 @@ class TestChangelog:
         assert result.stdout.strip(), "extracted empty release notes"
         assert result.stdout.strip() in read("CHANGELOG.md")
 
+    def test_the_release_notes_survive_a_non_utf8_console(self) -> None:
+        """Windows defaults stdout to cp1252, which cannot encode the arrows
+        and dashes a changelog contains -- and this output is piped straight
+        into `gh release create`. Forcing the encoding here catches it on
+        every platform instead of only on the Windows runner."""
+        import os
+        import subprocess
+        import sys as _sys
+
+        version = re.search(
+            r'^version = "([^"]+)"', read("pyproject.toml"), re.M
+        ).group(1)
+        result = subprocess.run(
+            [_sys.executable, str(ROOT / "scripts/release-notes.py"), version],
+            capture_output=True, cwd=ROOT,
+            env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        )
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        assert result.stdout.decode("utf-8").strip()
+
     def test_the_extractor_refuses_an_unknown_version(self) -> None:
         import subprocess
         import sys as _sys
