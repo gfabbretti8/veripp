@@ -29,8 +29,10 @@ def main() -> int:
     # The changelog is UTF-8 prose -- arrows, em dashes -- and this output is
     # piped straight into `gh release create`. Windows defaults stdout to
     # cp1252, which cannot encode all of it, so a release note would fail to
-    # print for the character it happened to contain.
-    sys.stdout.reconfigure(encoding="utf-8")
+    # print for the character it happened to contain. LF for the same reason:
+    # the bytes this prints are the release page, and they should not differ
+    # by the platform that generated them.
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     print(section.group(1).strip())
     return 0
 

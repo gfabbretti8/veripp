@@ -770,7 +770,9 @@ class TestChangelog:
         ).group(1)
         result = subprocess.run(
             [_sys.executable, str(ROOT / "scripts/release-notes.py"), version],
-            capture_output=True, text=True, cwd=ROOT,
+            # The script emits UTF-8 by contract; decoding with the platform
+            # default reads it as cp1252 on Windows and compares mojibake.
+            capture_output=True, text=True, encoding="utf-8", cwd=ROOT,
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip(), "extracted empty release notes"
@@ -780,7 +782,12 @@ class TestChangelog:
         """Windows defaults stdout to cp1252, which cannot encode the arrows
         and dashes a changelog contains -- and this output is piped straight
         into `gh release create`. Forcing the encoding here catches it on
-        every platform instead of only on the Windows runner."""
+        every platform instead of only on the Windows runner.
+
+        Asserts the round trip, not just the exit status: emitting UTF-8 and
+        then reading it back as something else produces mojibake that still
+        exits 0, which is how the second half of this bug reached CI.
+        """
         import os
         import subprocess
         import sys as _sys
@@ -794,7 +801,9 @@ class TestChangelog:
             env={**os.environ, "PYTHONIOENCODING": "cp1252"},
         )
         assert result.returncode == 0, result.stderr.decode(errors="replace")
-        assert result.stdout.decode("utf-8").strip()
+        notes = result.stdout.decode("utf-8").replace("\r\n", "\n").strip()
+        assert notes, "extracted empty release notes"
+        assert notes in read("CHANGELOG.md")
 
     def test_the_extractor_refuses_an_unknown_version(self) -> None:
         import subprocess
