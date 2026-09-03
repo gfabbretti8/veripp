@@ -27,12 +27,14 @@ dependencies = []
 # OpenAI-compatible HTTP API, which veripp calls with the standard library.
 anthropic = ["anthropic>=0.40"]
 llm = ["anthropic>=0.40"]  # kept as an alias
-# The `checker` extra is deliberately NOT declared yet. It would read
-#     checker = ["veripp-checker>=0.1"]
-# but veripp-checker is not on an index, and an extra naming a package that
-# cannot be resolved breaks `uv sync` for everyone, including this repo. Add
-# the line in the same change that publishes the first wheels -- see
-# checker/README.md.
+# The checker is NOT an extra. Once veripp-checker is published, the line
+#     dependencies = ["veripp-checker>=0.1"]
+# goes in [project] above, and `pip install veripp` installs a working
+# verifier on every platform: the platform wheel where one exists, and a
+# binary-free `py3-none-any` wheel elsewhere, which keeps resolution working
+# instead of failing. It is left undeclared only because a dependency naming
+# a package that is not on an index breaks `uv sync` for this repo too --
+# see checker/README.md for the publishing order.
 
 [project.scripts]
 veripp = "veripp.cli:main"

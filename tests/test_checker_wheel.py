@@ -122,3 +122,46 @@ def test_veripp_falls_back_gracefully_without_the_package():
     from veripp.checker import bundled_esbmc
 
     assert bundled_esbmc() is None or Path(bundled_esbmc()).exists()
+
+
+class TestFallbackWheel:
+    """The binary-free wheel is what lets `pip install veripp` resolve on a
+    platform no checker wheel targets. Without it the dependency would have
+    to be an extra, and batteries-included would stop being the default."""
+
+    def _build(self, licence, outdir):
+        result = subprocess.run(
+            [sys.executable, str(BUILDER), "--fallback",
+             "--license", str(licence), "--outdir", str(outdir)],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        assert result.returncode == 0, result.stderr
+        return next(Path(outdir).glob("*.whl"))
+
+    def test_it_is_tagged_any_so_every_platform_can_resolve(self, licence, tmp_path):
+        wheel = self._build(licence, tmp_path / "dist")
+        assert wheel.name.endswith("py3-none-any.whl")
+
+    def test_it_carries_no_binary(self, licence, tmp_path):
+        wheel = self._build(licence, tmp_path / "dist")
+        with zipfile.ZipFile(wheel) as z:
+            payload = [n for n in z.namelist() if "/bin/" in n or ".so" in n]
+        assert not payload, f"fallback wheel is not binary-free: {payload}"
+
+    def test_it_still_ships_the_shim_and_the_notices(self, licence, tmp_path):
+        wheel = self._build(licence, tmp_path / "dist")
+        with zipfile.ZipFile(wheel) as z:
+            names = z.namelist()
+        assert "veripp_checker/__init__.py" in names
+        assert any(n.endswith("COPYING.esbmc") for n in names)
+
+    def test_a_platform_wheel_still_needs_its_payload(self, licence, tmp_path):
+        """--fallback is the only way to build without one; forgetting
+        --payload must not quietly produce an empty platform wheel."""
+        result = subprocess.run(
+            [sys.executable, str(BUILDER), "--plat", "manylinux_2_38_x86_64",
+             "--license", str(licence), "--outdir", str(tmp_path / "d")],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        assert result.returncode != 0
+        assert "--payload" in result.stderr

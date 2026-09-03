@@ -74,3 +74,31 @@ jobs:
         with:
           name: veripp-checker-${{ matrix.arch }}
           path: dist/*.whl
+
+  # The binary-free wheel. pip ranks a platform wheel above `any`, so this is
+  # selected only where nothing else fits -- and there it is what keeps
+  # `pip install veripp` resolving at all, instead of failing on a platform
+  # nobody publishes a checker for.
+  fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch ESBMC's licence notices
+        run: curl -fsSL -o COPYING.esbmc
+             https://raw.githubusercontent.com/esbmc/esbmc/master/COPYING
+
+      - name: Build the binary-free wheel
+        run: python3 checker/build_wheel.py --fallback
+             --license COPYING.esbmc --outdir dist
+
+      - name: It must install, carry no checker, and not break veripp
+        run: |
+          python -m venv /tmp/v && /tmp/v/bin/pip install -q dist/*.whl .
+          test -z "$(/tmp/v/bin/python -c             'import veripp_checker; print(veripp_checker.esbmc_path() or "")')"             || { echo "the fallback wheel carries a binary"; exit 1; }
+          /tmp/v/bin/veripp --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veripp-checker-any
+          path: dist/*.whl

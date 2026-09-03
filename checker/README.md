@@ -3,7 +3,7 @@
 The [ESBMC](https://esbmc.org) model checker, packaged as a wheel so that
 
 ```bash
-pip install veripp[checker]
+pip install veripp
 ```
 
 is the entire installation of [veripp](https://github.com/gfabbretti8/veripp).
@@ -32,18 +32,25 @@ wheel only if a clean container that `pip install`s it passes `veripp doctor`.
 Nothing is uploaded automatically.
 
 Order matters. Until `veripp-checker` exists on an index, veripp **must not**
-declare a `checker` extra: an extra naming an unresolvable package breaks
-`uv sync` and `pip install veripp[checker]` alike. So:
+depend on it: a dependency naming an unresolvable package breaks
+`uv sync` and `pip install veripp` alike. So:
 
 1. build and check the wheels (`workflow_dispatch` on that workflow);
 2. publish `veripp-checker`;
-3. only then add to veripp's `pyproject.toml`:
+3. only then add to veripp's `pyproject.toml`, as a real dependency rather
+   than an extra:
 
    ```toml
-   checker = ["veripp-checker>=0.1"]
+   dependencies = ["veripp-checker>=0.1"]
    ```
 
 4. release veripp.
+
+Publish the `py3-none-any` wheel **together with** the platform wheels, never
+after. pip ranks a platform wheel above `any`, so the fallback is chosen only
+where nothing else fits — and it is the reason the dependency can be
+unconditional. Without it, `pip install veripp` would fail outright on every
+platform no checker is built for.
 
 ## Building one locally
 

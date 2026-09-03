@@ -85,7 +85,7 @@ def build(payload: Path, plat: str, version: str, license_file: Path,
         # The binary and the libraries it was linked against. The executable
         # bit has to be set in the archive: pip preserves what it finds, and a
         # checker that arrives non-executable looks to veripp like no checker.
-        for source in sorted(payload.rglob("*")):
+        for source in sorted(payload.rglob("*")) if payload.is_dir() else ():
             if not source.is_file():
                 continue
             rel = Path(DISTRIBUTION) / source.relative_to(payload)
@@ -107,9 +107,13 @@ def build(payload: Path, plat: str, version: str, license_file: Path,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--payload", type=Path, required=True,
+    ap.add_argument("--payload", type=Path,
                     help="tree containing bin/esbmc and lib/")
-    ap.add_argument("--plat", required=True,
+    ap.add_argument("--fallback", action="store_true",
+                    help="build the binary-free py3-none-any wheel instead, so "
+                         "that resolution succeeds on platforms no wheel "
+                         "targets and veripp stays installable there")
+    ap.add_argument("--plat",
                     help="wheel platform tag, e.g. manylinux_2_38_x86_64")
     ap.add_argument("--version", default="0.1.0")
     ap.add_argument("--license", type=Path, required=True,
@@ -118,11 +122,24 @@ def main() -> int:
     args = ap.parse_args()
 
     here = Path(__file__).resolve().parent
-    binary = args.payload / "bin"
-    if not any(binary.glob("esbmc*")):
-        raise SystemExit(f"no bin/esbmc under {args.payload}")
 
-    built = build(args.payload, args.plat, args.version, args.license,
+    if args.fallback:
+        # No binary, tagged `any`. pip ranks a platform wheel above it, so
+        # this is chosen only where nothing else fits -- and there it keeps
+        # `pip install veripp` working instead of failing to resolve.
+        # esbmc_path() then returns None and veripp looks elsewhere.
+        payload = Path(argparse.__file__).parent / "__nonexistent__"
+        plat = "any"
+    else:
+        if args.payload is None or not args.plat:
+            raise SystemExit("--payload and --plat are required "
+                             "unless --fallback is given")
+        payload = args.payload
+        plat = args.plat
+        if not any((payload / "bin").glob("esbmc*")):
+            raise SystemExit(f"no bin/esbmc under {payload}")
+
+    built = build(payload, plat, args.version, args.license,
                   args.outdir, here / "src" / DISTRIBUTION)
     size = built.stat().st_size / 1024 / 1024
     print(f"{built}  ({size:.1f} MB)")
