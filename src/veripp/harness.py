@@ -546,6 +546,8 @@ def _pair_cursors_with_starts(
             continue
         forwards = _cursor_direction(param.name, body)
         if forwards is None:
+            forwards = _direction_from_name(nxt.name)
+        if forwards is None:
             continue  # direction unknown: refuse rather than guess a layout
         pairs[param.name] = (nxt.name, forwards)
     return pairs
@@ -576,6 +578,25 @@ def _cursor_direction(name: str, body: str) -> bool | None:
     if retreats and not advances:
         return False
     if advances and not retreats:
+        return True
+    return None
+
+
+#: When a body delegates its cursor arithmetic it shows no direction of its
+#: own -- most of mbedTLS's ASN.1 writers just call write_len/write_tag. The
+#: companion parameter's name is the convention these APIs use to say which
+#: end it sits at, and it is disclosed in the harness assumptions either way.
+_START_NAMES = ("start", "begin", "beginning", "base", "buf_start")
+_END_NAMES = ("bound", "end", "limit", "stop", "buf_end", "last")
+
+
+def _direction_from_name(other_name: str) -> bool | None:
+    """True (forwards) if the companion names the buffer's end, False if it
+    names the start, None if the name says nothing."""
+    lowered = other_name.lower().lstrip("_")
+    if lowered in _START_NAMES:
+        return False
+    if lowered in _END_NAMES:
         return True
     return None
 
