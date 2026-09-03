@@ -927,6 +927,22 @@ def find_struct(source: str, name: str) -> StructInfo:
     if rng.templated:
         raise SignatureError(f"`{name}` is a class template; harness a concrete instantiation")
 
+    if _CONDITIONAL_MEMBER_RE.search(scrubbed[rng.start : rng.end]):
+        # A struct whose members depend on #ifdef has more than one layout and
+        # nothing here knows which the build selected. This refuses the whole
+        # type rather than recording per-member holes, because the branches of
+        # an #if/#else routinely declare the *same* member with different
+        # types: modelling "the rest" would merge two mutually exclusive
+        # layouts. Left unhandled, the directive text was absorbed into the
+        # field type -- nanopb's pb_ostream_t came back with a member typed
+        # `#endif void`, which the harness set to null and then blamed the
+        # library for dereferencing.
+        raise SignatureError(
+            f"`{name}` has preprocessor-conditional members, so which fields "
+            "exist depends on build configuration and the layout cannot be "
+            "modelled; harness a function that does not take one"
+        )
+
     info = StructInfo(name=name, is_union=_is_union(scrubbed, rng))
     access = "public" if _is_struct(scrubbed, rng) or info.is_union else "private"
 
@@ -1022,6 +1038,9 @@ def _field_statements(scrubbed: str, rng: "_ClassRange"):
             yield scrubbed[start : i + 1], start
             start = i + 1
         i += 1
+
+
+_CONDITIONAL_MEMBER_RE = re.compile(r"^[ \t]*#\s*(?:if|ifdef|ifndef|else|elif|endif)\b", re.M)
 
 
 def _parse_fields(text: str, access: str) -> list[Field]:
