@@ -27,6 +27,12 @@ dependencies = []
 # OpenAI-compatible HTTP API, which veripp calls with the standard library.
 anthropic = ["anthropic>=0.40"]
 llm = ["anthropic>=0.40"]  # kept as an alias
+# The `checker` extra is deliberately NOT declared yet. It would read
+#     checker = ["veripp-checker>=0.1"]
+# but veripp-checker is not on an index, and an extra naming a package that
+# cannot be resolved breaks `uv sync` for everyone, including this repo. Add
+# the line in the same change that publishes the first wheels -- see
+# checker/README.md.
 
 [project.scripts]
 veripp = "veripp.cli:main"

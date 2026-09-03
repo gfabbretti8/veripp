@@ -257,3 +257,19 @@ def install(
     record = f"url: {source.url}\nsha256: {digest}\n"
     (dest / "INSTALLED").write_text(record, encoding="utf-8")
     return InstallResult(path=str(final_bin), sha256=digest, probes=probes)
+
+
+def bundled_esbmc() -> str | None:
+    """The checker from `pip install veripp[checker]`, if that extra is here.
+
+    Kept behind an import guard rather than a dependency: veripp must stay
+    installable, and useful, on the platforms no wheel is published for.
+    """
+    try:
+        import veripp_checker
+    except ImportError:
+        return None
+    try:
+        return veripp_checker.esbmc_path()
+    except Exception:
+        return None

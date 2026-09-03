@@ -1,0 +1,76 @@
+# Build `veripp-checker` wheels: the ESBMC binary, packaged so that
+# `pip install veripp[checker]` is the whole installation.
+#
+# Nothing is published from here. A wheel is kept only if a clean container
+# that pip-installs it passes `veripp doctor`, whose probes are known-failing
+# programs the checker must reject -- publishing a checker that misses a
+# planted bug would turn every result obtained from it into a false proof.
+name: checker-wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["checker-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble a relocatable payload
+        run: ./checker/build_linux_payload.sh ghcr.io/gfabbretti8/veripp payload
+
+      - name: Fetch ESBMC's licence notices
+        # Required by build_wheel.py: ESBMC derives from CBMC under
+        # BSD-4-clause, whose advertising clause obliges the notice to travel
+        # with the binary.
+        run: curl -fsSL -o COPYING.esbmc
+             https://raw.githubusercontent.com/esbmc/esbmc/master/COPYING
+
+      - name: Determine the glibc floor
+        id: glibc
+        run: |
+          floor=$(docker run --rm --entrypoint sh veripp-checker-payload -c \
+            'for f in /payload/bin/esbmc /payload/lib/*.so*; do
+               objdump -T "$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*"; done |
+             sort -V -u | tail -1' | sed 's/GLIBC_//;s/\./_/')
+          echo "tag=manylinux_${floor}_${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build the wheel
+        run: python3 checker/build_wheel.py --payload payload
+             --plat ${{ steps.glibc.outputs.tag }}
+             --license COPYING.esbmc --outdir dist
+
+      - name: A wheel is only kept if it passes the soundness probes
+        run: |
+          mkdir -p itest && cp dist/*.whl itest/
+          tar -cf - src pyproject.toml README.md LICENSE |
+            (mkdir -p itest/veripp && tar -C itest/veripp -xf -)
+          cat > itest/Dockerfile <<'EOF'
+          FROM python:3.12-slim
+          COPY veripp_checker-*.whl /tmp/
+          COPY veripp /tmp/veripp
+          RUN pip install -q /tmp/veripp_checker-*.whl && pip install -q /tmp/veripp
+          EOF
+          docker build -q -t veripp-wheel-itest itest
+          docker run --rm veripp-wheel-itest sh -c '
+            test -n "$(python -c "import veripp_checker;print(veripp_checker.esbmc_path() or \"\")")" \
+              || { echo "the wheel carries no runnable checker"; exit 1; }
+            veripp doctor'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veripp-checker-${{ matrix.arch }}
+          path: dist/*.whl

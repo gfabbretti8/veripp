@@ -12,6 +12,19 @@ run, and refuses to back results from one that cannot detect a planted bug.
 Fewer steps between a developer and a verified function.
 
 ### Added
+- **`veripp-checker` wheels**, so `pip install veripp[checker]` can be the
+  whole installation. `checker/` holds the package, a wheel builder, and a
+  script that assembles a relocatable payload from veripp's own image; CI
+  builds Linux x86_64 and aarch64 and keeps a wheel only if a clean container
+  that pip-installs it passes `veripp doctor`. What is bundled is the **slim,
+  Z3-only** build -- not an optimisation but a licensing one: ESBMC's COPYING
+  notes MathSAT is academic/non-commercial and Yices personal-use or GPL3,
+  while Z3 is MIT, so the fat official release is the one that cannot be
+  redistributed. Measured on arm64: an 87 MB wheel, under PyPI's 100 MB
+  default. `find_esbmc` consults it after `$VERIPP_ESBMC` and
+  `install-checker`, and veripp stays fully usable where no wheel exists.
+  Not yet published, and the `checker` extra is deliberately undeclared until
+  it is -- an extra naming an unresolvable package breaks `uv sync`.
 - **`veripp install-checker`.** Installing ESBMC was the worst step in getting
   started: not pip-installable, and the release people reach for first
   silently misses out-of-bounds writes to a member array
