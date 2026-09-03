@@ -21,7 +21,7 @@ USER root
 RUN set -eux; \\
     o=/payload; mkdir -p \$o/bin \$o/lib; \\
     cp "\$(command -v esbmc)" \$o/bin/esbmc; \\
-    ldd \$o/bin/esbmc | awk '{print \$3}' | grep '^/' | sort -u | while read -r f; do \\
+    ldd \$o/bin/esbmc 2>/dev/null | awk '{print \$3}' | grep '^/' | sort -u | while read -r f; do \\
       case "\$f" in */libc.so.*|*/libm.so.*|*/libpthread*|*/libdl*|*/librt*|*/ld-linux*) continue;; esac; \\
       cp -L "\$f" \$o/lib/; \\
     done
@@ -38,11 +38,39 @@ RUN set -eux; \\
 DOCKERFILE
 
 docker build -q -t veripp-checker-payload "$CTX" >/dev/null
+
+# Refuse to package a binary carrying a solver that cannot be redistributed.
+# ESBMC's own COPYING flags MathSAT as academic/non-commercial and Yices as
+# personal-use or GPL3. Z3, Boolector and Bitwuzla are all MIT, so a build
+# carrying only those is fine to ship. Which solvers a given binary actually
+# contains is not obvious by inspection, so this checks rather than trusts.
+# Test for the solver's *API symbols*, not its name: ESBMC names every
+# solver it knows about in its own option handling and help text, so a plain
+# grep for "yices" matches a build that does not contain a byte of it.
+FORBIDDEN=""
+for probe in "mathsat:msat_" "yices:yices_"; do
+  solver="${probe%%:*}"; prefix="${probe##*:}"
+  count=$(docker run --rm --entrypoint sh veripp-checker-payload \
+    -c "grep -ao '${prefix}[a-z_]*' /payload/bin/esbmc 2>/dev/null | sort -u | wc -l")
+  if [ "${count:-0}" -gt 0 ]; then
+    FORBIDDEN="$FORBIDDEN $solver"
+  fi
+done
+if [ -n "$FORBIDDEN" ]; then
+  echo "refusing to package this checker: it contains$FORBIDDEN," >&2
+  echo "which ESBMC's COPYING says may not be redistributed freely." >&2
+  echo "Use a build from source with -DENABLE_Z3=ON and every other solver" >&2
+  echo "OFF -- see the arm64 stage of this repository's Dockerfile." >&2
+  exit 1
+fi
 cid="$(docker create veripp-checker-payload)"
 rm -rf "$OUT"; mkdir -p "$OUT"
 docker cp "$cid:/payload/." "$OUT/"
 docker rm "$cid" >/dev/null
 
+if [ -z "$(ls -A "$OUT/lib" 2>/dev/null)" ]; then
+  echo "note: no bundled libraries -- this checker is statically linked"
+fi
 echo "payload: $OUT ($(du -sh "$OUT" | cut -f1))"
 echo "glibc floor: $(docker run --rm --entrypoint sh veripp-checker-payload -c \
   'for f in /payload/bin/esbmc /payload/lib/*.so*; do objdump -T "$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*"; done | sort -V -u | tail -1')"

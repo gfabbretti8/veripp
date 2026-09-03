@@ -46,6 +46,11 @@ jobs:
             'for f in /payload/bin/esbmc /payload/lib/*.so*; do
                objdump -T "$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*"; done |
              sort -V -u | tail -1' | sed 's/GLIBC_//;s/\./_/')
+          # A statically linked checker reports no floor at all. Claiming the
+          # oldest widely supported baseline is right there -- it needs
+          # nothing from the host -- but an empty value would silently build
+          # a wheel tagged `manylinux__x86_64`, which installs nowhere.
+          if [ -z "$floor" ]; then floor=2_17; fi
           echo "tag=manylinux_${floor}_${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
 
       - name: Build the wheel
@@ -102,3 +107,35 @@ jobs:
         with:
           name: veripp-checker-any
           path: dist/*.whl
+
+  # Publishing happens only from a `checker-v*` tag, and only after every
+  # wheel above has been built and proved sound. The `any` wheel must go up
+  # in the same run as the platform wheels: it is what lets veripp depend on
+  # veripp-checker unconditionally, so publishing platform wheels without it
+  # would break `pip install veripp` everywhere else.
+  publish:
+    needs: [linux, fallback]
+    if: startsWith(github.ref, 'refs/tags/checker-v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: collected
+
+      - name: Gather the wheels
+        run: mkdir -p dist && find collected -name '*.whl' -exec mv {} dist/ \;
+             && ls -la dist
+
+      - name: Refuse to publish an incomplete set
+        # A platform wheel without the fallback, or a fallback without any
+        # platform wheel, both leave users worse off than publishing nothing.
+        run: |
+          test -n "$(ls dist/*-any.whl 2>/dev/null)" \
+            || { echo "missing the py3-none-any fallback wheel"; exit 1; }
+          test "$(ls dist/*manylinux*.whl 2>/dev/null | wc -l)" -ge 2 \
+            || { echo "expected a wheel for each supported architecture"; exit 1; }
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
