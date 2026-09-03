@@ -202,6 +202,12 @@ def main(argv: list[str] | None = None) -> int:
         "Defaults to $VERIPP_LLM_BASE_URL.",
     )
     s.add_argument(
+        "--changed", nargs="?", const="", default=None, metavar="REF",
+        help="only files git reports as new or modified: against HEAD when "
+        "given alone (what you are about to commit), or `REF...HEAD` when "
+        "given a ref, e.g. --changed origin/main in a pull request",
+    )
+    s.add_argument(
         "--retry-budget", type=int, default=120, metavar="SECONDS",
         help=_adv(
             "wall-clock budget for re-trying inconclusive functions on the "
@@ -740,6 +746,63 @@ def discover_sources(root: Path) -> list[Path]:
     return found
 
 
+def changed_sources(root: Path, ref: str | None = None) -> tuple[list[Path], str]:
+    """The C/C++ files under `root` that git says are new or modified.
+
+    Two shapes, because there are two questions. With no ref: everything
+    different from HEAD -- staged, unstaged and untracked -- which is what
+    you are about to commit, and what pre-commit sees once it has stashed
+    the rest. With a ref: `ref...HEAD`, three dots, so a long-lived branch
+    is compared against where it diverged rather than against every commit
+    that landed on main meanwhile.
+
+    Returns the files and a description of what was compared, because a scan
+    that silently checked fewer files than the user expected is worse than
+    one that took longer.
+    """
+    import subprocess
+
+    def git_in(where: Path, *args: str) -> list[str]:
+        proc = subprocess.run(
+            ["git", *args], capture_output=True, text=True, cwd=where
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip() or "git failed")
+        return [line for line in proc.stdout.splitlines() if line.strip()]
+
+    # Every later query runs from the repository root, because git reports
+    # paths relative to the directory it was invoked in: asking from a
+    # subdirectory yields names that do not join back onto the root, and the
+    # files silently vanish from the scan.
+    top = Path(git_in(root, "rev-parse", "--show-toplevel")[0])
+
+    def git(*args: str) -> list[str]:
+        return git_in(top, *args)
+
+    if ref:
+        names = git("diff", "--name-only", "--diff-filter=d", f"{ref}...HEAD")
+        described = f"changed since {ref}"
+    else:
+        # --diff-filter=d drops deletions: a file that is gone cannot be
+        # scanned, and reporting it as skipped would be noise.
+        names = git("diff", "--name-only", "--diff-filter=d", "HEAD")
+        names += git("ls-files", "--others", "--exclude-standard")
+        described = "changed since HEAD"
+
+    root_resolved = root.resolve()
+    found: list[Path] = []
+    for name in sorted(set(names)):
+        path = (top / name).resolve()
+        if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
+            continue
+        if any(part in SKIP_DIRS or part.startswith(".") for part in path.parts):
+            continue
+        if root_resolved != path and root_resolved not in path.parents:
+            continue  # outside what the user pointed at
+        found.append(path)
+    return found, described
+
+
 def _findings_from(reports) -> list:
     """Every counterexample across one or more scan reports, as baseline keys."""
     keys = []
@@ -1082,7 +1145,25 @@ def _scan_tree(args) -> int:
     are reported as they finish rather than at the end, because a tree scan
     can run for a long time and silence is indistinguishable from a hang.
     """
-    sources = discover_sources(args.source)
+    if getattr(args, "changed", None) is not None:
+        try:
+            sources, described = changed_sources(args.source, args.changed or None)
+        except (RuntimeError, OSError, IndexError) as exc:
+            print(f"error: --changed needs a git repository: {exc}",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        if not sources:
+            # Nothing to verify is a pass, not an error: a pre-commit hook
+            # that fails when you touched no C is a hook people remove.
+            if not args.quiet and not args.json:
+                print(f"no C or C++ files {described} under {args.source}",
+                      file=sys.stderr)
+            return EXIT_VERIFIED
+        if not args.quiet and not args.json:
+            print(f"{len(sources)} file{'s' if len(sources) != 1 else ''} "
+                  f"{described}", file=sys.stderr)
+    else:
+        sources = discover_sources(args.source)
     if not sources:
         print(f"error: no C or C++ source files under {args.source}",
               file=sys.stderr)
@@ -1255,6 +1336,22 @@ def _tree_summary(root: Path, reports: list) -> str:
 def _scan(args) -> int:
     if args.source.is_dir():
         return _scan_tree(args)
+    if getattr(args, "changed", None) is not None:
+        # A single file still answers the question --changed asks; skipping
+        # it silently would look like a scan that found nothing wrong.
+        try:
+            touched, described = changed_sources(
+                args.source.parent, args.changed or None
+            )
+        except (RuntimeError, OSError, IndexError) as exc:
+            print(f"error: --changed needs a git repository: {exc}",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        if args.source.resolve() not in {p.resolve() for p in touched}:
+            if not args.quiet and not args.json:
+                print(f"{args.source} is not {described}; nothing to do",
+                      file=sys.stderr)
+            return EXIT_VERIFIED
     config = _config_for(args)
     options = _harness_options(args)
     seen: list[str] = []

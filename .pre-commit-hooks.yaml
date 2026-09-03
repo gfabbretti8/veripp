@@ -1,0 +1,34 @@
+# Usage in a project's .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: https://github.com/gfabbretti8/veripp
+#       rev: v0.4.0
+#       hooks:
+#         - id: veripp
+#
+# The hook verifies only what the commit touches. pre-commit stashes
+# unstaged changes before running, so `--changed` sees exactly the staged
+# content. ESBMC must be installed: `veripp install-checker`, or use the
+# veripp-docker hook below, which needs only Docker.
+- id: veripp
+  name: veripp (verify changed C/C++)
+  description: >-
+    Prove the C/C++ functions this commit touches free of undefined
+    behaviour, or report a counterexample.
+  entry: veripp scan . --changed
+  language: python
+  pass_filenames: false
+  require_serial: true
+  files: \.(c|cc|cpp|cxx)$
+
+- id: veripp-docker
+  name: veripp (verify changed C/C++, in Docker)
+  description: >-
+    Same check, with the checker inside the image, so nothing but Docker
+    needs to be installed.
+  entry: veripp scan . --changed
+  language: docker_image
+  args: ["ghcr.io/gfabbretti8/veripp"]
+  pass_filenames: false
+  require_serial: true
+  files: \.(c|cc|cpp|cxx)$
