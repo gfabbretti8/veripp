@@ -224,16 +224,17 @@ def generate(
     assumptions: list[str] = []
     lengths = _pair_buffers_with_lengths(signature.params, typedefs,
                                          body=signature.body)
-    cursors = _pair_cursors_with_starts(signature.params, typedefs)
+    cursors = _pair_cursors_with_starts(signature.params, typedefs,
+                                        body=signature.body)
 
     # Scalars first: a buffer's length must exist before we bound it.
     buffers = set(lengths)
-    paired_cursor = set(cursors) | set(cursors.values())
+    paired_cursor = set(cursors) | {other for other, _ in cursors.values()}
     by_name = {p.name: p for p in signature.params}
-    for cursor_name, start_name in cursors.items():
+    for cursor_name, (other_name, forwards) in cursors.items():
         body += _emit_backward_cursor(
-            by_name[cursor_name], by_name[start_name], options, assumptions,
-            typedefs,
+            by_name[cursor_name], by_name[other_name], forwards, options,
+            assumptions, typedefs,
         )
     for param in signature.params:
         if param.name in buffers or param.name in paired_cursor:
@@ -515,8 +516,9 @@ _CURSOR_POINTEES = ("char", "unsigned char", "signed char")
 
 
 def _pair_cursors_with_starts(
-    params: list[Param], typedefs: dict[str, str] | None = None
-) -> dict[str, str]:
+    params: list[Param], typedefs: dict[str, str] | None = None,
+    body: str = "",
+) -> dict[str, tuple[str, bool]]:
     """Map a write-backwards cursor to the parameter naming its buffer start.
 
     `mbedtls_asn1_write_len(unsigned char **p, const unsigned char *start,
@@ -530,7 +532,7 @@ def _pair_cursors_with_starts(
     Without this the double pointer is simply unconstructible, and 21 of
     asn1write.c's 22 functions were refused outright.
     """
-    pairs: dict[str, str] = {}
+    pairs: dict[str, tuple[str, bool]] = {}
     for idx, param in enumerate(params[:-1]):
         if param.type.replace("const", "").count("*") != 2:
             continue
@@ -542,30 +544,80 @@ def _pair_cursors_with_starts(
             continue
         if normalize_type(nxt.pointee(), typedefs) != inner:
             continue
-        pairs[param.name] = nxt.name
+        forwards = _cursor_direction(param.name, body)
+        if forwards is None:
+            continue  # direction unknown: refuse rather than guess a layout
+        pairs[param.name] = (nxt.name, forwards)
     return pairs
 
 
+def _cursor_direction(name: str, body: str) -> bool | None:
+    """True if the cursor advances, False if it retreats, None if unclear.
+
+    The two conventions put the companion pointer at opposite ends of the
+    same buffer, so guessing gets the layout exactly backwards. mbedTLS
+    writes DER backwards -- `*--(*p)`, with `start` at the buffer's
+    beginning -- while its own OID encoder writes forwards, `*p += n`, with
+    `bound` at the end. Assuming the DER convention for
+    oid_subidentifier_encode_into put the end where the start belongs, so
+    `bound - *p` went negative, wrapped huge as size_t, and sailed past the
+    guard: a fabricated out-of-bounds write.
+    """
+    if not body:
+        return None
+    scrubbed = scrub(body)
+    n = re.escape(name)
+    retreats = re.search(rf"\*\s*--\s*\(\s*\*\s*{n}\s*\)", scrubbed) or \
+        re.search(rf"\(\s*\*\s*{n}\s*\)\s*-=", scrubbed) or \
+        re.search(rf"\*\s*{n}\s*-=", scrubbed)
+    advances = re.search(rf"\(\s*\*\s*{n}\s*\)\s*\+=", scrubbed) or \
+        re.search(rf"\*\s*{n}\s*\+=", scrubbed) or \
+        re.search(rf"\*\s*\(\s*{n}\s*\)\s*\+\+", scrubbed)
+    if retreats and not advances:
+        return False
+    if advances and not retreats:
+        return True
+    return None
+
+
 def _emit_backward_cursor(
-    cursor: Param, start: Param, options: HarnessOptions,
+    cursor: Param, other: Param, forwards: bool, options: HarnessOptions,
     assumptions: list[str], typedefs: dict[str, str],
 ) -> list[str]:
-    """One buffer, with `start` at its beginning and the cursor at its end."""
+    """One buffer bracketed by the cursor and its companion pointer.
+
+    Which end each sits at depends on the direction the body writes, so the
+    caller passes it in rather than this guessing.
+    """
     cap = options.max_array_len
     inner = normalize_type(cursor.pointee().replace("*", "").strip(), typedefs)
     storage = f"{cursor.name}_buf"
     holder = f"{cursor.name}_cursor"
-    assumptions.append(
-        f"`{start.name}` and `*{cursor.name}` bracket one buffer of {cap} "
-        f"`{inner}`: `{start.name}` at its start and `*{cursor.name}` one past "
-        "its end, which is how a caller sets up a backwards DER writer"
-    )
+    if forwards:
+        assumptions.append(
+            f"`*{cursor.name}` and `{other.name}` bracket one buffer of {cap} "
+            f"`{inner}`: `*{cursor.name}` at its start and `{other.name}` one "
+            "past its end, since the body advances the cursor"
+        )
+        ends = [
+            f"{inner} *{holder} = {storage};",
+            f"{_decl_type(other.type)} {other.name} = {storage} + {cap};",
+        ]
+    else:
+        assumptions.append(
+            f"`{other.name}` and `*{cursor.name}` bracket one buffer of {cap} "
+            f"`{inner}`: `{other.name}` at its start and `*{cursor.name}` one "
+            "past its end, which is how a caller sets up a backwards DER writer"
+        )
+        ends = [
+            f"{_decl_type(other.type)} {other.name} = {storage};",
+            f"{inner} *{holder} = {storage} + {cap};",
+        ]
     return [
         f"{inner} {storage}[{cap}];",
         f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
         f"    {storage}[{_LOOP_VAR}] = VERIPP_NONDET_CHAR();",
-        f"{_decl_type(start.type)} {start.name} = {storage};",
-        f"{inner} *{holder} = {storage} + {cap};",
+        *ends,
         f"{_decl_type(cursor.type)} {cursor.name} = &{holder};",
     ]
 
