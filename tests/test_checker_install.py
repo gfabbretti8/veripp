@@ -141,5 +141,37 @@ class TestDiscoveryPrecedence:
 
         monkeypatch.delenv("VERIPP_ESBMC", raising=False)
         monkeypatch.setenv("VERIPP_CHECKER_DIR", str(tmp_path / "empty"))
+        # veripp depends on veripp-checker, so on any machine with a wheel
+        # for it there IS a bundled checker; PATH is only reached when there
+        # is not one. Stand that case up rather than assume it.
+        monkeypatch.setattr("veripp.checker.bundled_esbmc", lambda: None)
         monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/esbmc")
         assert find_esbmc() == "/usr/bin/esbmc"
+
+    def test_a_checker_on_path_beats_the_bundled_wheel(
+        self, tmp_path, monkeypatch
+    ):
+        """Putting an esbmc on PATH is a decision. Overriding it with the
+        wheel that arrived as a dependency would mean an ESBMC developer
+        could not test their own build -- and it would defeat the action's
+        own selftest, which plants a deliberately unsound checker there."""
+        from veripp.esbmc import find_esbmc
+
+        monkeypatch.delenv("VERIPP_ESBMC", raising=False)
+        monkeypatch.setenv("VERIPP_CHECKER_DIR", str(tmp_path / "empty"))
+        monkeypatch.setattr("veripp.checker.bundled_esbmc",
+                            lambda: "/wheel/esbmc")
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/esbmc")
+        assert find_esbmc() == "/usr/bin/esbmc"
+
+    def test_the_bundled_wheel_is_used_when_nothing_else_is_there(
+        self, tmp_path, monkeypatch
+    ):
+        from veripp.esbmc import find_esbmc
+
+        monkeypatch.delenv("VERIPP_ESBMC", raising=False)
+        monkeypatch.setenv("VERIPP_CHECKER_DIR", str(tmp_path / "empty"))
+        monkeypatch.setattr("veripp.checker.bundled_esbmc",
+                            lambda: "/wheel/esbmc")
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        assert find_esbmc() == "/wheel/esbmc"

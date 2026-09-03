@@ -363,17 +363,21 @@ _CLANG_ERROR_RE = re.compile(r"^(?P<message>.*?:\d+:\d+: (?:error|fatal error): 
 def find_esbmc() -> str | None:
     """The checker to use, most explicit choice first.
 
-    Most explicit first. $VERIPP_ESBMC names a binary outright. A checker from
-    `veripp install-checker` comes next: it was asked for, and it passed the
-    soundness probes before being kept. Then one bundled by
-    `pip install veripp[checker]`. PATH is last because it promises nothing --
-    `brew install esbmc` puts the unsound 8.4 there.
+    Most deliberate first. $VERIPP_ESBMC names a binary outright. A checker
+    from `veripp install-checker` comes next: it was asked for by name, and it
+    passed the soundness probes before being kept. Then PATH -- putting an
+    esbmc there is a decision somebody made, and silently preferring our own
+    would mean an ESBMC developer could not test their own build against
+    veripp. The wheel bundled with `pip install veripp` is last: it is the
+    default for people who have not chosen anything, not an override for
+    people who have. A bad checker found on PATH is not a danger here, since
+    `doctor` probes whichever one is selected and refuses to stand behind it.
     """
     if named := os.environ.get("VERIPP_ESBMC"):
         return named
     from .checker import bundled_esbmc, managed_esbmc
 
-    return managed_esbmc() or bundled_esbmc() or shutil.which("esbmc")
+    return managed_esbmc() or shutil.which("esbmc") or bundled_esbmc()
 
 
 def run(source: Path, config: VerifyConfig, esbmc_bin: str | None = None) -> VerifyResult:

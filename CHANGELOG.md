@@ -42,8 +42,12 @@ Fewer steps between a developer and a verified function.
   is deleted, not reported, because every result built on it would be a false
   proof. Where no relocatable build exists (macOS, Linux arm64) it says so and
   names the alternative rather than installing something that will not run.
-  `find_esbmc` now prefers `$VERIPP_ESBMC`, then a checker installed this way,
-  then `PATH` -- which is where `brew install esbmc` puts 8.4.
+  `find_esbmc` resolves most-deliberate-first: `$VERIPP_ESBMC`, a checker
+  installed by this command, `PATH`, and only then the bundled wheel. PATH
+  beats the wheel on purpose -- putting an esbmc there is a decision, and
+  overriding it would stop an ESBMC developer testing their own build. A bad
+  checker chosen that way is not a hazard, because `doctor` probes whichever
+  one is selected.
 - **`veripp scan --changed [REF]`** verifies only the files git reports as new
   or modified: against `HEAD` alone (staged, unstaged and untracked), or
   `REF...HEAD` with a ref, so a long-lived branch is compared against where it

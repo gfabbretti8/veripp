@@ -206,8 +206,12 @@ ENV PATH="/opt/veripp/bin:/opt/esbmc/bin:${PATH}" \
 
 # veripp itself: a venv, so the image has no opinion about the system python.
 COPY . /src/veripp
+# --no-deps on purpose: veripp depends on veripp-checker so that a plain
+# `pip install veripp` arrives with a checker, but this image has already
+# built or fetched one at /opt/esbmc. Letting the wheel in too would ship the
+# same checker twice and put the image ~90 MB over its size ceiling.
 RUN python3 -m venv /opt/veripp \
-    && /opt/veripp/bin/pip install --no-cache-dir /src/veripp \
+    && /opt/veripp/bin/pip install --no-cache-dir --no-deps /src/veripp \
     && rm -rf /src/veripp /root/.cache
 
 # Fail the build rather than ship a checker with a known blind spot.
