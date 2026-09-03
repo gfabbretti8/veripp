@@ -10,6 +10,7 @@ Everything here is calibrated against real ESBMC 8.4 output (see
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -360,7 +361,18 @@ _CLANG_ERROR_RE = re.compile(r"^(?P<message>.*?:\d+:\d+: (?:error|fatal error): 
 
 
 def find_esbmc() -> str | None:
-    return shutil.which("esbmc")
+    """The checker to use, most explicit choice first.
+
+    $VERIPP_ESBMC is someone naming a binary outright. A checker installed by
+    `veripp install-checker` comes next: it was asked for, and it passed the
+    soundness probes before being kept, which is more than PATH promises --
+    `brew install esbmc` puts the unsound 8.4 there.
+    """
+    if named := os.environ.get("VERIPP_ESBMC"):
+        return named
+    from .checker import managed_esbmc
+
+    return managed_esbmc() or shutil.which("esbmc")
 
 
 def run(source: Path, config: VerifyConfig, esbmc_bin: str | None = None) -> VerifyResult:

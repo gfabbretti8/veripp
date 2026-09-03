@@ -293,6 +293,15 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--json", action="store_true", help="machine-readable output")
     a.add_argument("--json-out", metavar="PATH", help=argparse.SUPPRESS)
 
+    ic = sub.add_parser(
+        "install-checker",
+        help="download a sound ESBMC for this machine",
+    )
+    ic.add_argument(
+        "--dir", type=Path, default=None, metavar="DIR",
+        help=_adv("install here instead of the default location"),
+    )
+
     d = sub.add_parser("doctor", help="check that dependencies are available")
     d.add_argument(
         "--allow-unsound",
@@ -342,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "completion":
         print(_completion_script(args.shell, sub))
         return 0
+    if args.command == "install-checker":
+        return _install_checker(args.dir)
     if args.command == "doctor":
         return _doctor(allow_unsound=args.allow_unsound)
     if not args.source.exists():
@@ -1750,6 +1761,13 @@ def _esbmc_install_hint() -> str:
     """
     import platform
 
+    from .checker import source_for
+
+    # Where veripp can fetch and probe a checker itself, that is the whole
+    # instruction: one command, and it refuses to keep an unsound build.
+    if source_for().available:
+        return "veripp install-checker"
+
     system = platform.system()
     machine = platform.machine().lower()
 
@@ -1784,6 +1802,23 @@ def _esbmc_install_hint() -> str:
         )
 
     return DOCKER_HINT
+
+
+def _install_checker(dest=None) -> int:
+    """Fetch a checker and keep it only if it passes the soundness probes."""
+    from .checker import install, managed_dir
+
+    target = dest or managed_dir()
+    result = install(dest=target, progress=lambda msg: print(f"  {msg}"))
+    if not result.ok:
+        print(f"could not install a checker: {result.error}", file=sys.stderr)
+        return EXIT_USAGE
+    for name, passed in (result.probes or {}).items():
+        print(f"  ok    {name}")
+    print(f"installed: {result.path}")
+    print(f"  sha256 {result.sha256}")
+    print("\nveripp will use this checker automatically. Verify with: veripp doctor")
+    return 0
 
 
 def _doctor(allow_unsound: bool = False) -> int:
