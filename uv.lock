@@ -882,8 +882,11 @@ wheels = [
 
 [[package]]
 name = "veripp"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
+dependencies = [
+    { name = "veripp-checker" },
+]
 
 [package.optional-dependencies]
 anthropic = [
@@ -904,6 +907,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40" },
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.40" },
+    { name = "veripp-checker", specifier = ">=0.1" },
 ]
 provides-extras = ["anthropic", "llm"]
 
@@ -912,4 +916,14 @@ dev = [
     { name = "jsonschema", specifier = ">=4" },
     { name = "pytest", specifier = ">=8" },
     { name = "pyyaml", specifier = ">=6" },
+]
+
+[[package]]
+name = "veripp-checker"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/c2/198ee61c5a752f38c8f8b836ad851451bc5b74d6c930ad473dfe4f080795/veripp_checker-0.1.0-py3-none-any.whl", hash = "sha256:b7edc5116fc61097b160fd517bf961d989dab9b289d06017edc276315a12ce65", size = 9998, upload-time = "2026-09-03T07:03:15.865Z" },
+    { url = "https://files.pythonhosted.org/packages/34/86/df3f2db89a63e3960c35ed853d602f254e0b3e0fbb464c18721e479f0218/veripp_checker-0.1.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:5bb073fd9a80deee2158eb32d329065c46573ab072f1bb6f9b66009559264a96", size = 58187247, upload-time = "2026-09-03T07:03:18.735Z" },
+    { url = "https://files.pythonhosted.org/packages/27/12/c9e5d61ab4abc11e261354ee9fcbe3893d90ed12a61d2f6c1986551b6468/veripp_checker-0.1.0-py3-none-manylinux_2_38_aarch64.whl", hash = "sha256:02ce0335d5fe00206ee941cadf0bbeb8bd34797f4fbd571a5a8c2e58be38a1d5", size = 91865041, upload-time = "2026-09-03T07:03:24.656Z" },
 ]

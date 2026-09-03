@@ -204,7 +204,7 @@ As a [pre-commit](https://pre-commit.com) hook:
 ```yaml
 repos:
   - repo: https://github.com/gfabbretti8/veripp
-    rev: v0.4.0
+    rev: v0.5.0
     hooks:
       - id: veripp            # or: veripp-docker, which needs only Docker
 ```

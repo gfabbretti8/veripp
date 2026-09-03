@@ -7,7 +7,7 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
-## Unreleased
+## 0.5.0
 
 Fewer steps between a developer and a verified function.
 
@@ -27,9 +27,12 @@ Fewer steps between a developer and a verified function.
   ranks a platform wheel above `any`, so it is chosen only where nothing else
   fits, and it is what lets the dependency be unconditional instead of an
   extra -- `pip install veripp` resolves everywhere, and simply reports no
-  bundled checker where there is none. Verified both ways in a clean
-  container. Not yet published, and the dependency is deliberately undeclared
-  until it is, since naming an unresolvable package breaks `uv sync`.
+  bundled checker where there is none. **`pip install veripp` on Linux is now
+  the whole installation**; macOS and Windows get the tool and are told to run
+  `veripp install-checker`. Which solvers a binary actually contains is
+  checked before packaging, by looking for their API symbols rather than
+  their names: ESBMC names every solver it knows about in its own help text,
+  and MathSAT and Yices may not be redistributed.
 - **`veripp install-checker`.** Installing ESBMC was the worst step in getting
   started: not pip-installable, and the release people reach for first
   silently misses out-of-bounds writes to a member array

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "veripp"
-version = "0.4.0"
+version = "0.5.0"
 description = "AI-operated formal verification for real C++ code (ESBMC + LLM agent loop)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,21 +20,18 @@ classifiers = [
   "Topic :: Software Development :: Quality Assurance",
   "Topic :: Software Development :: Testing",
 ]
-dependencies = []
+# The checker is a native binary, so it ships as its own platform wheel.
+# Unconditional rather than an extra: veripp-checker also publishes a
+# binary-free py3-none-any wheel, which pip falls back to where no platform
+# wheel exists, so this resolves everywhere. Where it resolves to the
+# fallback, `veripp doctor` says there is no checker and how to get one.
+dependencies = ["veripp-checker>=0.1"]
 
 [project.optional-dependencies]
 # Only the Anthropic provider needs a package: every other provider speaks the
 # OpenAI-compatible HTTP API, which veripp calls with the standard library.
 anthropic = ["anthropic>=0.40"]
 llm = ["anthropic>=0.40"]  # kept as an alias
-# The checker is NOT an extra. Once veripp-checker is published, the line
-#     dependencies = ["veripp-checker>=0.1"]
-# goes in [project] above, and `pip install veripp` installs a working
-# verifier on every platform: the platform wheel where one exists, and a
-# binary-free `py3-none-any` wheel elsewhere, which keeps resolution working
-# instead of failing. It is left undeclared only because a dependency naming
-# a package that is not on an index breaks `uv sync` for this repo too --
-# see checker/README.md for the publishing order.
 
 [project.scripts]
 veripp = "veripp.cli:main"

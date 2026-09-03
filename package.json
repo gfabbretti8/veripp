@@ -1,6 +1,6 @@
 {
   "name": "veripp-skill",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Install the veripp agent skill: prove C/C++ functions free of overflow, out-of-bounds access, null dereference and division by zero.",
   "bin": {
     "veripp-skill": "npm/install-skill.mjs"
