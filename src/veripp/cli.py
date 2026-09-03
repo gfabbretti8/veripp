@@ -1977,6 +1977,16 @@ def _doctor(allow_unsound: bool = False) -> int:
 
         version = subprocess.run([esbmc, "--version"], capture_output=True, text=True)
         print(f"  {version.stdout.strip() or version.stderr.strip()}")
+    if esbmc:
+        from .esbmc import check_arm_intrinsics
+
+        if check_arm_intrinsics(esbmc) is False:
+            print("  NOTE: this arm64 host cannot verify code that includes ARM")
+            print("        intrinsics -- ESBMC's frontend rejects builtin types")
+            print("        such as __mfp8 before checking anything. mbedTLS and")
+            print("        other crypto reach arm_neon.h through their headers.")
+            print("        The same files verify on x86_64; the container image")
+            print("        run under --platform linux/amd64 is the way out.")
     unsound: list[str] = []
     if esbmc:
         print("soundness self-check (known-failing programs must be rejected):")

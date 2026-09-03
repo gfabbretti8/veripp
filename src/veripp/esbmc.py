@@ -621,6 +621,46 @@ SOUNDNESS_PROBES: dict[str, tuple[str, str]] = {
 }
 
 
+#: Code that pulls ARM's vector intrinsics. ESBMC's clang frontend does not
+#: recognise every ARM builtin type -- `__mfp8` among them -- so on an arm64
+#: host any translation unit reaching arm_neon.h dies with a CONVERSION
+#: ERROR before a single property is checked. mbedTLS does exactly that.
+#: Nothing is wrong with the code or the checker's logic; the same file
+#: verifies on x86_64.
+_ARM_INTRINSIC_PROBE = "#include <arm_neon.h>\nint main(void) { return 0; }\n"
+
+
+def check_arm_intrinsics(esbmc_bin: str | None = None,
+                         timeout_s: int = 60) -> bool | None:
+    """Whether this checker can parse code that includes ARM intrinsics.
+
+    Returns None when the host is not arm64, or when the header is absent --
+    there is nothing to warn about in either case.
+    """
+    import platform
+    import tempfile
+
+    if platform.machine().lower() not in ("arm64", "aarch64"):
+        return None
+    binary = esbmc_bin or find_esbmc()
+    if binary is None:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "arm_probe.c"
+        path.write_text(_ARM_INTRINSIC_PROBE, encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                [binary, str(path), "--std", "c11"],
+                capture_output=True, text=True, timeout=timeout_s,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+    out = proc.stdout + proc.stderr
+    if "file not found" in out or "arm_neon.h" in out and "not found" in out:
+        return None                      # no such header here; nothing to say
+    return "Unrecognized clang builtin type" not in out
+
+
 def check_soundness(esbmc_bin: str | None = None, timeout_s: int = 60) -> dict[str, bool]:
     """Run known-failing programs; each MUST be reported as failing.
 
