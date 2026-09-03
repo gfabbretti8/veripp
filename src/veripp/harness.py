@@ -224,15 +224,25 @@ def generate(
     assumptions: list[str] = []
     lengths = _pair_buffers_with_lengths(signature.params, typedefs,
                                          body=signature.body)
+    cursors = _pair_cursors_with_starts(signature.params, typedefs)
 
     # Scalars first: a buffer's length must exist before we bound it.
     buffers = set(lengths)
+    paired_cursor = set(cursors) | set(cursors.values())
+    by_name = {p.name: p for p in signature.params}
+    for cursor_name, start_name in cursors.items():
+        body += _emit_backward_cursor(
+            by_name[cursor_name], by_name[start_name], options, assumptions,
+            typedefs,
+        )
     for param in signature.params:
-        if param.name in buffers:
+        if param.name in buffers or param.name in paired_cursor:
             continue
         body += _emit_scalar(param, signature, assumptions, options, typedefs, expanded)
 
     for buffer_name, length in lengths.items():
+        if buffer_name in paired_cursor:
+            continue
         param = next(p for p in signature.params if p.name == buffer_name)
         body += _emit_buffer(param, length, options, assumptions, typedefs)
 
@@ -498,6 +508,66 @@ def _validate_precondition(expr: str, signature: Signature) -> None:
             f"proposed precondition {expr!r} constrains no parameter of "
             f"`{signature.qualified_name}`; refusing it"
         )
+
+
+#: Byte types a DER/ASN.1 encoder writes through.
+_CURSOR_POINTEES = ("char", "unsigned char", "signed char")
+
+
+def _pair_cursors_with_starts(
+    params: list[Param], typedefs: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Map a write-backwards cursor to the parameter naming its buffer start.
+
+    `mbedtls_asn1_write_len(unsigned char **p, const unsigned char *start,
+    size_t len)` is the shape every DER encoder in mbedTLS and OpenSSL uses:
+    `*p` is a cursor that begins at the END of the buffer and walks down
+    toward `start`, writing with `*--(*p)` and checking headroom with
+    `required > (*p - start)`.
+
+    Modelled as two pointers into one buffer, which is what callers do:
+    `unsigned char *c = buf + sizeof(buf); write_len(&c, buf, len);`.
+    Without this the double pointer is simply unconstructible, and 21 of
+    asn1write.c's 22 functions were refused outright.
+    """
+    pairs: dict[str, str] = {}
+    for idx, param in enumerate(params[:-1]):
+        if param.type.replace("const", "").count("*") != 2:
+            continue
+        inner = normalize_type(param.pointee().replace("*", "").strip(), typedefs)
+        if inner not in _CURSOR_POINTEES:
+            continue
+        nxt = params[idx + 1]
+        if not nxt.is_pointer or nxt.type.replace("const", "").count("*") != 1:
+            continue
+        if normalize_type(nxt.pointee(), typedefs) != inner:
+            continue
+        pairs[param.name] = nxt.name
+    return pairs
+
+
+def _emit_backward_cursor(
+    cursor: Param, start: Param, options: HarnessOptions,
+    assumptions: list[str], typedefs: dict[str, str],
+) -> list[str]:
+    """One buffer, with `start` at its beginning and the cursor at its end."""
+    cap = options.max_array_len
+    inner = normalize_type(cursor.pointee().replace("*", "").strip(), typedefs)
+    storage = f"{cursor.name}_buf"
+    holder = f"{cursor.name}_cursor"
+    assumptions.append(
+        f"`{start.name}` and `*{cursor.name}` bracket one buffer of {cap} "
+        f"`{inner}`: `{start.name}` at its start and `*{cursor.name}` one past "
+        "its end, which is how a caller sets up a backwards DER writer"
+    )
+    return [
+        f"{inner} {storage}[{cap}];",
+        f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+        f"    {storage}[{_LOOP_VAR}] = VERIPP_NONDET_CHAR();",
+        f"{_decl_type(start.type)} {start.name} = {storage};",
+        f"{inner} *{holder} = {storage} + {cap};",
+        f"{_decl_type(cursor.type)} {cursor.name} = &{holder};",
+    ]
 
 
 def _emit_scalar(
