@@ -32,8 +32,10 @@ COPY --from=src /payload /payload
 # The image relies on its own library path; a wheel cannot. \$ORIGIN makes the
 # tree work wherever pip unpacks it.
 RUN set -eux; \\
-    patchelf --set-rpath '\$ORIGIN/../lib' /payload/bin/esbmc; \\
-    for f in /payload/lib/*.so*; do patchelf --set-rpath '\$ORIGIN' "\$f" || true; done; \\
+    if [ -n "\$(ls -A /payload/lib)" ]; then \\
+      patchelf --set-rpath '\$ORIGIN/../lib' /payload/bin/esbmc; \\
+      for f in /payload/lib/*.so*; do patchelf --set-rpath '\$ORIGIN' "\$f" || true; done; \\
+    fi; \\
     cp -r /payload /relocated && /relocated/bin/esbmc --version
 DOCKERFILE
 
