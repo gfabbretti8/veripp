@@ -8,10 +8,12 @@
 | Commit analysed | `d08f477` — 2026-09-01, `master` at time of writing |
 | Found by | `veripp` (ESBMC), harnesses generated from signatures, no manual harness |
 | Confirmed by | AddressSanitizer, standalone reproductions |
-| Severity | Low — one-byte over-read; see [Severity](#severity) |
+| Severity | Low — two one-byte over-reads and one integer UB; see [Severity](#severity) |
 
-Both defects are the same mistake written twice: **the dereference is
-evaluated before the length parameter is tested.** Each has a one-line fix.
+Two of the three are the same mistake written twice: **the dereference is
+evaluated before the length parameter is tested.** The third negates
+`INT_MIN`, which is undefined and visibly corrupts the output. Each has a
+one-line fix.
 
 The interesting part is not the size of the bug but *where it was hiding* —
 in leaf functions no fuzzer reaches, because reaching them means a human
