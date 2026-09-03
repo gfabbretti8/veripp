@@ -222,7 +222,8 @@ def generate(
 
     body: list[str] = []
     assumptions: list[str] = []
-    lengths = _pair_buffers_with_lengths(signature.params, typedefs)
+    lengths = _pair_buffers_with_lengths(signature.params, typedefs,
+                                         body=signature.body)
 
     # Scalars first: a buffer's length must exist before we bound it.
     buffers = set(lengths)
@@ -400,9 +401,19 @@ def _inside_conditional(scrubbed: str, offset: int) -> bool:
 
 
 def _pair_buffers_with_lengths(
-    params: list[Param], typedefs: dict[str, str] | None = None
+    params: list[Param], typedefs: dict[str, str] | None = None,
+    body: str = "",
 ) -> dict[str, str]:
-    """Map each pointer parameter to the parameter holding its length."""
+    """Map each pointer parameter to the parameter holding its length.
+
+    A pointer the body walks to a NUL is deliberately left unpaired, even
+    when a length parameter is in scope. `lwip_strnstr(buffer, token, n)`
+    bounds `buffer` by `n`, but `token` is a C string whose end is its
+    terminator -- pairing it with `n` too produces a `token` that is not
+    terminated, and the resulting over-read lands inside the checker's own
+    strlen rather than in the code under test. Pointers that are merely
+    read, `memcmp(a, b, n)`, keep sharing one length, which is correct.
+    """
     pairs: dict[str, str] = {}
     integer_params = {
         p.name: p
@@ -417,6 +428,8 @@ def _pair_buffers_with_lengths(
             # when a `size`-ish parameter sits next to it: `ucvector_reserve(
             # ucvector* p, size_t size)` grows p's capacity, it does not
             # describe p's length.
+            continue
+        if _walks_to_terminator(param.name, body):
             continue
         candidates = [
             f"{param.name}_len", f"{param.name}_size", f"{param.name}_count",
@@ -530,11 +543,19 @@ def _emit_lone_pointer(
     body: str = "",
 ) -> list[str]:
     pointee = param.pointee()
-    if param.is_const and normalize_type(pointee, typedefs) == "char":
+    if normalize_type(pointee, typedefs) in _STRING_POINTEES and (
+        param.is_const or _walks_to_terminator(param.name, body)
+    ):
         # A `const char*` with no length parameter is, in practice, a C
         # string. A single nondet char is the wrong model: anything that
         # walks to the terminator (strlen, parsers) reads past it, and the
         # counterexample blames the library for the harness's lie.
+        #
+        # A *mutable* `char*` is the same contract whenever the body reads
+        # its way to a terminator -- an in-place rewriter like
+        # `cJSON_Minify(char *json)` cannot be const and is still a C string.
+        # Requiring that evidence keeps genuine output buffers, which are
+        # written rather than walked, on the sizing path below.
         cap = options.max_array_len
         storage = f"{param.name}_str"
         assumptions.append(
@@ -586,6 +607,53 @@ def _emit_lone_pointer(
         f"    {storage}[{var}] = {nondet};",
         f"{_decl_type(param.type)} {param.name} = {storage};",
     ]
+
+
+#: Character types a C string can be built from. `unsigned char*` is not an
+#: exotic case: libraries that treat text as bytes -- cJSON, most parsers --
+#: spell every string that way, and modelling those as a two-element buffer
+#: manufactures an out-of-bounds report for each one.
+_STRING_POINTEES = ("char", "unsigned char", "signed char")
+
+
+#: Reading a char pointer until it hits NUL -- `while (*p)`, `p[0] != 0`,
+#: `!*p`. This is the signal that the parameter is a string rather than a
+#: buffer the function fills: its length is bounded by a terminator the
+#: caller promises, not by any index appearing in the body.
+_TERMINATOR_TESTS = (
+    r"while\s*\(\s*\*\s*{name}\s*\)",
+    r"\*\s*{name}\s*(?:==|!=)\s*0",
+    r"{name}\s*\[\s*0\s*\]\s*(?:==|!=)\s*0",
+    r"!\s*\*\s*{name}\b",
+    r"\(\s*\*\s*{name}\s*\)\s*\[\s*0\s*\]\s*(?:==|!=)\s*0",
+    # Handing the pointer to a <string.h> routine that stops at NUL is the
+    # same promise, stated by delegation: strlen(token) is only meaningful
+    # for a terminated string. Without this, a function whose *other*
+    # parameter carries the length -- lwip_strnstr(buffer, token, n) -- has
+    # that length applied to the string too, and the over-read lands inside
+    # the checker's own strlen rather than in the code under test.
+    r"\b(?:strlen|strcmp|strcpy|strcat|strchr|strrchr|strstr|strdup|strspn|"
+    r"strcspn|strpbrk|strtok|atoi|atol|atof|strtol|strtoul|strtod)"
+    r"\s*\(\s*(?:\([^)]*\)\s*)?{name}\s*[,)]",
+    r"\b(?:strncmp|strncpy|strncat|strnlen)\s*\(\s*(?:\([^)]*\)\s*)?{name}\s*,",
+)
+
+#: The NUL character literal, spelled without escapes so that nothing has to
+#: carry a backslash through both this source and a regular expression. The
+#: first attempt matched two literal backslashes and silently never fired.
+_NUL_LITERAL = "'\\0'"
+
+
+def _walks_to_terminator(name: str, body: str) -> bool:
+    """Whether `body` reads `name` until a NUL, i.e. treats it as a string."""
+    if not body:
+        return False
+    normalised = scrub(body.replace(_NUL_LITERAL, "0"))
+    escaped = re.escape(name)
+    return any(
+        re.search(pattern.format(name=escaped), normalised)
+        for pattern in _TERMINATOR_TESTS
+    )
 
 
 _MAX_INFERRED_EXTENT = 64
