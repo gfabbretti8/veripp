@@ -18,11 +18,14 @@ BUILDER = ROOT / "checker" / "build_wheel.py"
 
 @pytest.fixture
 def payload(tmp_path):
-    (tmp_path / "bin").mkdir()
-    (tmp_path / "lib").mkdir()
-    (tmp_path / "bin" / "esbmc").write_bytes(b"\x7fELF fake")
-    (tmp_path / "lib" / "libz3.so.4").write_bytes(b"\x7fELF fake lib")
-    return tmp_path
+    """Everything under here is packaged, so nothing else may live in it --
+    the licence file and the output directory each get their own."""
+    root = tmp_path / "payload"
+    (root / "bin").mkdir(parents=True)
+    (root / "lib").mkdir()
+    (root / "bin" / "esbmc").write_bytes(b"\x7fELF fake")
+    (root / "lib" / "libz3.so.4").write_bytes(b"\x7fELF fake lib")
+    return root
 
 
 @pytest.fixture

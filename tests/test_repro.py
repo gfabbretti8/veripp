@@ -74,7 +74,10 @@ class TestRendering:
         """A property spans location, guard and CWEs. One uncommented line
         makes the file uncompilable."""
         out = _render(violated_property="boom\n  at /src/thing.c:7\n  CWE: CWE-125")
-        body = out.split('#include "/src/thing.c"')[0]
+        # Split on the include as rendered: Path("/src/thing.c") prints with
+        # backslashes on Windows, so a hardcoded POSIX form matches nothing
+        # and the whole file is mistaken for the comment header.
+        body = out.split(f'#include "{Path("/src/thing.c")}"')[0]
         assert all(
             not line.strip() or line.startswith("//")
             for line in body.splitlines()
