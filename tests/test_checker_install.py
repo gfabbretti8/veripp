@@ -8,8 +8,14 @@ built on it into a false proof, which is worse than having no checker.
 """
 
 import os
+import sys
 import zipfile
 from pathlib import Path
+
+#: What the checker is called here. managed_esbmc() looks for esbmc.exe on
+#: Windows, so a payload named `esbmc` there is invisible to it -- which is
+#: correct behaviour, and made this test fail on Windows alone.
+EXE = "esbmc.exe" if sys.platform == "win32" else "esbmc"
 
 import pytest
 
@@ -41,7 +47,8 @@ class TestPlatformSelection:
         assert "docker" in src.unavailable_reason.lower()
 
 
-def _release_zip(path: Path, script: str, name: str = "esbmc-linux/bin/esbmc") -> Path:
+def _release_zip(path: Path, script: str, name: str = None) -> Path:
+    name = name or f"esbmc-linux/bin/{EXE}"
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr(name, script)
     return path
@@ -62,12 +69,12 @@ class TestInstall:
                                   "local-array bounds": True},
         )
         dest = tmp_path / "install"
-        result = install(dest=dest, source=Source(url="http://x/rel.zip"),
+        result = install(dest=dest, source=Source(url="http://x/rel.zip", binary_name=EXE),
                          opener=_opener_for(archive))
         assert not result.ok
         assert "MISSES" in result.error
         assert "member-array bounds" in result.error
-        assert not (dest / "bin" / "esbmc").exists(), "unsound binary was kept"
+        assert not (dest / "bin" / EXE).exists(), "unsound binary was kept"
 
     def test_a_sound_checker_is_installed_and_found(self, tmp_path, monkeypatch):
         archive = _release_zip(tmp_path / "rel.zip", "#!/bin/sh\nexit 0\n")
@@ -77,7 +84,7 @@ class TestInstall:
                                   "local-array bounds": True},
         )
         dest = tmp_path / "install"
-        result = install(dest=dest, source=Source(url="http://x/rel.zip"),
+        result = install(dest=dest, source=Source(url="http://x/rel.zip", binary_name=EXE),
                          opener=_opener_for(archive))
         assert result.ok, result.error
         assert Path(result.path).is_file()
@@ -96,7 +103,7 @@ class TestInstall:
         with zipfile.ZipFile(archive, "w") as zf:
             zf.writestr("../../escaped", "pwned")
         result = install(dest=tmp_path / "install",
-                         source=Source(url="http://x/evil.zip"),
+                         source=Source(url="http://x/evil.zip", binary_name=EXE),
                          opener=_opener_for(archive))
         assert not result.ok
         assert "outside the install directory" in result.error
@@ -105,9 +112,9 @@ class TestInstall:
     def test_an_archive_without_a_checker_is_reported(self, tmp_path):
         archive = _release_zip(tmp_path / "rel.zip", "nope", name="README")
         result = install(dest=tmp_path / "install",
-                         source=Source(url="http://x/rel.zip"),
+                         source=Source(url="http://x/rel.zip", binary_name=EXE),
                          opener=_opener_for(archive))
-        assert not result.ok and "no esbmc found" in result.error
+        assert not result.ok and "no esbmc" in result.error
 
     def test_an_unavailable_platform_installs_nothing(self, tmp_path):
         result = install(dest=tmp_path / "install",
@@ -128,7 +135,7 @@ class TestDiscoveryPrecedence:
         from veripp.esbmc import find_esbmc
 
         monkeypatch.delenv("VERIPP_ESBMC", raising=False)
-        managed = tmp_path / "bin" / "esbmc"
+        managed = tmp_path / "bin" / EXE
         managed.parent.mkdir(parents=True)
         managed.write_text("#!/bin/sh\n")
         managed.chmod(0o755)
