@@ -90,42 +90,42 @@ Exit codes are CI-friendly: `0` verified, `1` counterexample, `2` usage error,
 
 ## Installation
 
-veripp needs three things: Python 3.10+, the ESBMC checker, and (optionally)
-an LLM for triage.
-
-### 1. The `veripp` command
-
 ```bash
-pip install veripp        # or, to run without installing:  uvx veripp
+pip install veripp
 ```
 
-### 2. The ESBMC checker
+On Linux that is the whole installation: the ESBMC checker comes with it, as
+a platform wheel. Confirm with `veripp doctor`.
 
-ESBMC is a C++ binary, not a Python package, so pip cannot install it. On
-platforms where a relocatable build is published, veripp fetches one itself:
+Python 3.10+ is the only prerequisite. An LLM is optional, and used only for
+triage.
+
+### Where no checker wheel is published yet
+
+macOS and Windows have no bundled checker, so `pip install veripp` gives you
+the tool without one, and `veripp doctor` will say so. Fetch it with:
 
 ```bash
 veripp install-checker
 ```
 
-It downloads the [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly)
-build, runs known-*failing* programs through it, and keeps it **only** if the
-checker rejects every one. A binary that misses a planted bug is deleted
-rather than installed, because every result built on it would be a false
-proof.
+which downloads the
+[`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) build, runs
+known-*failing* programs through it, and keeps it **only** if the checker
+rejects every one. A binary that misses a planted bug is deleted rather than
+installed, because every result built on it would be a false proof.
 
-Where no relocatable build exists it says so and names the alternative:
+Where not even that is possible it names the alternative:
 
 ```bash
 brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
-# Linux arm64: no prebuilt ESBMC is published; use the container image below.
 ```
 
 **Not the v8.4 release**: it carries
 [esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
 out-of-bounds writes in ordinary container code.
 
-Then check your setup:
+### Checking your setup
 
 ```bash
 veripp doctor

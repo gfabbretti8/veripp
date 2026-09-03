@@ -25,12 +25,15 @@ from pathlib import Path
 
 DISTRIBUTION = "veripp_checker"
 
+# License-Expression and License-File are PEP 639, which requires metadata
+# 2.4; declaring them under 2.1 is rejected by twine before upload.
 METADATA = """\
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: veripp-checker
 Version: {version}
-Summary: The ESBMC model checker, bundled for `pip install veripp[checker]`
+Summary: The ESBMC model checker, bundled so `pip install veripp` needs nothing else
 License-Expression: Apache-2.0 AND BSD-4-Clause AND MIT
+License-File: COPYING.esbmc
 Requires-Python: >=3.10
 Project-URL: Homepage, https://github.com/gfabbretti8/veripp
 Project-URL: ESBMC, https://github.com/esbmc/esbmc

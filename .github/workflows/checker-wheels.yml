@@ -136,6 +136,12 @@ jobs:
           test "$(ls dist/*manylinux*.whl 2>/dev/null | wc -l)" -ge 2 \
             || { echo "expected a wheel for each supported architecture"; exit 1; }
 
+      # Validate before uploading: PyPI versions are immutable, so a file
+      # that fails metadata checks after a sibling has already gone up
+      # leaves a half-published release that cannot be fixed in place.
+      - name: Check every wheel is uploadable
+        run: pipx run twine check dist/*.whl
+
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_TOKEN }}

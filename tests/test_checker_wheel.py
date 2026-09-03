@@ -93,6 +93,41 @@ class TestWheelContents:
         assert not missing, f"absent from RECORD: {missing}"
 
 
+class TestMetadataIsUploadable:
+    """PyPI validates metadata before it accepts a file. These are the parts
+    twine rejected in a real publish run."""
+
+    def test_license_fields_declare_a_metadata_version_that_allows_them(
+        self, payload, licence, tmp_path
+    ):
+        """License-Expression and License-File are PEP 639, valid only from
+        metadata 2.4. Declaring them under 2.1 fails the upload, after the
+        wheels have already been built."""
+        wheel = _build(payload, licence, tmp_path / "dist")
+        with zipfile.ZipFile(wheel) as z:
+            meta = z.read("veripp_checker-0.1.0.dist-info/METADATA").decode()
+        version = next(l.split(": ", 1)[1] for l in meta.splitlines()
+                       if l.startswith("Metadata-Version:"))
+        if "License-Expression:" in meta or "License-File:" in meta:
+            assert float(version) >= 2.4, (
+                f"PEP 639 fields need metadata 2.4, found {version}"
+            )
+
+    def test_the_declared_licence_file_is_actually_present(
+        self, payload, licence, tmp_path
+    ):
+        wheel = _build(payload, licence, tmp_path / "dist")
+        with zipfile.ZipFile(wheel) as z:
+            meta = z.read("veripp_checker-0.1.0.dist-info/METADATA").decode()
+            names = z.namelist()
+        for line in meta.splitlines():
+            if line.startswith("License-File:"):
+                declared = line.split(": ", 1)[1].strip()
+                assert any(n.endswith(f"licenses/{declared}") for n in names), (
+                    f"METADATA names {declared}, which is not in the wheel"
+                )
+
+
 class TestRefusals:
     def test_a_payload_without_a_checker_is_refused(self, tmp_path, licence):
         (tmp_path / "bin").mkdir()
