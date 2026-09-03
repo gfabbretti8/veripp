@@ -87,6 +87,18 @@ class TestWheelContents:
             meta = z.read("veripp_checker-0.1.0.dist-info/WHEEL").decode()
         assert "Tag: py3-none-manylinux_2_38_aarch64" in meta
 
+    def test_entry_names_are_posix_on_every_platform(self, payload, licence,
+                                                     tmp_path):
+        """Zip entry names are forward-slash separated by specification.
+        Building on Windows once wrote RECORD entries with backslashes,
+        naming files that were not in the archive."""
+        wheel = _build(payload, licence, tmp_path / "dist")
+        with zipfile.ZipFile(wheel) as z:
+            names = z.namelist()
+            record = z.read("veripp_checker-0.1.0.dist-info/RECORD").decode()
+        assert not any("\\" in n for n in names), names
+        assert not any("\\" in line for line in record.splitlines()), record
+
     def test_a_record_is_written_for_every_file(self, payload, licence, tmp_path):
         wheel = _build(payload, licence, tmp_path / "dist")
         with zipfile.ZipFile(wheel) as z:

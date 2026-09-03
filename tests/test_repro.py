@@ -6,6 +6,7 @@ repro that exits cleanly under the sanitizers is what a harness artifact
 looks like from the outside.
 """
 
+import shlex
 import shutil
 import subprocess
 import sys
@@ -101,11 +102,15 @@ class TestBuildCommand:
     def test_include_paths_are_carried_over(self):
         """Without them the source's own `veripp/contracts.hpp` is not found
         and the reader blames the repro."""
-        cmd = build_command(Path("r.c"), include_dirs=[Path("/inc/one"), None])
-        assert "-I /inc/one" in cmd
+        include = Path("/inc/one")
+        cmd = build_command(Path("r.c"), include_dirs=[include, None])
+        # Compare against the platform's own rendering: a hardcoded POSIX
+        # form does not match the backslashes Path produces on Windows.
+        assert f"-I {shlex.quote(str(include))}" in cmd
 
     def test_it_names_the_file_that_was_written(self):
-        assert "given/name.c" in build_command(Path("given/name.c"))
+        repro = Path("given/name.c")
+        assert shlex.quote(str(repro)) in build_command(repro)
 
 
 @pytest.mark.esbmc

@@ -81,9 +81,12 @@ def build(payload: Path, plat: str, version: str, license_file: Path,
             wheel.writestr(info, data)
             records.append(_record_line(name, data))
 
+        # as_posix(), always: zip entry names are forward-slash separated by
+        # specification, and building on Windows would otherwise write RECORD
+        # entries that name nothing in the archive.
         for source in sorted(package_src.rglob("*.py")):
             rel = source.relative_to(package_src.parent)
-            write(str(rel), source.read_bytes())
+            write(rel.as_posix(), source.read_bytes())
 
         # The binary and the libraries it was linked against. The executable
         # bit has to be set in the archive: pip preserves what it finds, and a
@@ -93,7 +96,8 @@ def build(payload: Path, plat: str, version: str, license_file: Path,
                 continue
             rel = Path(DISTRIBUTION) / source.relative_to(payload)
             executable = source.parent.name == "bin" or ".so" in source.name
-            write(str(rel), source.read_bytes(), 0o755 if executable else 0o644)
+            write(rel.as_posix(), source.read_bytes(),
+                  0o755 if executable else 0o644)
 
         write(f"{dist_info}/METADATA",
               METADATA.format(version=version, readme=readme_text).encode())
