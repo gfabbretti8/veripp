@@ -437,7 +437,16 @@ def _pair_buffers_with_lengths(
         ]
         named = next((c for c in candidates if c in integer_params), None)
         if named is None:
-            following = params[idx + 1 : idx + 3]
+            # Scan forward, but stop at the next pointer: in C a length
+            # follows the buffer it describes, so a length sitting after
+            # another pointer belongs to that one. Without this,
+            # `base64_encode(dst, dlen, olen, src, slen)` pairs the scalar
+            # out-parameter `olen` with `slen` and models it as an array.
+            following: list[Param] = []
+            for candidate in params[idx + 1 : idx + 3]:
+                if candidate.is_pointer or candidate.is_reference:
+                    break
+                following.append(candidate)
             named = next(
                 (
                     p.name
