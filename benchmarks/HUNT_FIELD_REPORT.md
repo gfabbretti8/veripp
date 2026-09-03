@@ -15,7 +15,7 @@ The headline is not the bugs. It is the ratio.
 | Counterexamples that turned out to be false | **9** |
 | veripp modelling defects that had to be fixed first | **12** |
 
-Every one of the seven false positives was caught by reading the
+Every one of the nine false positives was caught by reading the
 assumptions veripp prints beside each result. Not one was caught by
 intuition, and several looked *more* convincing than the real findings.
 
@@ -41,7 +41,7 @@ The three real defects are in
 [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md). All are low severity and
 none is reported upstream.
 
-## The seven false positives
+## The nine false positives
 
 Each of these was a counterexample that a less careful reader would have
 filed as a bug.
@@ -66,7 +66,7 @@ filed as a bug.
    in mbedTLS's OID encoder, caused by veripp assuming DER's *backwards*
    cursor convention for a *forward* writer. `bound - *p` went negative,
    wrapped huge as `size_t`, and sailed past the guard. **The most
-   dangerous of the seven**: plausible mechanism, plausible location,
+   dangerous of the nine**: plausible mechanism, plausible location,
    security-relevant file.
 7. **`tdefl_record_match`** — miniz's own `MZ_ASSERT` failing, because the
    harness called an internal function without the precondition the
@@ -112,10 +112,10 @@ All twelve are regression-clean at 578 tests.
 
 ## Lessons that generalise
 
-**An automatic verifier's raw output is not a bug list.** Seven of ten
+**An automatic verifier's raw output is not a bug list.** Nine of twelve
 counterexamples on real code were the harness's fault, not the code's. A
 tool that emits counterexamples without disclosing the assumptions behind
-them is unusable for this work — you cannot tell 7 from 3.
+them is unusable for this work — you cannot tell the 9 from the 3.
 
 **The disclosure is the product.** Every false positive here was
 identified from the assumption block: "points to exactly `n` valid
