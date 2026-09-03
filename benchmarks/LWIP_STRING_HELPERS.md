@@ -1,4 +1,4 @@
-# Two length-parameter violations in lwIP's string helpers
+# Three contract violations in lwIP's public string helpers
 
 **Status: not reported upstream.** This is an internal record.
 
@@ -210,6 +210,79 @@ with an unterminated buffer — a reasonable thing to do, since the length
 parameter is the API's promise that termination is not required.
 
 ---
+
+## Finding 3 — `lwip_itoa` negates `INT_MIN`
+
+**Location:** `src/core/def.c:221`, the negation on its third statement
+
+```c
+void
+lwip_itoa(char *result, size_t bufsize, int number)
+{
+  char *res = result;
+  char *tmp = result + bufsize - 1;
+  int n = (number >= 0) ? number : -number;    /* -INT_MIN is undefined */
+  ...
+```
+
+`-INT_MIN` is not representable as `int`, so the negation is undefined
+behaviour (C17 6.5.3.3p3). veripp reports it directly:
+
+```
+Violated property: arithmetic overflow on neg
+  CWE: CWE-190, CWE-191
+  bufsize = 3
+  number = -2147483648
+```
+
+Unlike the other two findings this one has a **visible functional
+consequence**, not only a standards violation. `n` stays negative, so
+`n % 10` yields negative remainders and `'0' + negative` produces
+characters below `'0'`:
+
+```
+$ cc -g -fsanitize=undefined -o repro repro_itoa.c lwip_itoa.c && ./repro
+lwip_itoa(buf, sizeof buf, INT_MIN)
+lwip_itoa.c:12:36: runtime error: negation of -2147483648 cannot be
+represented in type 'int'; cast to an unsigned type to negate this value
+to itself
+produced: "-./,),(-*,("   (expected "-2147483648")
+```
+
+The digits are punctuation because `'0' - 8` is `'('`, `'0' - 4` is `,`,
+and so on.
+
+### Reachability
+
+`lwip_itoa` is public API (`src/include/lwip/def.h:133`) with four in-tree
+callers:
+
+| caller | argument | can it be INT_MIN? |
+|---|---|---|
+| `netif.c:1719` | `netif_index_to_num(idx)` | no — small positive |
+| `mdns_domain.c:361` | a domain value | no |
+| **`httpd.c:978`** | **HTTP Content-Length** | no — a file size |
+| `makefsdata.c:1184` | content length (host tool) | no |
+
+So it is latent in-tree: no caller can reach `INT_MIN`. It matters for
+external callers, and `lwip_itoa` is exported precisely so applications can
+use it.
+
+A second, smaller issue sits one line above: `result + bufsize - 1` is
+computed *before* the `bufsize < 2` guard, so `bufsize == 0` forms a
+pointer before the start of the object — undefined behaviour in C even
+though the pointer is never dereferenced.
+
+### Suggested fix
+
+Negate in unsigned, which is what the sanitizer message recommends:
+
+```c
+unsigned int n = (number >= 0) ? (unsigned int) number
+                               : -(unsigned int) number;
+```
+
+and move `tmp` below the `bufsize < 2` guard.
 
 ## Also checked
 
