@@ -101,20 +101,29 @@ pip install veripp        # or, to run without installing:  uvx veripp
 
 ### 2. The ESBMC checker
 
-ESBMC is a C++ binary, not a Python package, so pip cannot install it — it
-must be on your `PATH`. Use a build from master or the
-[`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly) release
-(which, despite the name, is cut infrequently — check its date). **Not the
-v8.4 release**: it carries
-[esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
-out-of-bounds writes in ordinary container code.
+ESBMC is a C++ binary, not a Python package, so pip cannot install it. On
+platforms where a relocatable build is published, veripp fetches one itself:
+
+```bash
+veripp install-checker
+```
+
+It downloads the [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly)
+build, runs known-*failing* programs through it, and keeps it **only** if the
+checker rejects every one. A binary that misses a planted bug is deleted
+rather than installed, because every result built on it would be a false
+proof.
+
+Where no relocatable build exists it says so and names the alternative:
 
 ```bash
 brew install --HEAD esbmc    # macOS. NOT `brew install esbmc`, which is 8.4.
-# Linux x86_64: download esbmc-linux.zip from the `weekly` release, unzip,
-# and put the binary on PATH.
 # Linux arm64: no prebuilt ESBMC is published; use the container image below.
 ```
+
+**Not the v8.4 release**: it carries
+[esbmc#6508](https://github.com/esbmc/esbmc/issues/6508) and silently misses
+out-of-bounds writes in ordinary container code.
 
 Then check your setup:
 
@@ -167,6 +176,38 @@ veripp verify src/parser.cpp --function parse_header
 Use `--assume 'len > 0'` to state what real callers guarantee, `--unwind N`
 to widen the loop bound, `--link src/helper.cpp` to bring in callees defined
 in other translation units.
+
+### Turn a counterexample into a program that crashes
+
+```bash
+veripp verify src/parser.c --function parse --repro repro.c
+```
+
+writes a standalone file with the counterexample's own inputs, plus the build
+line to compile it with AddressSanitizer and UBSan. A trace asks you to trust
+that the harness modelled your function fairly; a program that crashes asks
+nothing. It also checks itself — a repro that **exits cleanly** under the
+sanitizers is what a harness artifact looks like from outside, an input no
+real caller can construct.
+
+### Verify only what you changed
+
+```bash
+veripp scan . --changed                  # vs HEAD: staged, unstaged, untracked
+veripp scan . --changed origin/main      # everything this branch adds
+```
+
+Scanning a tree is a nightly job; scanning what a commit touches fits in front
+of every commit. Finding nothing to verify exits 0, so this is safe as a gate.
+As a [pre-commit](https://pre-commit.com) hook:
+
+```yaml
+repos:
+  - repo: https://github.com/gfabbretti8/veripp
+    rev: v0.4.0
+    hooks:
+      - id: veripp            # or: veripp-docker, which needs only Docker
+```
 
 ### Scan a file or a whole project
 

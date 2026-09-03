@@ -170,6 +170,12 @@ def main(argv: list[str] | None = None) -> int:
              "on stdout (so CI can have both without verifying twice)",
     )
     v.add_argument("--keep-harness", action="store_true", help="print where the harness was written")
+    v.add_argument(
+        "--repro",
+        metavar="PATH",
+        help="on a counterexample, write a standalone C/C++ file that "
+        "reproduces it, with the build line for a sanitizer run",
+    )
 
     h = sub.add_parser("harness", help="print the generated harness without verifying")
     _add_common_args(h, require_function=True)
@@ -1680,6 +1686,11 @@ def _verify(args) -> int:
         except RuntimeError:
             pass
 
+    if getattr(args, "repro", None):
+        written = _write_repro(args, report, harness)
+        if written:
+            print(written, file=sys.stderr)
+
     readable = report.summary()
     if harness and not args.keep_harness:
         readable += f"\n(harness kept at {target})"
@@ -1776,6 +1787,42 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "attempts": len(report.attempts),
         "duration_s": report.final.duration_s,
     }
+
+
+def _write_repro(args, report, harness) -> str | None:
+    """Write the counterexample as a runnable program, when there is one.
+
+    Only a counterexample has inputs to reproduce. Writing a file for a proof
+    would be a file that proves nothing, and writing one for an inconclusive
+    result would be worse: it would look like a finding.
+    """
+    from .repro import build_command, render
+
+    if report.final.outcome is not Outcome.COUNTEREXAMPLE:
+        return (f"note: --repro wrote nothing: the result was "
+                f"{report.final.outcome.value}, which has no failing input")
+    if harness is None:
+        return "note: --repro needs --function, which is what builds the harness"
+
+    destination = Path(args.repro)
+    if destination.suffix not in (".c", ".cc", ".cpp", ".cxx"):
+        destination = destination.with_suffix(args.source.suffix)
+    code = render(
+        harness.code,
+        args.source.resolve(),
+        harness.signature.name,
+        report.final.input_assignments(),
+        str(report.final.violated_property or ""),
+        repro_path=destination,
+        include_dirs=_include_dirs(args),
+    )
+    destination.write_text(code, encoding="utf-8")
+    return (
+        f"repro written to {destination}\n"
+        f"  build:  {build_command(destination, out=destination.stem, include_dirs=_include_dirs(args))}\n"
+        "  a clean exit under the sanitizers means the harness allowed a "
+        "state your callers cannot"
+    )
 
 
 def _exit_code(report: AgentReport) -> int:

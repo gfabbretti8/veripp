@@ -7,6 +7,38 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## Unreleased
+
+Fewer steps between a developer and a verified function.
+
+### Added
+- **`veripp install-checker`.** Installing ESBMC was the worst step in getting
+  started: not pip-installable, and the release people reach for first
+  silently misses out-of-bounds writes to a member array
+  ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)). This downloads
+  the `weekly` build where a relocatable one is published and keeps it **only**
+  if it passes the same soundness probes `doctor` runs -- an unsound download
+  is deleted, not reported, because every result built on it would be a false
+  proof. Where no relocatable build exists (macOS, Linux arm64) it says so and
+  names the alternative rather than installing something that will not run.
+  `find_esbmc` now prefers `$VERIPP_ESBMC`, then a checker installed this way,
+  then `PATH` -- which is where `brew install esbmc` puts 8.4.
+- **`veripp scan --changed [REF]`** verifies only the files git reports as new
+  or modified: against `HEAD` alone (staged, unstaged and untracked), or
+  `REF...HEAD` with a ref, so a long-lived branch is compared against where it
+  diverged rather than everything that landed on main meanwhile. Deletions are
+  dropped and finding nothing exits 0, since a gate that fails when you touched
+  no C is a gate people remove. `.pre-commit-hooks.yaml` ships `veripp` and
+  `veripp-docker` hooks built on it.
+- **`veripp verify --repro PATH`** writes a standalone C/C++ file that
+  reproduces a counterexample with its own concrete inputs, and prints the
+  build line to compile it under AddressSanitizer and UBSan, include paths
+  carried over. A trace asks the reader to trust the harness; a program that
+  crashes asks nothing. It is also self-checking: a repro that exits cleanly
+  under the sanitizers is what a harness artifact looks like from outside.
+  Only written for counterexamples -- a proof has no failing input, and a file
+  for an inconclusive result would read as a finding.
+
 ## 0.4.0
 
 A first scan you can read.
