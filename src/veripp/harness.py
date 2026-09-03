@@ -622,8 +622,22 @@ def _emit_lone_pointer(
     body: str = "",
 ) -> list[str]:
     pointee = param.pointee()
-    if normalize_type(pointee, typedefs) in _STRING_POINTEES and (
-        param.is_const or _walks_to_terminator(param.name, body)
+    _pointee = normalize_type(pointee, typedefs)
+    if _pointee in _STRING_POINTEES and (
+        # `const char *` without a length is a C string by convention. The
+        # unsigned and signed spellings are not: `const unsigned char *` is
+        # how C says "binary data", and mbedTLS hands exactly that to
+        # asn1_write_named_bitstring(p, start, buf, bits) -- a bitstring,
+        # not a string. Those need the body to actually walk to a NUL.
+        (param.is_const and _pointee == "char")
+        or _walks_to_terminator(param.name, body)
+        # strcmp-shaped pairs test the terminator on ONE operand and walk
+        # the other in lockstep: cJSON's case_insensitive_strcmp checks
+        # `*string1 == '\0'` and never tests string2, which is still a C
+        # string by contract. So a const char-like pointer in a function
+        # that walks *anything* to a NUL is a string too -- while the
+        # bitstring writer, which tests no terminator anywhere, is not.
+        or (param.is_const and _body_tests_any_terminator(body))
     ):
         # A `const char*` with no length parameter is, in practice, a C
         # string. A single nondet char is the wrong model: anything that
@@ -721,6 +735,17 @@ _TERMINATOR_TESTS = (
 #: carry a backslash through both this source and a regular expression. The
 #: first attempt matched two literal backslashes and silently never fired.
 _NUL_LITERAL = "'\\0'"
+
+
+def _body_tests_any_terminator(body: str) -> bool:
+    """Whether the body walks some pointer to a NUL, i.e. handles strings."""
+    if not body:
+        return False
+    normalised = scrub(body.replace(_NUL_LITERAL, "0"))
+    return any(
+        re.search(pattern.format(name=r"[A-Za-z_]\w*"), normalised)
+        for pattern in _TERMINATOR_TESTS
+    )
 
 
 def _walks_to_terminator(name: str, body: str) -> bool:
