@@ -10,9 +10,9 @@ The headline is not the bugs. It is the ratio.
 
 | | count |
 |---|---:|
-| Functions proved free of the eight UB classes | **77+** |
+| Functions proved free of the eight UB classes | **111** |
 | Real defects confirmed (sanitizer-verified) | **3** |
-| Counterexamples that turned out to be false | **7** |
+| Counterexamples that turned out to be false | **9** |
 | veripp modelling defects that had to be fixed first | **12** |
 
 Every one of the seven false positives was caught by reading the
@@ -35,6 +35,7 @@ intuition, and several looked *more* convincing than the real findings.
 | mbedTLS 3.6 | x509write_crt | 18 | 0 |
 | miniz | core | 14 | 0 |
 | miniz | tdef / tinfl | 9 | 0 |
+| miniz | zip | 34 | 0 |
 
 The three real defects are in
 [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md). All are low severity and
@@ -70,6 +71,13 @@ filed as a bug.
 7. **`tdefl_record_match`** — miniz's own `MZ_ASSERT` failing, because the
    harness called an internal function without the precondition the
    assertion documents. Every real call site normalises the value first.
+
+8. **`mz_zip_writer_create_zip64_extra_data`** — an out-of-bounds write
+   into a buffer with no length parameter. It writes at most 28 bytes and
+   every caller declares exactly `MZ_ZIP64_MAX_CENTRAL_EXTRA_FIELD_SIZE`
+   (28); veripp cannot infer that from a body whose writes go through
+   `MZ_WRITE_LE64` macros.
+9. **`mz_write_le64`** — same cause, one level down.
 
 Two further classes were caught the same way: nanopb's `pb_enc_*`
 counterexamples (structs whose members sit inside `#ifdef` blocks, so the
@@ -126,8 +134,14 @@ timeout starving each job. Re-run singly, the functions verify. This is the
 mirror image of a false positive and harder to notice, because it hides a
 surface instead of inventing a defect in it.
 
+**A buffer with no length parameter cannot be verified, only guessed at.**
+Three of the nine false positives reduce to this: `pBuf`, `buf`, `token` —
+the size lives in the caller's head or in a macro constant, and no analysis
+of the callee can recover it. This is the single largest source of noise on
+real C.
+
 **Well-maintained C survives this.** mbedTLS produced 54 proofs and zero
-defects; miniz produced 23 and zero. That is the expected and correct
+defects; miniz produced 57 and zero. That is the expected and correct
 result for audited code, and worth stating plainly rather than treating a
 quiet scan as a failed hunt.
 
