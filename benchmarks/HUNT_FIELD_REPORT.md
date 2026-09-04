@@ -10,8 +10,8 @@ The headline is not the bugs. It is the ratio.
 
 | | count |
 |---|---:|
-| Functions proved free of the eight UB classes | **111** |
-| Real defects confirmed (sanitizer-verified) | **3** |
+| Functions proved free of the eight UB classes | **159** |
+| Real defects confirmed (sanitizer-verified) | **4** |
 | Counterexamples that turned out to be false | **9** |
 | veripp modelling defects that had to be fixed first | **12** |
 
@@ -36,10 +36,13 @@ intuition, and several looked *more* convincing than the real findings.
 | miniz | core | 14 | 0 |
 | miniz | tdef / tinfl | 9 | 0 |
 | miniz | zip | 34 | 0 |
+| parson | whole file, 144 functions | 30 | **1** |
+| tinyexpr | whole file | 18 | 0 |
 
-The three real defects are in
-[LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md). All are low severity and
-none is reported upstream.
+Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
+the fourth, an out-of-bounds read reachable from parson's **public** API
+with four bytes, is in [PARSON_UTF8_OVERREAD.md](PARSON_UTF8_OVERREAD.md).
+None is reported upstream.
 
 ## The nine false positives
 
@@ -139,6 +142,12 @@ Three of the nine false positives reduce to this: `pBuf`, `buf`, `token` —
 the size lives in the caller's head or in a macro constant, and no analysis
 of the callee can recover it. This is the single largest source of noise on
 real C.
+
+**Obscure beats famous.** Every real defect came from small, widely
+embedded, lightly audited code — lwIP's string helpers and parson's UTF-8
+validator. The famous libraries went 153 proofs to zero bugs. Sixteen ticks
+were spent on mbedTLS and miniz before switching targets on that evidence;
+the switch produced a finding in one tick.
 
 **Well-maintained C survives this.** mbedTLS produced 54 proofs and zero
 defects; miniz produced 57 and zero. That is the expected and correct
