@@ -251,7 +251,8 @@ def generate(
         if buffer_name in paired_cursor:
             continue
         param = next(p for p in signature.params if p.name == buffer_name)
-        body += _emit_buffer(param, length, options, assumptions, typedefs)
+        body += _emit_buffer(param, length, options, assumptions, typedefs,
+                             signature.body, by_name[length].type)
 
     hoisted = _hoist_requires(signature)
     if hoisted:
@@ -830,6 +831,27 @@ def _body_tests_any_terminator(body: str) -> bool:
     )
 
 
+#: Bounded <string.h> routines. Unlike `strlen`, these promise nothing about
+#: termination -- which is why they are absent from _TERMINATOR_TESTS -- but
+#: they do say what the buffer holds: text. All of them stop at a NUL in
+#: either operand, so a caller passing one a slice with a NUL inside it is
+#: passing a string shorter than the length it also passed. The binary
+#: equivalents (memcmp, memchr, memcpy) are deliberately not here.
+_TEXT_SLICE_USES = (
+    r"\b(?:strncmp|strncasecmp|strnicmp|strncpy|strncat|strnlen|strndup)"
+    r"\s*\(\s*(?:\([^)]*\)\s*)?{name}\s*[,)]"
+)
+
+
+def _is_text_slice(name: str, body: str) -> bool:
+    """Whether `body` treats `name` as text of a given length, not as bytes."""
+    if not body:
+        return False
+    normalised = scrub(body.replace(_NUL_LITERAL, "0"))
+    return bool(re.search(_TEXT_SLICE_USES.format(name=re.escape(name)),
+                          normalised))
+
+
 def _walks_to_terminator(name: str, body: str) -> bool:
     """Whether `body` reads `name` until a NUL, i.e. treats it as a string."""
     if not body:
@@ -906,6 +928,8 @@ def _emit_buffer(
     options: HarnessOptions,
     assumptions: list[str],
     typedefs: dict[str, str],
+    body: str = "",
+    length_type: str | None = None,
 ) -> list[str]:
     pointee = param.pointee()
     nondet = nondet_for(pointee, typedefs)
@@ -917,17 +941,47 @@ def _emit_buffer(
         )
     cap = options.max_array_len
     storage = f"{param.name}_buf"
+    # A signed length left free is negative half the time, and every str- or
+    # mem- routine converts it to a huge size_t. That reads far past the
+    # buffer whatever the library does, and no caller passes it.
+    signed_length = length_type is not None and not normalize_type(
+        length_type, typedefs
+    ).startswith(("unsigned", "size_t"))
     assumptions.append(
         f"`{param.name}` points to exactly `{length}` valid elements, with "
-        f"{length} <= {cap} (harness bound on array length)"
+        + (f"0 <= {length} <= {cap}" if signed_length else f"{length} <= {cap}")
+        + " (harness bound on array length)"
     )
-    return [
+    lines = [
         f"VERIPP_ASSUME({length} <= {cap});",
         f"{pointee} {storage}[{cap}];",
         f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
         f"    {storage}[{_LOOP_VAR}] = {nondet};",
-        f"{_decl_type(param.type)} {param.name} = {storage};",
     ]
+    if signed_length:
+        lines.insert(1, f"VERIPP_ASSUME({length} >= 0);")
+    if _is_text_slice(param.name, body):
+        # A slice with a NUL inside it is a string shorter than the length
+        # that came with it, and the bounded str-routines the body uses stop
+        # there -- so a comparison against a shorter literal can "succeed"
+        # and the index that follows runs off the end of the LITERAL. That is
+        # what tinyexpr's find_builtin(name, len) was reported for, and no
+        # tokeniser can produce it: identifiers do not contain NULs.
+        lines += [
+            # Clamped by the cap as well: the assumption must not be the
+            # thing that reads out of bounds.
+            f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}UL && "
+            f"{_LOOP_VAR} < (unsigned long){length}; ++{_LOOP_VAR})",
+            f"    VERIPP_ASSUME({storage}[{_LOOP_VAR}] != 0);",
+        ]
+        assumptions.append(
+            f"`{param.name}` holds {length} characters of text with no "
+            f"terminator among them -- the body compares it with bounded "
+            f"<string.h> routines, which stop at a NUL, so a caller passing "
+            f"a shorter string than `{length}` claims is NOT modelled"
+        )
+    lines.append(f"{_decl_type(param.type)} {param.name} = {storage};")
+    return lines
 
 
 def _decl_type(type_: str) -> str:
