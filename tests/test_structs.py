@@ -789,3 +789,64 @@ class TestVoidPointerFields:
         )
         harness = self._harness(tmp_path, src, "get")
         assert "h_obj.o = 0;" in harness.code
+
+
+class TestBaseClassByFirstMember:
+    """C spells inheritance by putting the base struct first.
+
+    `ipfrag_free_pbuf_custom(struct pbuf *p)` opens with
+    `(struct pbuf_custom_ref *)p` and then reads a member that lives past the
+    end of a bare `struct pbuf`. Building the small struct guarantees an
+    out-of-bounds read no caller can cause -- lwIP only ever installs that
+    function as the free callback of a pbuf_custom_ref, and lwIP's own header
+    comments the first member `'base class'`.
+    """
+
+    # Two levels, as in lwIP: ref holds a custom, custom holds a buf.
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct buf { int len; };\n"
+        "struct custom { struct buf b; int kind; };\n"
+        "struct ref { struct custom c; int extra; };\n"
+        "int reclaim(struct buf *p)"
+        " { struct ref *r = (struct ref *)p; return r->extra; }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="reclaim"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_the_whole_object_is_built(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "struct ref p_outer;" in code
+        assert "struct buf p_obj;" not in code
+
+    def test_the_parameter_points_at_the_first_member(self, tmp_path):
+        assert "struct buf * p = (struct buf *)&p_outer;" in self._harness(
+            tmp_path).code.replace("  ", " ")
+
+    def test_it_is_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("first member" in a and "struct ref" in a
+                   for a in assumptions)
+
+    def test_a_cast_to_an_unrelated_struct_is_ignored(self, tmp_path):
+        """Only a first-member chain makes the addresses the same."""
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "struct buf { int len; };\n"
+            "struct other { int pad; struct buf b; };\n"
+            "int reclaim(struct buf *p)"
+            " { struct other *o = (struct other *)p; return o->pad; }\n"
+        )
+        assert "p_outer" not in self._harness(tmp_path, src=src).code
+
+    def test_a_cast_to_the_same_type_is_not_a_base(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "struct buf { int len; };\n"
+            "int size(struct buf *p)"
+            " { return ((struct buf *)p)->len; }\n"
+        )
+        assert "p_outer" not in self._harness(tmp_path, src=src, fn="size").code

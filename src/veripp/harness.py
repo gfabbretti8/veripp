@@ -1002,6 +1002,17 @@ def _emit_buffer(
     return lines
 
 
+def _elaborated_tag(source_text: str, name: str) -> str:
+    """`struct pbuf_custom_ref` or `pbuf_custom_ref`, whichever compiles.
+
+    The tag is needed unless a typedef of the same name exists, and looking
+    for the typedef is cheaper than being wrong in either direction.
+    """
+    if re.search(r"\btypedef\b[^;]*\b" + re.escape(name) + r"\s*;", source_text):
+        return name
+    return f"struct {name}"
+
+
 def _elaborated(type_: str) -> str:
     """The type as a declaration must spell it: `struct pbuf`, not `pbuf`.
 
@@ -1523,6 +1534,35 @@ def _emit_object(
                 _find_destructor(source_text, source_type, signature.name, typedefs),
                 teardown, declared,
             )
+
+    # A parameter the body immediately casts DOWN is not really one of the
+    # type its signature names -- it is the first member of a bigger one.
+    owner = (
+        _find_owning_struct(source_text, param, signature.body, type_name, typedefs)
+        if param.is_pointer else None
+    )
+    if owner is not None:
+        outer = _try_struct(source_text, owner)
+        if outer is not None:
+            storage = f"{param.name}_outer"
+            assumptions.append(
+                f"`{param.name}` points at the first member of a "
+                f"`{_elaborated_tag(source_text, owner)}`, which the body "
+                f"casts it back to. Building a bare `{declared}` instead "
+                f"would put every member past it out of bounds by "
+                "construction -- the C spelling of a base class, and the "
+                "caller always has the whole object"
+            )
+            lines = [f"{_elaborated_tag(source_text, owner)} {storage};"]
+            lines += _fill_fields(
+                outer, storage, 0, options, typedefs, source_text, assumptions,
+                seen={owner},
+            )
+            lines.append(
+                f"{_decl_type(param.type)} {param.name} = "
+                f"({_decl_type(param.type)})&{storage};"
+            )
+            return lines
 
     # cJSON passes its allocator table down as a parameter -- every call site
     # writes `&global_hooks`. Filling those function pointers at random gives
@@ -2168,6 +2208,74 @@ def _emit_from_factories(
             "being asked"
         )
     return lines
+
+
+#: `(struct pbuf_custom_ref *)p` -- a downcast of a parameter to the struct
+#: that really owns it.
+_DOWNCAST_RE = r"\(\s*(?:struct\s+|union\s+)?(\w+)\s*\*\s*\)\s*\(?\s*{name}\b"
+
+#: How many first members to follow. lwIP needs two -- pbuf_custom_ref holds
+#: a pbuf_custom which holds a pbuf -- and a chain much longer than that is
+#: more likely a coincidence of layout than an intended base class.
+_MAX_BASE_DEPTH = 4
+
+
+def _first_member_chain(
+    source_text: str, outer: str, typedefs: dict[str, str]
+) -> list[str]:
+    """Types reachable by taking the first member, repeatedly.
+
+    C spells inheritance by putting the base struct first, so a pointer to
+    the outer struct and a pointer to its first member are the same address.
+    lwIP writes it out: `struct pbuf_custom_ref { struct pbuf_custom pc; ... }`
+    with the comment `'base class'`.
+    """
+    chain: list[str] = []
+    current = outer
+    for _ in range(_MAX_BASE_DEPTH):
+        info = _try_struct(source_text, current)
+        if info is None or not info.fields:
+            break
+        first = info.fields[0]
+        if first.is_pointer or first.array_len is not None:
+            break
+        inner = re.sub(
+            r"^\s*(?:(?:const|volatile|struct|union|class)\s+)+", "", first.type
+        ).strip()
+        if inner in chain or inner == current:
+            break
+        chain.append(inner)
+        current = inner
+    return chain
+
+
+def _find_owning_struct(
+    source_text: str, param: Param, body: str, type_name: str,
+    typedefs: dict[str, str],
+) -> str | None:
+    """The struct a parameter is cast down to, when it is really one of those.
+
+    `ipfrag_free_pbuf_custom(struct pbuf *p)` immediately does
+    `(struct pbuf_custom_ref *)p` and then reads a member that lives past the
+    end of a bare `struct pbuf`. Building the small struct guarantees an
+    out-of-bounds read no caller can cause: lwIP only ever installs this as
+    the free function of a pbuf_custom_ref. Building the OUTER struct and
+    passing a pointer to its first member is what the caller does.
+    """
+    if not body:
+        return None
+    wanted = normalize_type(type_name, typedefs)
+    for candidate in dict.fromkeys(
+        re.findall(_DOWNCAST_RE.format(name=re.escape(param.name)), scrub(body))
+    ):
+        if normalize_type(candidate, typedefs) == wanted:
+            continue
+        if any(
+            normalize_type(link, typedefs) == wanted
+            for link in _first_member_chain(source_text, candidate, typedefs)
+        ):
+            return candidate
+    return None
 
 
 def _try_struct(source_text: str, type_name: str) -> StructInfo | None:
