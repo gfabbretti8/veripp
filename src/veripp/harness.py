@@ -274,7 +274,7 @@ def generate(
         if param.name in buffers or param.name in paired_cursor:
             continue
         body += _emit_scalar(param, signature, assumptions, options, typedefs,
-                             expanded, teardown)
+                             expanded, teardown, macro_text=text)
 
     for buffer_name, length in lengths.items():
         if buffer_name in paired_cursor:
@@ -744,6 +744,9 @@ def _emit_scalar(
     typedefs: dict[str, str],
     source_text: str = "",
     teardown: list[str] | None = None,
+    #: The file as WRITTEN, not as preprocessed. Size macros only exist in
+    #: the former, and --preprocess resolves them away.
+    macro_text: str = "",
 ) -> list[str]:
     if param.is_pointer:
         if source_text and nondet_for(param.pointee(), typedefs) is None:
@@ -751,7 +754,8 @@ def _emit_scalar(
                               source_text, teardown)
             if obj is not None:
                 return obj
-        return _emit_lone_pointer(param, assumptions, options, typedefs, signature.body)
+        return _emit_lone_pointer(param, assumptions, options, typedefs,
+                                  signature.body, macro_text or source_text)
     if param.is_reference:
         if source_text and nondet_for(param.pointee(), typedefs) is None:
             obj = _try_object(param, signature, assumptions, options, typedefs,
@@ -791,6 +795,7 @@ def _emit_lone_pointer(
     options: HarnessOptions,
     typedefs: dict[str, str],
     body: str = "",
+    source_text: str = "",
 ) -> list[str]:
     pointee = param.pointee()
     _pointee = normalize_type(pointee, typedefs)
@@ -846,6 +851,19 @@ def _emit_lone_pointer(
     # overrun a buffer the harness made too small, and reported the library
     # for it. Size it from how the function actually indexes the pointer.
     extent = _indexed_extent(param, body, options)
+    # A fixed-size write says outright how big the buffer has to be, and it
+    # outranks both the index scan and the harness bound: the index scan can
+    # only see what it can evaluate, and the bound is an arbitrary number.
+    fixed = _fixed_write_extent(param, body, source_text, options.max_array_len)
+    if fixed > extent:
+        extent = fixed
+        fixed_note = (
+            f"`{param.name}` is non-null and points to at least {extent} "
+            f"valid `{pointee}` elements -- no length parameter, but the body "
+            f"passes it to a fixed-size <string.h> call of exactly that many"
+        )
+    else:
+        fixed_note = ""
     if extent <= 1:
         storage = f"{param.name}_obj"
         assumptions.append(
@@ -860,7 +878,8 @@ def _emit_lone_pointer(
 
     storage = f"{param.name}_buf"
     assumptions.append(
-        f"`{param.name}` is non-null and points to at least {extent} valid "
+        fixed_note
+        or f"`{param.name}` is non-null and points to at least {extent} valid "
         f"`{pointee}` elements (no length parameter; {extent} is the highest "
         "index the body uses)"
     )
@@ -956,6 +975,88 @@ def _walks_to_terminator(name: str, body: str) -> bool:
 
 
 _MAX_INFERRED_EXTENT = 64
+
+
+#: Routines that write or read a fixed run of bytes through a pointer. The
+#: uppercase spellings are lwIP's macros for the same thing.
+_FIXED_SIZE_CALLS = (
+    "memset", "memcpy", "memmove", "memcmp", "bzero", "bcopy",
+    "BZERO", "BCOPY", "MEMCPY", "MEMCMP", "SMEMCPY",
+)
+
+
+def _constant_value(token: str, source_text: str) -> int | None:
+    """An integer literal, or an object-like macro that is one."""
+    token = token.strip()
+    if token.isdigit():
+        return int(token)
+    if not re.fullmatch(r"[A-Za-z_]\w*", token):
+        return None
+    # A trailing comment is normal on a size macro:
+    #     #define MS_CHAP_RESPONSE_LEN  49  /* Response length for MS-CHAP */
+    match = re.search(
+        r"^[ \t]*#[ \t]*define[ \t]+" + re.escape(token) + r"[ \t]+\(?(\d+)\)?"
+        r"[ \t]*(?:/[/*].*)?$",
+        source_text, re.M,
+    )
+    return int(match.group(1)) if match else None
+
+
+def _fixed_write_extent(
+    param: Param, body: str, source_text: str, cap: int = 0,
+) -> int:
+    """Bytes the body memsets or memcpys through `param`, when that is fixed.
+
+    MS-CHAP says how big its output buffer is, in the first line of the
+    function that fills it:
+
+        BZERO(response, MS_CHAP_RESPONSE_LEN);   /* 49 */
+
+    `response` has no length parameter -- an output buffer whose size lives
+    in the caller's head is the largest single source of noise on real C --
+    but here it does not live only there. Sizing the buffer from the harness
+    bound instead gave ChapMS 40 bytes and reported lwIP for the memset of
+    49. Three of chap_ms.c's four counterexamples were this.
+    """
+    if not body:
+        return 0
+    scrubbed = scrub(body)
+    name = re.escape(param.name)
+    names = "|".join(_FIXED_SIZE_CALLS)
+    highest = 0
+    for pattern in (
+        # two arguments -- bzero(p, N) and lwIP's BZERO
+        rf"\b(?:{names})\s*\(\s*(?:\([^)]*\)\s*)?{name}\s*,\s*([^,;()]+?)\s*\)",
+        # three, pointer as the destination: f(p, x, N)
+        rf"\b(?:{names})\s*\(\s*(?:\([^)]*\)\s*)?{name}\s*,[^;()]*?,\s*([^,;()]+?)\s*\)",
+        # three, pointer as the source: f(dst, p, N)
+        rf"\b(?:{names})\s*\([^;()]*?,\s*(?:\([^)]*\)\s*)?{name}\s*,\s*([^,;()]+?)\s*\)",
+    ):
+        for m in re.finditer(pattern, scrubbed):
+            size = m.group(1)
+            value = _constant_value(size, source_text)
+            if value is None and cap:
+                # `BZERO(unicode, ascii_len * 2)` -- not a constant, but a
+                # small multiple of a length that is itself bounded. Two
+                # bytes per character for UTF-16, three for RGB, and so on.
+                # ascii2unicode then writes 2 * ascii_len bytes into a buffer
+                # the harness had sized at the bound itself.
+                factor = re.fullmatch(
+                    r"\s*(?:(\d+)\s*\*\s*\w+|\w+\s*\*\s*(\d+))\s*", size
+                )
+                if factor:
+                    value = int(factor.group(1) or factor.group(2)) * cap
+            if value is not None:
+                highest = max(highest, value)
+    # Deliberately not clamped by _MAX_INFERRED_EXTENT: that bound guards a
+    # guess, and this is not one. The code writes this many bytes, so giving
+    # it fewer guarantees a report about the harness.
+    return min(highest, _MAX_FIXED_EXTENT)
+
+
+#: Enough for any real fixed-size write, and small enough that a mistake
+#: here cannot produce an unusable harness.
+_MAX_FIXED_EXTENT = 4096
 
 
 def _indexed_extent(param: Param, body: str, options: HarnessOptions) -> int:

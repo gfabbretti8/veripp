@@ -445,3 +445,71 @@ class TestTypeAliasChains:
         types = collect_scalar_typedefs(src)
         assert "MAX" not in types
         assert types["uLong"] == "unsigned long"
+
+
+class TestFixedSizeWrites:
+    """An output buffer with no length parameter is the worst case on real C.
+
+    Its size lives in the caller's head -- except when it does not. MS-CHAP
+    states it in the first line of the function that fills it:
+
+        BZERO(response, MS_CHAP_RESPONSE_LEN);   /* 49 */
+
+    Sizing `response` from the harness bound instead gave it 40 bytes and
+    reported lwIP for the memset of 49. Three of chap_ms.c's four
+    counterexamples were this one thing.
+    """
+
+    def _assumptions(self, tmp_path, src, fn="fill"):
+        p = tmp_path / "s.c"
+        p.write_text(src, encoding="utf-8")
+        return generate(p, fn).assumptions
+
+    def test_a_constant_size_sets_the_extent(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "void fill(unsigned char *out) { memset(out, 0, 49); }\n"
+        )
+        assert any("at least 49" in a for a in self._assumptions(tmp_path, src))
+
+    def test_a_size_macro_is_resolved(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "#define RESP_LEN\t49\t/* Response length for MS-CHAP */\n"
+            "void fill(unsigned char *out) { memset(out, 0, RESP_LEN); }\n"
+        )
+        assert any("at least 49" in a for a in self._assumptions(tmp_path, src))
+
+    def test_a_two_argument_call_counts(self, tmp_path):
+        """lwIP spells it BZERO(p, n), with no fill byte."""
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "#define BZERO(p, n) memset((p), 0, (n))\n"
+            "void fill(unsigned char *out) { BZERO(out, 49); }\n"
+        )
+        assert any("at least 49" in a for a in self._assumptions(tmp_path, src))
+
+    def test_a_multiple_of_a_bounded_length(self, tmp_path):
+        """`BZERO(unicode, ascii_len * 2)` -- two bytes per character."""
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "void fill(const char *ascii, int ascii_len, unsigned char *wide)\n"
+            "{ memset(wide, 0, ascii_len * 2); }\n"
+        )
+        assert any("at least 8" in a for a in self._assumptions(tmp_path, src))
+
+    def test_the_reason_for_the_size_is_given(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "void fill(unsigned char *out) { memset(out, 0, 49); }\n"
+        )
+        assert any("fixed-size <string.h> call" in a
+                   for a in self._assumptions(tmp_path, src))
+
+    def test_a_variable_size_is_not_a_constant(self, tmp_path):
+        """`memcpy(out, in, n)` with a free `n` says nothing about out."""
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "void fill(unsigned char *out, int n) { memset(out, 0, n); }\n"
+        )
+        assert not any("fixed-size" in a for a in self._assumptions(tmp_path, src))
