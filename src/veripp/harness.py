@@ -1767,6 +1767,34 @@ def _fill_fields(
                 "(ESBMC treats it as nondeterministic, but veripp did not "
                 "model its structure)"
             )
+    # A struct usually has more than one length, and only one of them got
+    # paired with the buffer. lwIP's pbuf has `tot_len` (the whole chain) and
+    # `len` (this buffer); veripp paired the first it recognised and left the
+    # other free, so pbuf_try_get_at -- which checks `q->len > q_idx` before
+    # indexing -- was handed len = 1000 for a 40-byte payload and reported
+    # for the read its own guard had allowed. Bounding them all only removes
+    # states, never invents one, and it is said plainly because a real
+    # chain's total genuinely can exceed the harness bound.
+    if pairs:
+        others = sorted(
+            f.name for f in info.fields
+            if not f.is_pointer and f.array_len is None
+            and _is_integral(f.type, typedefs)
+            and _is_length_name(f.name) and f.name not in set(pairs.values())
+        )
+        for name in others:
+            constraints.append(
+                f"VERIPP_ASSUME({prefix}.{name} <= {options.max_array_len});"
+            )
+        if others:
+            assumptions.append(
+                "every length in `" + prefix + "` (" + ", ".join(others)
+                + f") is bounded to the {options.max_array_len}-element "
+                "harness array bound, not just the one paired with the "
+                "buffer. A real object whose totals run across a chain can "
+                "exceed it, and those states are NOT explored"
+            )
+
     for cursor, length in _cursor_fields(info, pairs, typedefs):
         constraints.append(f"VERIPP_ASSUME({prefix}.{cursor} <= {prefix}.{length});")
         assumptions.append(

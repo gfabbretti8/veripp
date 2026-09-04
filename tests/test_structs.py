@@ -850,3 +850,47 @@ class TestBaseClassByFirstMember:
             " { return ((struct buf *)p)->len; }\n"
         )
         assert "p_outer" not in self._harness(tmp_path, src=src, fn="size").code
+
+
+class TestEveryLengthIsBounded:
+    """A struct usually has more than one length, and one got paired.
+
+    lwIP's pbuf carries `tot_len` (the whole chain) and `len` (this buffer).
+    veripp paired the buffer with the first length it recognised and left the
+    other free, so pbuf_try_get_at -- which checks `q->len > q_idx` before
+    indexing -- was handed len = 1000 for a 40-byte payload and reported for
+    the read its own guard had just allowed.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct chunk { struct chunk *next; void *payload;"
+        " unsigned short tot_len; unsigned short len; };\n"
+        "int at(struct chunk *p, unsigned short i)"
+        " { return p->len > i ? ((unsigned char *)p->payload)[i] : -1; }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="at"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_the_unpaired_length_is_bounded_too(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "VERIPP_ASSUME(p_obj.len <= 4);" in code
+        assert "VERIPP_ASSUME(p_obj.tot_len <= 4);" in code
+
+    def test_the_under_approximation_is_admitted(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("NOT explored" in a and "every length" in a
+                   for a in assumptions)
+
+    def test_a_struct_with_no_buffer_claims_nothing(self, tmp_path):
+        """Without a counted buffer there is nothing to justify the bound."""
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "struct span { unsigned short len; unsigned short tot_len; };\n"
+            "int total(struct span *s) { return s->tot_len; }\n"
+        )
+        code = self._harness(tmp_path, src=src, fn="total").code
+        assert "VERIPP_ASSUME(s_obj.len <= 4);" not in code
