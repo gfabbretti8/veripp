@@ -10,12 +10,12 @@ The headline is not the bugs. It is the ratio.
 
 | | count |
 |---|---:|
-| Functions proved free of the eight UB classes | **159** |
+| Functions proved free of the eight UB classes | **163** |
 | Real defects confirmed (sanitizer-verified) | **4** |
-| Counterexamples that turned out to be false | **15** |
-| veripp modelling defects that had to be fixed first | **20** |
+| Counterexamples that turned out to be false | **19** |
+| veripp modelling defects that had to be fixed first | **26** |
 
-Every one of the fifteen false positives was caught by reading the
+Every one of the nineteen false positives was caught by reading the
 assumptions veripp prints beside each result. Not one was caught by
 intuition, and several looked *more* convincing than the real findings.
 
@@ -26,7 +26,7 @@ intuition, and several looked *more* convincing than the real findings.
 | library | surface | proved | real bugs |
 |---|---|---:|---:|
 | lwIP | `def.c` string helpers | 1 | **3** |
-| cJSON | whole file, 106 functions | 31 | 0 |
+| cJSON | whole file, 116 functions | 35 | 0 |
 | nanopb | `pb_encode.c` | 11 | 0 |
 | mbedTLS 3.6 | base64 | 5 | 0 |
 | mbedTLS 3.6 | pem | 7 | 0 |
@@ -116,6 +116,24 @@ nondeterministic struct with a NULL nested pointer).
 15. **`json_serialize_string`** (parson) — an output buffer with no length
     parameter, the largest noise class on real C and the third instance of
     it in this report.
+16. **`cJSON_DetachItemFromArray`** — `item->prev->next` on an `item` whose
+    `prev` is null while it is not the list head. cJSON's sibling lists are
+    circular in `prev`, so no list the API can build looks like that; the
+    harness built one because it fills the graph field by field.
+17. **`parse_string`** (cJSON) — a `parse_buffer` with `offset == length`,
+    so `buffer_at_offset(b)[0]` is one past the end. The invariant the
+    harness states, `offset <= length`, is the right one for the type;
+    parse_string additionally needs `offset < length`, and gets it from
+    `can_access_at_index(input_buffer, 0)` three lines up in its only
+    caller. A fact about a call site, which is triage's job.
+18. **`update_offset`** (cJSON) — `strlen` on a `printbuffer` whose
+    `length` is its capacity, not its content. Its callers have just
+    written a terminated chunk there. The counted-buffer model is right and
+    cannot know that.
+19. **`print_number`** (cJSON) — `NaN on ieee_sub`, because `sscanf` is not
+    defined in the translation unit, so its write through `&test` is not
+    modelled and `test` stays unconstrained. The same cause as
+    `mbedtls_pem_write_buffer` above, four hundred lines of C apart.
 
 ## The twelve fixes this required
 
@@ -158,8 +176,22 @@ triage — none by a failing test.
     constructing their owner and asking it.
 20. A constructor-built object is freed with the library's own deallocator,
     so the leak in the harness does not answer instead of the question.
+21. A run whose only failure was an artifact is asked again with
+    `--multi-property`, because ESBMC stops at the first violation and an
+    artifact therefore ends the run before anything else is checked.
+22. `veripp verify FILE` with no `--function` has no generated harness, so
+    the rule "a failure inside the harness is about the harness" no longer
+    applies to every finding in the user's own file.
+23. An allocator table that is a struct of function pointers is resolved
+    like a scalar hook, and a parameter of that type is initialised from
+    the library's own table rather than filled at random.
+24. ...including one reached through a struct FIELD, which is where cJSON
+    keeps it: inside `parse_buffer`.
+25. A cursor struct's offset is inside the buffer it indexes.
+26. A `char *` struct FIELD is a C string, the rule veripp already applied
+    to parameters.
 
-All twenty are regression-clean at 617 tests.
+All twenty-six are regression-clean at 633 tests.
 
 ## Lessons that generalise
 
@@ -190,6 +222,26 @@ Three of the nine false positives reduce to this: `pBuf`, `buf`, `token` —
 the size lives in the caller's head or in a macro constant, and no analysis
 of the callee can recover it. This is the single largest source of noise on
 real C.
+
+**The noise was not evenly spread; it was four causes.** cJSON was rescanned
+after each fix, and its counterexample count is the clearest record of what
+those causes were worth:
+
+| after | counterexamples | proved |
+|---|---:|---:|
+| the original scan | 33 | 31 |
+| resolving the allocator | 14 | 29 |
+| looking past artifacts with `--multi-property` | 14 | 29 |
+| bounding the cursor by its buffer | 11 | 29 |
+| treating a `char *` field as a string | **4** | **35** |
+
+All four survivors are false positives too, each for a different and
+already-known reason. Not one of the twenty-nine that went away was a
+missed bug -- they were the harness describing a cJSON that cannot exist:
+an allocator that returns nowhere, a parse cursor past the end of its own
+buffer, a `string` field one byte long. The proofs went *up* by four while
+the noise fell by twenty-nine, which is the shape to expect when the fix is
+to the model rather than to a threshold.
 
 **Obscure beats famous.** Every real defect came from small, widely
 embedded, lightly audited code — lwIP's string helpers and parson's UTF-8
