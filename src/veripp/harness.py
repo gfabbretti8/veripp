@@ -794,14 +794,17 @@ _TERMINATOR_TESTS = (
     r"\(\s*\*\s*{name}\s*\)\s*\[\s*0\s*\]\s*(?:==|!=)\s*0",
     # Handing the pointer to a <string.h> routine that stops at NUL is the
     # same promise, stated by delegation: strlen(token) is only meaningful
-    # for a terminated string. Without this, a function whose *other*
+    # for a terminated string. The bounded forms are deliberately absent --
+    # strncmp(s, "-0", 2) reads at most two bytes and promises nothing about
+    # termination. Treating it as evidence stopped parson's is_decimal(string,
+    # length) from pairing `string` with `length`, and manufactured an
+    # out-of-bounds read in a function that guards every access. Without this, a function whose *other*
     # parameter carries the length -- lwip_strnstr(buffer, token, n) -- has
     # that length applied to the string too, and the over-read lands inside
     # the checker's own strlen rather than in the code under test.
     r"\b(?:strlen|strcmp|strcpy|strcat|strchr|strrchr|strstr|strdup|strspn|"
     r"strcspn|strpbrk|strtok|atoi|atol|atof|strtol|strtoul|strtod)"
     r"\s*\(\s*(?:\([^)]*\)\s*)?{name}\s*[,)]",
-    r"\b(?:strncmp|strncpy|strncat|strnlen)\s*\(\s*(?:\([^)]*\)\s*)?{name}\s*,",
 )
 
 #: The NUL character literal, spelled without escapes so that nothing has to
