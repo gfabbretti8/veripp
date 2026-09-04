@@ -1002,6 +1002,16 @@ def _emit_buffer(
     return lines
 
 
+def _elaborated(type_: str) -> str:
+    """The type as a declaration must spell it: `struct pbuf`, not `pbuf`.
+
+    Only the cv-qualifiers come off. A `struct`/`union`/`enum` tag stays,
+    because in C it is part of the name unless a typedef says otherwise --
+    and keeping it is valid C++ too, so nothing needs to know the language.
+    """
+    return re.sub(r"^\s*(?:(?:const|volatile)\s+)+", "", type_).strip()
+
+
 def _decl_type(type_: str) -> str:
     """Declaration type for a harness local: drop a top-level reference."""
     t = re.sub(r"\s+", " ", type_).strip()
@@ -1479,9 +1489,16 @@ def _emit_object(
     with --assume (or let triage propose it) and the solver will check the
     property under it.
     """
-    type_name = param.pointee() if (param.is_pointer or param.is_reference) else param.type
+    spelled = param.pointee() if (param.is_pointer or param.is_reference) else param.type
+    # Two spellings of the same type, and they are not interchangeable. The
+    # bare name is what find_struct and the typedef table are keyed on; the
+    # elaborated one is what a DECLARATION has to say in C, where
+    # `struct ip_reassdata` has no typedef and `ip_reassdata x;` does not
+    # compile. Most C outside library headers is written that way, and the
+    # whole of lwIP was unreachable because of it.
+    declared = _elaborated(spelled)
     type_name = re.sub(
-        r"^\s*(?:(?:const|volatile|struct|union|class|enum)\s+)+", "", type_name
+        r"^\s*(?:(?:const|volatile|struct|union|class|enum)\s+)+", "", spelled
     ).strip()
 
     # Before asking what the fields could be, ask whether the library itself
@@ -1493,7 +1510,7 @@ def _emit_object(
             return _emit_from_factories(
                 param, type_name, factories, assumptions,
                 _find_destructor(source_text, type_name, signature.name, typedefs),
-                teardown,
+                teardown, declared,
             )
         chain = _find_constructor_chain(
             source_text, type_name, signature.name, typedefs
@@ -1504,7 +1521,7 @@ def _emit_object(
                 param, type_name, source_type, chain_factories, accessor,
                 assumptions,
                 _find_destructor(source_text, source_type, signature.name, typedefs),
-                teardown,
+                teardown, declared,
             )
 
     # cJSON passes its allocator table down as a parameter -- every call site
@@ -1521,9 +1538,9 @@ def _emit_object(
             f"the code an allocator that does not exist"
         )
         return [
-            f"{type_name} {storage} = {table};",
+            f"{declared} {storage} = {table};",
             f"{_decl_type(param.type)} {param.name} = &{storage};"
-            if param.is_pointer else f"{type_name}& {param.name} = {storage};",
+            if param.is_pointer else f"{declared}& {param.name} = {storage};",
         ]
 
     info = find_struct(source_text, type_name)
@@ -1543,11 +1560,11 @@ def _emit_object(
         )
         pass_as = (
             f"{_decl_type(param.type)} {param.name} = &{storage};"
-            if param.is_pointer else f"{type_name}& {param.name} = {storage};"
+            if param.is_pointer else f"{declared}& {param.name} = {storage};"
         )
-        return [f"{type_name} {storage};", f"{initializer}(&{storage});", pass_as]
+        return [f"{declared} {storage};", f"{initializer}(&{storage});", pass_as]
 
-    lines = [f"{type_name} {storage};"]
+    lines = [f"{declared} {storage};"]
     lines += _fill_fields(info, storage, 0, options, typedefs, source_text, assumptions,
                           seen={type_name})
     assumptions.append(
@@ -1557,10 +1574,8 @@ def _emit_object(
     )
     if param.is_pointer:
         lines.append(f"{_decl_type(param.type)} {param.name} = &{storage};")
-    elif param.is_reference:
-        lines.append(f"{type_name}& {param.name} = {storage};")
     else:
-        lines.append(f"{type_name}& {param.name} = {storage};")
+        lines.append(f"{declared}& {param.name} = {storage};")
     return lines
 
 
@@ -2034,7 +2049,7 @@ def _find_constructor_chain(
 def _emit_from_chain(
     param: Param, type_name: str, source_type: str, factories: list[str],
     accessor: str, assumptions: list[str], destructor: str | None,
-    teardown: list[str] | None,
+    teardown: list[str] | None, declared: str | None = None,
 ) -> list[str]:
     """Construct the thing that owns one, then ask it for the one we need."""
     holder = f"{param.name}_src"
@@ -2046,7 +2061,7 @@ def _emit_from_chain(
         f"`{type_name}` got it the same way. States reached by mutating the "
         "object afterwards are NOT explored"
     )
-    lines = [f"{source_type} *{holder} = 0;"]
+    lines = [f"{_elaborated(source_type)} *{holder} = 0;"]
     if len(factories) == 1:
         lines.append(f"{holder} = {factories[0]}();")
     else:
@@ -2057,7 +2072,7 @@ def _emit_from_chain(
         lines.append("}")
     lines += [
         f"VERIPP_ASSUME({holder} != 0);",
-        f"{type_name} *{storage} = {accessor}({holder});",
+        f"{declared or type_name} *{storage} = {accessor}({holder});",
         f"VERIPP_ASSUME({storage} != 0);",
         f"{_decl_type(param.type)} {param.name} = {storage};",
     ]
@@ -2073,6 +2088,7 @@ def _emit_from_chain(
 def _emit_from_factories(
     param: Param, type_name: str, factories: list[str], assumptions: list[str],
     destructor: str | None = None, teardown: list[str] | None = None,
+    declared: str | None = None,
 ) -> list[str]:
     """Let the solver choose which of the library's constructors ran."""
     storage = f"{param.name}_obj"
@@ -2082,7 +2098,7 @@ def _emit_from_factories(
         "can build is in scope and none that it cannot. States reached by "
         "mutating the object afterwards are NOT explored"
     )
-    lines = [f"{type_name} *{storage} = 0;"]
+    lines = [f"{declared or type_name} *{storage} = 0;"]
     if len(factories) == 1:
         lines.append(f"{storage} = {factories[0]}();")
     else:

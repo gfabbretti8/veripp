@@ -677,3 +677,54 @@ class TestStringFields:
         harness = self._harness(tmp_path, src=src, fn="first")
         assert any("data_len` is bounded" in a for a in harness.assumptions)
         assert "b_obj_data_items[4] = 0;" not in harness.code
+
+
+class TestUntypedefedStructs:
+    """`struct ip_reassdata` with no typedef -- most C outside libraries.
+
+    The harness stripped the `struct` tag to look the type up and then
+    declared storage with the bare name, which is valid C++ and is not valid
+    C. Every file in lwIP is written this way, so the whole of it was
+    unreachable: the harness generated fine and the frontend threw it out.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct reass { int len; struct reass *next; };\n"
+        "int datagram_len(struct reass *r) { return r->len; }\n"
+    )
+
+    def _code(self, tmp_path, src=None, fn="datagram_len"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn).code
+
+    def test_the_tag_survives_into_the_declaration(self, tmp_path):
+        code = self._code(tmp_path)
+        assert "struct reass r_obj;" in code
+        assert "\n    reass r_obj;" not in code
+
+    def test_a_nested_pointer_field_keeps_it_too(self, tmp_path):
+        assert "struct reass r_obj_next_target;" in self._code(tmp_path)
+
+    def test_a_typedef_name_is_left_alone(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct { int len; } box_t;\n"
+            "int size(box_t *b) { return b->len; }\n"
+        )
+        code = self._code(tmp_path, src=src, fn="size")
+        assert "box_t b_obj;" in code
+        assert "struct box_t" not in code
+
+    def test_a_constructor_built_object_keeps_it(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "struct node { int n; };\n"
+            "struct node *node_new(void) { return 0; }\n"
+            "int node_n(struct node *x) { return x->n; }\n"
+        )
+        p = tmp_path / "s.c"
+        p.write_text(src, encoding="utf-8")
+        code = generate(p, "node_n", HarnessOptions(use_constructors=True)).code
+        assert "struct node *x_obj = 0;" in code
