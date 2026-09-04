@@ -564,6 +564,17 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         ),
     )
     bounds.add_argument(
+        "--preprocess",
+        action="store_true",
+        help=_adv(
+            "resolve #if/#ifdef by running the C preprocessor over the "
+            "source, instead of reading it as text. veripp needs no build "
+            "system by default, and pays for it by refusing structs whose "
+            "members sit inside conditionals; this makes it see what the "
+            "compiler sees. Falls back to the text scan if no compiler runs."
+        ),
+    )
+    bounds.add_argument(
         "--constructors",
         action="store_true",
         help=_adv(
@@ -618,6 +629,7 @@ def _harness_options(args) -> HarnessOptions:
         link_sources=[s.resolve() for s in getattr(args, "link", [])],
         use_initializers=not getattr(args, "no_initializers", False),
         use_constructors=getattr(args, "constructors", False),
+        preprocess=getattr(args, "preprocess", False),
     )
 
 

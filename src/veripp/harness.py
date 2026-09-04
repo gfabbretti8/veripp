@@ -19,6 +19,7 @@ Two rules the generator never breaks:
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -79,6 +80,16 @@ class HarnessOptions:
     #: be found, instead of filling every field independently. Off means the
     #: broader-but-less-real question: every field combination, including ones
     #: the type's invariants forbid.
+    #: Resolve #if/#ifdef by running the C preprocessor over the source,
+    #: instead of reading the text and refusing what is ambiguous. veripp is
+    #: text-based on purpose -- it needs no build system -- but that means a
+    #: struct whose members sit inside conditionals cannot be modelled, and
+    #: it is refused rather than guessed at. Every function in lwIP's PPP
+    #: takes a `ppp_pcb *`, which is such a struct, so the whole of it was
+    #: unreachable. Opt-in, and it falls back to the text scan when no
+    #: compiler is available.
+    preprocess: bool = False
+
     use_initializers: bool = True
     #: Build an object by calling the library's own constructors -- the
     #: functions that RETURN one -- choosing between them nondeterministically
@@ -185,7 +196,14 @@ def nondet_for(type_: str, typedefs: dict[str, str] | None = None) -> str | None
     if canonical in _ENUMS:
         # Any representable value, not only the declared enumerators -- which
         # is what a caller can actually pass through an integer conversion.
-        return f"({canonical})VERIPP_NONDET_INT()"
+        #
+        # Cast with the spelling the declaration used: `enum eap_state_code`
+        # has no typedef, and in C the tag is part of the name. Same rule as
+        # for struct tags, and it surfaced the same way -- as a harness that
+        # would not compile.
+        spelled = re.sub(r"^\s*(?:(?:const|volatile)\s+)+", "", type_).strip()
+        cast = spelled if spelled.startswith("enum ") else canonical
+        return f"({cast})VERIPP_NONDET_INT()"
     nondet = _NONDET_BY_TYPE.get(canonical)
     if nondet is not None and canonical != normalize_type(type_):
         # A project typedef resolved to a scalar; cast so the harness compiles
@@ -215,7 +233,10 @@ def generate(
     signature = find_function(text, function)
     # Struct definitions usually live in the library's own header, not the .cpp
     # being targeted, so resolve types against both.
-    expanded = _with_local_includes(source, text, options.include_dirs)
+    expanded = (
+        (preprocess_source(source, options) if options.preprocess else None)
+        or _with_local_includes(source, text, options.include_dirs)
+    )
     # Linked TUs resolve callees, so their definitions must be visible
     # here too, or veripp reports stubs the run does not actually have.
     expanded = "\n".join([expanded, *_linked_text(options)])
@@ -314,6 +335,37 @@ def generate(
 
 
 
+
+
+#: Tried in order; the first that runs wins.
+_PREPROCESSORS = ("cc", "clang", "gcc")
+
+
+def preprocess_source(source: Path, options: HarnessOptions) -> str | None:
+    """The source as the compiler sees it, or None if that cannot be had.
+
+    Only the type universe is taken from this. The function under test is
+    still read from the file the user wrote, because macro-expanded bodies
+    are far harder to read back in a counterexample -- and the point of the
+    preprocessor here is the structs, not the code.
+    """
+    args = [
+        "-E", "-P", "-D__ESBMC__",
+        *(f"-I{d}" for d in options.include_dirs),
+        str(source),
+    ]
+    for compiler in _PREPROCESSORS:
+        try:
+            done = subprocess.run(
+                [compiler, *args], capture_output=True, text=True, timeout=120,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        # A missing header makes this useless, but a warning does not, and
+        # cc reports both on stderr. The output is what decides.
+        if done.stdout.strip():
+            return done.stdout
+    return None
 
 
 def _is_angle_only(text: str, name: str) -> bool:
