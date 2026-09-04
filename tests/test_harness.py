@@ -295,6 +295,73 @@ class TestCIdioms:
         assert "it_obj" in generate(p, "peek").code
 
 
+class TestTextSlices:
+    """A (buffer, length) pair whose body uses bounded str- routines on it.
+
+    Left free, the solver puts a NUL inside the slice, the routine stops
+    there, and the code is blamed for what it does with the "match". That
+    manufactured two counterexamples on real code -- tinyexpr's find_builtin
+    and parson's is_decimal -- and no tokeniser can produce either, because
+    the length a caller passes describes the text it passes with it.
+
+    The binary equivalents promise nothing of the sort, and the assumption
+    must not fire there: parson's confirmed UTF-8 over-read is in a function
+    that indexes its buffer directly, and assuming it away would have erased
+    the only real finding in that file.
+    """
+
+    def _assumptions(self, tmp_path, body, params="const char *s, int n"):
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            f"int scan({params}) {{ {body} }}\n",
+            encoding="utf-8",
+        )
+        return generate(p, "scan").assumptions
+
+    def test_a_bounded_str_routine_makes_the_slice_text(self, tmp_path):
+        assumptions = self._assumptions(tmp_path, 'return strncmp(s, "ab", n);')
+        assert any("no terminator among them" in a for a in assumptions)
+
+    def test_a_binary_routine_does_not(self, tmp_path):
+        """memcmp says nothing about NULs, and neither may veripp."""
+        assumptions = self._assumptions(tmp_path, 'return memcmp(s, "ab", n);')
+        assert not any("no terminator among them" in a for a in assumptions)
+
+    def test_plain_indexing_does_not(self, tmp_path):
+        assumptions = self._assumptions(tmp_path, "return n > 0 ? s[0] : 0;")
+        assert not any("no terminator among them" in a for a in assumptions)
+
+    def test_the_assumption_cannot_itself_read_out_of_bounds(self, tmp_path):
+        """A signed length is negative half the time, and casting it to
+        size_t made the assumption loop overrun the buffer it was about."""
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            'int scan(const char *s, int n) { return strncmp(s, "ab", n); }\n',
+            encoding="utf-8",
+        )
+        code = generate(p, "scan").code
+        assert "VERIPP_ASSUME(n >= 0);" in code
+        assert "veripp_i < 4UL &&" in code
+
+    def test_a_negative_length_is_stated_not_assumed_silently(self, tmp_path):
+        assumptions = self._assumptions(tmp_path, 'return strncmp(s, "ab", n);')
+        assert any("0 <= n <= 4" in a for a in assumptions)
+
+    def test_an_unsigned_length_needs_no_such_claim(self, tmp_path):
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "int scan(const char *s, size_t n) "
+            '{ return strncmp(s, "ab", n); }\n',
+            encoding="utf-8",
+        )
+        harness = generate(p, "scan")
+        assert "VERIPP_ASSUME(n >= 0);" not in harness.code
+        assert any("with n <= 4" in a for a in harness.assumptions)
+
+
 class TestRealWorldCPreprocessor:
     """Shapes found in zlib, the most deployed C library there is."""
 
