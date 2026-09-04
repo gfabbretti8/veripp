@@ -11,7 +11,7 @@ The headline is not the bugs. It is the ratio.
 | | count |
 |---|---:|
 | Functions proved free of the eight UB classes | **163** |
-| Real defects confirmed | **5** |
+| Real defects confirmed | **6** |
 | Counterexamples that turned out to be false | **19** |
 | veripp modelling defects that had to be fixed first | **26** |
 
@@ -27,7 +27,7 @@ intuition, and several looked *more* convincing than the real findings.
 |---|---|---:|---:|
 | lwIP | `def.c` string helpers | 1 | **3** |
 | cJSON | whole file, 116 functions | 35 | 0 |
-| cJSON_Utils | whole file, 38 functions | 6 | **1** |
+| cJSON_Utils | whole file, 38 functions | 6 | **2** |
 | nanopb | `pb_encode.c` | 11 | 0 |
 | mbedTLS 3.6 | base64 | 5 | 0 |
 | mbedTLS 3.6 | pem | 7 | 0 |
@@ -55,11 +55,12 @@ intuition, and several looked *more* convincing than the real findings.
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
 the fourth, an out-of-bounds read reachable from parson's **public** API
 with four bytes, is in [PARSON_UTF8_OVERREAD.md](PARSON_UTF8_OVERREAD.md);
-the fifth, a JSON Pointer that resolves to the wrong array element and lets
-a patch write there, is in
-[CJSON_UTILS_POINTER_INDEX.md](CJSON_UTILS_POINTER_INDEX.md). That one is
-not a memory-safety bug and no sanitizer fires on it. None is reported
-upstream.
+the fifth and sixth are both in cJSON_Utils' JSON Pointer handling -- a
+malformed array index that resolves to the wrong element, and escape
+decoding that makes `add` create a key under the wrong name -- and are in
+[CJSON_UTILS_JSON_POINTER.md](CJSON_UTILS_JSON_POINTER.md). Those two are
+**not** memory-safety bugs: AddressSanitizer and UndefinedBehaviorSanitizer
+are clean on both reproductions. None is reported upstream.
 
 ## The nine false positives
 
