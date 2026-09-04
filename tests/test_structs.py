@@ -842,6 +842,21 @@ class TestBaseClassByFirstMember:
         )
         assert "p_outer" not in self._harness(tmp_path, src=src).code
 
+    def test_a_field_gets_the_outer_storage_too(self, tmp_path):
+        """pbuf_dechain never casts its own argument -- it hands `p->next` to
+        pbuf_free, which does. A bare struct one link down fails just as
+        surely as a bare one at the top."""
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "struct buf { int len; struct buf *next; };\n"
+            "struct ref { struct buf b; int extra; };\n"
+            "int tail(struct buf *p)"
+            " { struct ref *r = (struct ref *)p->next; return r->extra; }\n"
+        )
+        code = self._harness(tmp_path, src=src, fn="tail").code
+        assert "struct ref p_outer_b_next_target;" in code
+        assert "p_outer.b.next = (struct buf *)&p_outer_b_next_target;" in code
+
     def test_a_cast_to_the_same_type_is_not_a_base(self, tmp_path):
         src = (
             '#include "veripp/contracts.hpp"\n'
@@ -894,3 +909,47 @@ class TestEveryLengthIsBounded:
         )
         code = self._harness(tmp_path, src=src, fn="total").code
         assert "VERIPP_ASSUME(s_obj.len <= 4);" not in code
+
+
+class TestCallbackFields:
+    """A callback field filled at random is a pointer to nowhere.
+
+    lwIP's pbuf_free does `pc->custom_free_function(p)` and was reported for
+    calling it. Null is no better -- the line above asserts it is not null.
+    A function that does nothing is the smallest thing that is callable.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct node;\n"
+        "typedef void (*free_fn)(struct node *n);\n"
+        "typedef int (*rank_fn)(struct node *n);\n"
+        "struct node { int kind; free_fn on_free; rank_fn rank; };\n"
+        "int run(struct node *n) { n->on_free(n); return n->rank(n); }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="run"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_a_void_callback_becomes_a_no_op(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "static void veripp_stub_free_fn(struct node *n) { }" in code
+        assert "n_obj.on_free = veripp_stub_free_fn;" in code
+
+    def test_a_returning_callback_returns_something(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "static int veripp_stub_rank_fn(struct node *n) {" in code
+        assert "return VERIPP_NONDET_INT();" in code
+
+    def test_each_stub_is_defined_once(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert code.count("static void veripp_stub_free_fn") == 1
+
+    def test_the_gap_is_stated(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("NOT modelled" in a and "on_free" in a for a in assumptions)
+
+    def test_an_ordinary_field_is_untouched(self, tmp_path):
+        assert "n_obj.kind = VERIPP_NONDET_INT();" in self._harness(tmp_path).code

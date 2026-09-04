@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from .cppsig import (
@@ -229,6 +230,7 @@ def generate(
     body: list[str] = []
     assumptions: list[str] = []
     teardown: list[str] = []
+    stub_preamble: list[str] = []
     hook_preamble, hook_body = _resolve_allocator_hooks(text, assumptions)
     body += hook_body
 
@@ -276,6 +278,13 @@ def generate(
             f"PROPOSED precondition (not validated against callers): {expr}"
         )
 
+    for name in dict.fromkeys(
+        re.findall(rf"= {_STUB_PREFIX}(\w+);", "\n".join(body))
+    ):
+        stub = _callback_stub(expanded, name, typedefs)
+        if stub is not None:
+            stub_preamble.append(stub)
+
     body.append("")
     body += _emit_call(signature, assumptions)
     if teardown:
@@ -295,7 +304,8 @@ def generate(
             " (link the defining source with --link)"
         )
     return Harness(
-        code=_render(source, signature, body, assumptions, hook_preamble),
+        code=_render(source, signature, body, assumptions,
+                     stub_preamble + hook_preamble),
         signature=signature,
         assumptions=assumptions,
         source=source,
@@ -1000,6 +1010,41 @@ def _emit_buffer(
         )
     lines.append(f"{_decl_type(param.type)} {param.name} = {storage};")
     return lines
+
+
+#: `typedef void (*pbuf_free_custom_fn)(struct pbuf *p);`
+_FUNCTION_POINTER_TYPEDEF_RE = (
+    r"typedef\s+([^;{{}}]*?)\(\s*\*\s*{name}\s*\)\s*\(([^;]*)\)\s*;"
+)
+
+#: Marker left in the body for a callback field; `generate` turns each one
+#: into a stub definition in the preamble. Emitting it here instead would
+#: mean threading the preamble through every field-filling call.
+_STUB_PREFIX = "veripp_stub_"
+
+
+def _callback_stub(source_text: str, type_name: str, typedefs: dict[str, str]) -> str | None:
+    """A no-op with the signature of `type_name`, if it is a function pointer.
+
+    A callback field filled nondeterministically is a pointer to nowhere, and
+    calling it fails whatever the code does -- lwIP's pbuf_free invokes
+    `pc->custom_free_function(p)` and was reported for it. Null is no better:
+    the line above asserts it is not null. A function that does nothing is
+    the smallest thing that is actually callable, and what it would really
+    have done is simply not modelled -- which is said, not hidden.
+    """
+    match = re.search(
+        _FUNCTION_POINTER_TYPEDEF_RE.format(name=re.escape(type_name)), source_text
+    )
+    if match is None:
+        return None
+    returns = match.group(1).strip()
+    params = " ".join(match.group(2).split()).strip() or "void"
+    body = ""
+    if returns not in ("void", ""):
+        nondet = nondet_for(returns, typedefs)
+        body = f" return {nondet if nondet else '0'};"
+    return f"static {returns} {_STUB_PREFIX}{type_name}({params}) {{{body} }}"
 
 
 def _elaborated_tag(source_text: str, name: str) -> str:
@@ -1741,6 +1786,15 @@ def _fill_fields(
         if nondet is not None:
             lines.append(f"{target} = {nondet};")
             continue
+        if _callback_stub(source_text, f.type, typedefs) is not None:
+            lines.append(f"{target} = {_STUB_PREFIX}{f.type};")
+            assumptions.append(
+                f"callback field `{target}` is a no-op with the right "
+                f"signature. What a real `{f.type}` would do is NOT modelled "
+                "-- but a nondeterministic function pointer points nowhere, "
+                "and calling one fails whatever the code under test does"
+            )
+            continue
         # cJSON carries its allocator table INSIDE parse_buffer, so the
         # nondeterministic fill reached it one level down and handed the
         # parser function pointers to nowhere.
@@ -1973,6 +2027,32 @@ def _fill_pointer_field(
             f"    {storage}[{_LOOP_VAR}] = (unsigned char)VERIPP_NONDET_CHAR();",
             f"{target} = (void *){storage};",
         ]
+
+    bare = re.sub(
+        r"^\s*(?:(?:const|volatile|struct|union|class)\s+)+", "", pointee
+    ).strip()
+    # No `seen` guard: the depth bound at the top of this function is what
+    # terminates the recursion, and `pbuf_custom` legitimately appears again
+    # one link down the chain -- which is where pbuf_free reaches it.
+    owner = _base_to_owner(source_text).get(bare)
+    if owner is not None:
+        outer = _try_struct(source_text, owner)
+        if outer is not None:
+            tag = _elaborated_tag(source_text, owner)
+            assumptions.append(
+                f"pointer field `{target}` points at the first member of a "
+                f"`{tag}`, because this file casts `{pointee}` to it. A bare "
+                f"`{pointee}` would be the claim that one never IS a `{tag}`, "
+                "and the members past it would be out of bounds by "
+                "construction"
+            )
+            lines = [f"{tag} {storage};"]
+            lines += _fill_fields(
+                outer, storage, depth + 1, options, typedefs, source_text,
+                assumptions, seen | {owner},
+            )
+            lines.append(f"{target} = ({_decl_type(f.type)})&{storage};")
+            return lines
 
     nested = _try_struct(source_text, pointee)
     if nested is None:
@@ -2249,7 +2329,7 @@ _MAX_BASE_DEPTH = 4
 
 
 def _first_member_chain(
-    source_text: str, outer: str, typedefs: dict[str, str]
+    source_text: str, outer: str, typedefs: dict[str, str] | None = None
 ) -> list[str]:
     """Types reachable by taking the first member, repeatedly.
 
@@ -2275,6 +2355,37 @@ def _first_member_chain(
         chain.append(inner)
         current = inner
     return chain
+
+
+#: Any `(struct U *)` cast in the file, wherever it appears.
+_ANY_DOWNCAST_RE = re.compile(
+    r"\(\s*(?:struct\s+|union\s+)?(\w+)\s*\*\s*\)"
+)
+
+
+@lru_cache(maxsize=32)
+def _base_to_owner(source_text: str) -> dict[str, str]:
+    """For each base type, the struct this file treats it as the head of.
+
+    A `struct pbuf` in an lwIP harness is not necessarily a bare pbuf: the
+    file casts pbufs to `struct pbuf_custom` and reads a member that only
+    exists on the larger one. Building the bare struct is not the neutral
+    choice, it is the claim that a pbuf is NEVER a pbuf_custom -- and
+    pbuf_free, reached from five different functions, fails on exactly that
+    claim. Building the outer struct admits both, since a pbuf_custom is a
+    pbuf.
+
+    The shortest chain wins: the point is to have the members that get read,
+    not to allocate the largest thing in the file.
+    """
+    owners: dict[str, tuple[int, str]] = {}
+    for candidate in dict.fromkeys(_ANY_DOWNCAST_RE.findall(scrub(source_text))):
+        chain = _first_member_chain(source_text, candidate, None)
+        for depth, base in enumerate(chain):
+            best = owners.get(base)
+            if best is None or depth < best[0]:
+                owners[base] = (depth, candidate)
+    return {base: owner for base, (_, owner) in owners.items()}
 
 
 def _find_owning_struct(
@@ -2303,7 +2414,10 @@ def _find_owning_struct(
             for link in _first_member_chain(source_text, candidate, typedefs)
         ):
             return candidate
-    return None
+    # No cast of this parameter, but the file may still treat the type as a
+    # base somewhere else -- pbuf_dechain never casts its own argument, and
+    # hands it to pbuf_free, which does.
+    return _base_to_owner(source_text).get(type_name)
 
 
 def _try_struct(source_text: str, type_name: str) -> StructInfo | None:
