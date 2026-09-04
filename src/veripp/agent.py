@@ -20,7 +20,9 @@ from . import term
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
 from .harness import HarnessError, generate, reachability_variant
 from .llm import LLMClient, LLMError, NullLLM
-from .triage import Diagnosis, TargetInfo, triage_counterexample
+from .triage import (
+    Diagnosis, TargetInfo, real_failures, triage_counterexample,
+)
 
 
 @dataclass
@@ -278,6 +280,7 @@ def verify_with_agent(
     attempts: list[VerifyResult] = []
     unwind_idx = 0
     timeout_idx = 0
+    looked_past_artifact = False
 
     while True:
         if len(attempts) >= budget.max_attempts:
@@ -309,6 +312,38 @@ def verify_with_agent(
         if result.outcome is Outcome.COUNTEREXAMPLE:
             diagnosis = triage_counterexample(target, source, result, llm)
             last_diagnosis = diagnosis
+            if diagnosis.kind == "harness_issue" and not looked_past_artifact:
+                # ESBMC stops at the first violation, so an artifact means
+                # nothing else in the function was checked at all. Ask again
+                # for a verdict on every property: either something real is
+                # behind it, or the artifact was the only thing wrong.
+                looked_past_artifact = True
+                wider = run(source, replace(config, multi_property=True))
+                attempts.append(wider)
+                if wider.outcome is Outcome.COUNTEREXAMPLE:
+                    real = real_failures(wider, source)
+                    if real:
+                        result = replace(wider, properties=real)
+                        diagnosis = triage_counterexample(
+                            target, source, result, llm
+                        )
+                        last_diagnosis = diagnosis
+                    else:
+                        # Every failure was the harness's. Nothing in the
+                        # code under test failed, which is worth saying --
+                        # it is not the same as not having looked.
+                        result = replace(
+                            wider, outcome=Outcome.VERIFIED, properties=[]
+                        )
+                        attempts.append(result)
+                        return AgentReport(
+                            final=result,
+                            attempts=attempts,
+                            diagnosis=diagnosis,
+                            accepted_preconditions=preconditions,
+                            vacuous=_is_vacuous(source, config),
+                            **context,
+                        )
             if (
                 diagnosis.kind in ("missing_assumption", "harness_issue")
                 and diagnosis.proposed_precondition

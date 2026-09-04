@@ -53,6 +53,12 @@ class VerifyConfig:
     div_by_zero_check: bool = True
     memory_leak_check: bool = True
     uninitialised_check: bool = True
+    #: Ask for a verdict on EVERY property instead of stopping at the first
+    #: violation. Off by default because deciding all of them costs more than
+    #: stopping at one, and timeouts are already the largest unhelpful
+    #: outcome. Switched on for a second look at a run whose only failure was
+    #: a harness artifact, where stopping first means nothing was checked.
+    multi_property: bool = False
     ub_shift_check: bool = True
     #: Usable only because veripp writes the harness. With unconstrained
     #: nondet doubles a/b is NaN for inf/inf, so this check reports every
@@ -106,6 +112,8 @@ class VerifyConfig:
             args.append("--unsigned-overflow-check")
         if self.memory_leak_check:
             args.append("--memory-leak-check")
+        if self.multi_property:
+            args.append("--multi-property")
         if self.uninitialised_check:
             args.append("--uninitialised-vars-check")
         # ESBMC's --ub-shift-check implicitly turns arithmetic overflow

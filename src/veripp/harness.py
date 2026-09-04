@@ -1127,12 +1127,84 @@ _HOOK_WRAPPERS: dict[str, str] = {
 }
 
 
+#: `#define internal_malloc malloc` -- cJSON writes its hook table in terms
+#: of these, so the table reads `{ internal_malloc, internal_free, ... }`.
+_ALLOCATOR_ALIAS_RE = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+(malloc|calloc|realloc|free)[ \t]*$",
+    re.M,
+)
+
+#: A file-scope struct of them: cJSON's
+#: `static internal_hooks global_hooks = { internal_malloc, internal_free,
+#: internal_realloc };`. The type's own definition gives the field names, in
+#: the order the initialiser fills them.
+_HOOK_TABLE_RE = re.compile(
+    r"^[ \t]*(?:static[ \t]+)?(?:struct[ \t]+)?(\w+)[ \t]+(\w+)[ \t]*="
+    r"[ \t]*\{([^{}]*)\}[ \t]*;",
+    re.M,
+)
+
+#: A function-pointer member, in declaration order: `void *(CDECL *allocate)
+#: (size_t size);`. Read straight from the struct body rather than through
+#: the signature parser, which has no reason to model these.
+_FUNCTION_POINTER_MEMBER_RE = re.compile(r"\(\s*\w*\s*\*\s*(\w+)\s*\)\s*\(")
+
+
+def _allocator_aliases(source_text: str) -> dict[str, str]:
+    return dict(_ALLOCATOR_ALIAS_RE.findall(source_text))
+
+
+def _hook_table_fields(source_text: str, type_name: str) -> list[str]:
+    """Function-pointer members of `type_name`, in declaration order."""
+    match = re.search(
+        r"\b(?:struct|typedef[ \t]+struct)\b[^{;]*\b" + re.escape(type_name)
+        + r"\b[^{;]*\{(.*?)\}", source_text, re.S,
+    )
+    if match is None:
+        match = re.search(
+            r"typedef[ \t]+struct\b[^{;]*\{(.*?)\}[ \t\n]*"
+            + re.escape(type_name) + r"[ \t]*;", source_text, re.S,
+        )
+    if match is None:
+        return []
+    return _FUNCTION_POINTER_MEMBER_RE.findall(match.group(1))
+
+
+def _hook_tables(source_text: str) -> dict[str, str]:
+    """Hook-table variables by their type: `{"internal_hooks": "global_hooks"}`."""
+    aliases = _allocator_aliases(source_text)
+    tables: dict[str, str] = {}
+    for type_name, table, initialiser in _HOOK_TABLE_RE.findall(source_text):
+        resolved = [aliases.get(e.strip(), e.strip())
+                    for e in initialiser.split(",")]
+        if any(r in _HOOK_WRAPPERS for r in resolved):
+            tables.setdefault(type_name, table)
+    return tables
+
+
 def _allocator_hooks(source_text: str) -> list[tuple[str, str]]:
-    """File-scope allocator hooks, as (variable, allocator) pairs."""
+    """File-scope allocator hooks, as (lvalue, allocator) pairs.
+
+    The lvalue is a plain variable for the scalar form and `table.field` for
+    the struct form; both are assignable from the harness, which includes the
+    library's source and so sees its statics.
+    """
+    aliases = _allocator_aliases(source_text)
     seen: dict[str, str] = {}
     for pattern in _ALLOCATOR_HOOK_RES:
         for name, allocator in pattern.findall(source_text):
             seen.setdefault(name, allocator)
+    for type_name, table, initialiser in _HOOK_TABLE_RE.findall(source_text):
+        entries = [e.strip() for e in initialiser.split(",")]
+        resolved = [aliases.get(e, e) for e in entries]
+        if not any(r in _HOOK_WRAPPERS for r in resolved):
+            continue
+        fields = _hook_table_fields(source_text, type_name)
+        if len(fields) != len(resolved):
+            continue
+        for field, allocator in zip(fields, resolved):
+            if allocator in _HOOK_WRAPPERS:
+                seen.setdefault(f"{table}.{field}", allocator)
     return sorted(seen.items())
 
 
@@ -1434,6 +1506,25 @@ def _emit_object(
                 _find_destructor(source_text, source_type, signature.name, typedefs),
                 teardown,
             )
+
+    # cJSON passes its allocator table down as a parameter -- every call site
+    # writes `&global_hooks`. Filling those function pointers at random gives
+    # the function an allocator that does not exist, and the first thing it
+    # allocates is unusable. Copy the table the library actually uses.
+    table = _hook_tables(source_text).get(type_name)
+    if table is not None:
+        storage = f"{param.name}_obj"
+        assumptions.append(
+            f"`{param.name}` is a copy of `{table}`, the library's own "
+            f"allocator table, which is what its call sites pass. Filling "
+            f"its function pointers nondeterministically instead would hand "
+            f"the code an allocator that does not exist"
+        )
+        return [
+            f"{type_name} {storage} = {table};",
+            f"{_decl_type(param.type)} {param.name} = &{storage};"
+            if param.is_pointer else f"{type_name}& {param.name} = {storage};",
+        ]
 
     info = find_struct(source_text, type_name)
 

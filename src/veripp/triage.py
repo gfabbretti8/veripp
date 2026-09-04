@@ -10,11 +10,11 @@ every proposal it produces goes back through ESBMC before it is believed.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .cppsig import SignatureError, find_function, scrub
-from .esbmc import VerifyResult
+from .esbmc import VerifyResult, ViolatedProperty
 from .harness import HarnessOptions
 from .llm import LLMClient, LLMError, TriageContext
 
@@ -88,6 +88,27 @@ def _stubbed_allocators(result: VerifyResult) -> list[str]:
     return sorted(a for a in result.stubbed_calls if a in _ALLOCATORS)
 
 
+#: How `Harness.write` names what it produces. A path without this prefix is
+#: the user's own file, not something veripp made.
+GENERATED_HARNESS_PREFIX = "veripp_harness_"
+
+
+def real_failures(result: VerifyResult, harness_path: Path) -> list[ViolatedProperty]:
+    """The violated properties that are not explained by the harness.
+
+    Only meaningful on a run that asked for a verdict on every property.
+    ESBMC otherwise stops at the first violation, so a single artifact hides
+    everything behind it -- and a scan reporting fifteen harness artifacts is
+    reporting fifteen functions about which nothing at all was checked.
+    """
+    return [
+        prop
+        for prop in result.properties
+        if mechanical_artifact(replace(result, properties=[prop]), harness_path)
+        is None
+    ]
+
+
 def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
     """Why this counterexample is an artifact, when that is decidable offline.
 
@@ -119,8 +140,15 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
             "to check this properly"
         )
     # A property that fails inside the generated file, rather than in the code
-    # under test, is by definition about the harness.
-    if prop.loc.file and Path(prop.loc.file).name == harness_path.name:
+    # under test, is by definition about the harness. `veripp verify FILE`
+    # with no --function has no generated harness -- the file under test IS
+    # the input -- and this rule would then call every finding in it an
+    # artifact, so the name has to say the file was generated.
+    if (
+        prop.loc.file
+        and harness_path.name.startswith(GENERATED_HARNESS_PREFIX)
+        and Path(prop.loc.file).name == harness_path.name
+    ):
         return (
             "the failing property is in the generated harness itself, not in "
             "the code under test"

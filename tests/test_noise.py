@@ -18,7 +18,10 @@ from veripp.esbmc import (
     ViolatedProperty,
 )
 from veripp.harness import HarnessOptions, generate
-from veripp.triage import Diagnosis, TargetInfo, mechanical_artifact, triage_counterexample
+from veripp.triage import (
+    Diagnosis, TargetInfo, mechanical_artifact, real_failures,
+    triage_counterexample,
+)
 
 SOURCE = """\
 #include "veripp/contracts.hpp"
@@ -123,6 +126,70 @@ class TestMechanicalArtifacts:
         assert isinstance(diagnosis, Diagnosis)
         assert diagnosis.kind == "harness_issue"
         assert "harness artifact" in diagnosis.explanation
+
+
+class TestLookingPastAnArtifact:
+    """ESBMC stops at the first violation, so one artifact hides the rest.
+
+    A scan reporting fifteen harness artifacts is reporting fifteen
+    functions about which nothing at all was checked -- which reads like a
+    clean result and is not one. Asking again for a verdict on every
+    property either finds something real behind the artifact or establishes
+    that the artifact was the only thing wrong.
+    """
+
+    HARNESS = Path("/tmp/veripp_harness_f.c")
+
+    def _result(self, *descriptions, file=None):
+        return VerifyResult(
+            Outcome.COUNTEREXAMPLE, VerifyConfig(),
+            properties=[
+                ViolatedProperty(
+                    loc=SourceLoc(file=file or "lib.c", line=1), description=d
+                )
+                for d in descriptions
+            ],
+        )
+
+    def test_the_artifacts_are_dropped_and_the_rest_kept(self):
+        real = real_failures(
+            self._result(
+                "dereference failure: free() of non-dynamic memory",
+                "dereference failure: array bounds violated",
+            ),
+            self.HARNESS,
+        )
+        assert [p.description for p in real] == [
+            "dereference failure: array bounds violated"
+        ]
+
+    def test_nothing_real_behind_an_artifact_is_an_empty_list(self):
+        assert real_failures(
+            self._result("dereference failure: free() of non-dynamic memory"),
+            self.HARNESS,
+        ) == []
+
+    def test_multi_property_is_asked_for_explicitly(self):
+        assert "--multi-property" in VerifyConfig(multi_property=True).to_args()
+        assert "--multi-property" not in VerifyConfig().to_args()
+
+    def test_a_file_that_veripp_did_not_generate_is_not_a_harness(self):
+        """`veripp verify FILE` with no --function has no generated harness.
+
+        The file under test is the input, so the rule that a failure inside
+        the harness is about the harness would have called every finding in
+        the user's own file an artifact.
+        """
+        theirs = Path("/home/me/project/parser.c")
+        assert mechanical_artifact(
+            self._result("array bounds violated", file=str(theirs)), theirs
+        ) is None
+
+    def test_a_failure_in_a_generated_harness_still_counts(self):
+        assert mechanical_artifact(
+            self._result("array bounds violated", file=str(self.HARNESS)),
+            self.HARNESS,
+        ) is not None
 
 
 class TestUnresolvedAllocator:
