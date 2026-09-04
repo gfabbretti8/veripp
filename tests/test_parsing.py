@@ -423,7 +423,25 @@ class TestFunctionLikeMacros:
         src = "#define LIMIT 4\nint LIMIT_of(int x) { return x; }\n"
         assert "LIMIT_of" in function_definitions(src)
 
-    def test_a_macro_and_a_function_of_the_same_name(self):
-        """The macro wins: that is what the compiler sees at every call."""
-        src = "#define wrap(x) { (x); }\nint other(void) { return 0; }\n"
-        assert function_definitions(src) == ["other"]
+    def test_a_name_that_is_both_keeps_its_function(self):
+        """mbedTLS defines asn1_find_named_data as a real function in one
+        branch of an #if and as a macro in the other. Excluding the name lost
+        the function and quietly dropped asn1write from 22 targets to 21 --
+        which is why the skip is of the macro BODY, not the name."""
+        src = (
+            "#if BUILD_A\n"
+            "static int wrap(int x) { return x; }\n"
+            "#else\n"
+            "#define wrap(x) ((x))\n"
+            "#endif\n"
+            "int other(void) { return 0; }\n"
+        )
+        assert function_definitions(src) == ["wrap", "other"]
+
+    def test_a_multi_line_macro_body_is_skipped_whole(self):
+        src = (
+            "#define ENCODE(n) \\\n"
+            "  { if (n) { *cp++ = (n); } }\n"
+            "int real_one(int x) { return x; }\n"
+        )
+        assert function_definitions(src) == ["real_one"]

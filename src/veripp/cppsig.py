@@ -1218,6 +1218,27 @@ _NOT_A_CALL = {
 _TRAILING_WORDS = "|".join(sorted(_TRAILING_QUALS - {"&", "&&"}))
 
 
+def _define_spans(source: str) -> list[tuple[int, int]]:
+    """Character ranges covered by `#define` directives, continuations included.
+
+    `scrub` blanks comments and string bodies but keeps offsets, so a span
+    measured on the raw source lines up with the scrubbed copy.
+    """
+    spans: list[tuple[int, int]] = []
+    for m in re.finditer(r"^[ \t]*#[ \t]*define\b", source, re.M):
+        end = m.end()
+        while True:
+            newline = source.find("\n", end)
+            if newline == -1:
+                end = len(source)
+                break
+            end = newline + 1
+            if not source[:newline].rstrip().endswith("\\"):
+                break
+        spans.append((m.start(), end))
+    return spans
+
+
 def function_definitions(source: str) -> list[str]:
     """Names of things that look like function definitions in `source`.
 
@@ -1232,14 +1253,19 @@ def function_definitions(source: str) -> list[str]:
     # refused, which put the file's coverage at 30% when it is really 80%.
     # A wrong denominator is its own failure: it hides a surface by making
     # the tool look like it already tried.
-    function_macros = set(
-        re.findall(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)\(", source, re.M)
-    )
+    #
+    # Excluding the NAME would be too much. mbedTLS defines
+    # asn1_find_named_data as a real function in one branch of an #if and as
+    # a macro in the other, and dropping the name lost the function. What is
+    # not a definition is the macro BODY, so that is what gets skipped.
+    macro_spans = _define_spans(source)
     names: list[str] = []
     seen: set[str] = set()
     for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", scrubbed):
         name = m.group(1)
-        if name in _NOT_A_CALL or name in _NOT_A_MEMBER or name in function_macros:
+        if name in _NOT_A_CALL or name in _NOT_A_MEMBER:
+            continue
+        if any(start <= m.start() < end for start, end in macro_spans):
             continue
         lparen = scrubbed.index("(", m.end() - 1)
         try:
