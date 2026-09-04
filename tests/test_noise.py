@@ -301,6 +301,26 @@ class TestAllocatorHooks:
         assert "veripp_hook_malloc" not in harness.code
         assert not any("allocator hooks" in a for a in harness.assumptions)
 
+    def test_a_hook_table_reached_through_a_field_is_resolved_too(self, tmp_path):
+        """cJSON carries its allocator table inside parse_buffer.
+
+        The nondeterministic fill reached it one level down and handed the
+        parser function pointers to nowhere.
+        """
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n#include <stdlib.h>\n'
+            "typedef struct { void *(*allocate)(size_t);"
+            " void (*deallocate)(void *); } hooks_t;\n"
+            "static hooks_t hooks = { malloc, free };\n"
+            "typedef struct { int n; hooks_t h; } ctx_t;\n"
+            "void *take(ctx_t *c) { return c->h.allocate(4); }\n",
+            encoding="utf-8",
+        )
+        harness = generate(p, "take")
+        assert "c_obj.h = hooks;" in harness.code
+        assert any("allocator table" in a for a in harness.assumptions)
+
     def test_a_resolved_hook_is_not_also_reported_as_unresolved(self, tmp_path):
         """It is a variable pointing at a body now, not a bodiless callee.
 

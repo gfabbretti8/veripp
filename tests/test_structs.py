@@ -554,3 +554,56 @@ class TestConstructorChains:
             "int node_n(node_t* n) { return n->n; }\n"
         )
         assert "node_next(" not in self._harness(tmp_path, src=src, fn="node_n").code
+
+
+class TestCursorInsideItsBuffer:
+    """content + length + offset: the offset is inside the buffer.
+
+    Filled independently the solver picks `length = 4, offset = 2**64-1` and
+    blames the library for the read. After cJSON's allocator was resolved,
+    that one combination was behind most of the counterexamples left in the
+    file.
+
+    The assumption is about the state the function is HANDED. A function that
+    advances the cursor past the end is still caught, because the check is on
+    what it does, not on what it was given.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "typedef struct { unsigned char *content; unsigned long length;"
+        " unsigned long offset; } buf_t;\n"
+        "int peek(buf_t *b) { return b->content[b->offset]; }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="peek"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_the_cursor_is_bounded_by_the_length(self, tmp_path):
+        assert ("VERIPP_ASSUME(b_obj.offset <= b_obj.length);"
+                in self._harness(tmp_path).code)
+
+    def test_it_is_disclosed_as_the_caller_s_invariant(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("cursor is inside the buffer" in a for a in assumptions)
+
+    def test_a_struct_with_no_counted_buffer_gets_no_such_claim(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct { int a; unsigned long offset; } plain_t;\n"
+            "int get(plain_t *p) { return (int)p->offset; }\n"
+        )
+        assert "offset <=" not in self._harness(tmp_path, src=src, fn="get").code
+
+    def test_two_lengths_are_too_ambiguous_to_pair(self, tmp_path):
+        """Say nothing rather than guess which length the cursor belongs to."""
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct { unsigned char *in; unsigned long in_len;"
+            " unsigned char *out; unsigned long out_len;"
+            " unsigned long offset; } io_t;\n"
+            "int peek(io_t *b) { return b->in[b->offset]; }\n"
+        )
+        assert "offset <=" not in self._harness(tmp_path, src=src).code

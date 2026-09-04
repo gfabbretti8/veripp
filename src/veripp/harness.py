@@ -1601,6 +1601,45 @@ def _pair_struct_fields(
     return pairs
 
 
+#: What a struct calls its cursor into its own buffer.
+_CURSOR_FIELD_NAMES = ("offset", "pos", "position", "index", "ix", "cursor",
+                       "read", "used", "consumed")
+
+
+def _cursor_fields(info: StructInfo, pairs: dict[str, str],
+                   typedefs: dict[str, str]) -> list[tuple[str, str]]:
+    """Cursor fields paired with the length they may not pass.
+
+    cJSON's `parse_buffer` is content + length + offset, and every function
+    that takes one is entitled to assume the offset is inside the buffer --
+    `can_read` maintains exactly that. Filled independently, the solver hands
+    it `length = 4, offset = 0xFFFFFFFFFFFFFFFF` and blames cJSON for the
+    read. That single combination accounted for most of the counterexamples
+    left in cJSON after the allocator was resolved: parse_string,
+    print_string_ptr, get_object_item and the four cJSON_*ObjectItem
+    functions that reach them.
+
+    A function that ADVANCES the cursor is where a real violation of this
+    would be found, and it is still checked there -- the assumption is on the
+    state the function is handed, not on what it does with it.
+    """
+    if not pairs:
+        return []
+    integers = {
+        f.name for f in info.fields
+        if not f.is_pointer and f.array_len is None and _is_integral(f.type, typedefs)
+    }
+    lengths = set(pairs.values())
+    cursors = [
+        name for name in integers
+        if name not in lengths and name.lower() in _CURSOR_FIELD_NAMES
+    ]
+    if len(lengths) != 1:
+        return []          # ambiguous: say nothing rather than guess a pair
+    length = next(iter(lengths))
+    return [(cursor, length) for cursor in sorted(cursors)]
+
+
 def _fill_fields(
     info: StructInfo,
     prefix: str,
@@ -1647,6 +1686,20 @@ def _fill_fields(
         if nondet is not None:
             lines.append(f"{target} = {nondet};")
             continue
+        # cJSON carries its allocator table INSIDE parse_buffer, so the
+        # nondeterministic fill reached it one level down and handed the
+        # parser function pointers to nowhere.
+        table = _hook_tables(source_text).get(
+            re.sub(r"^\s*(?:(?:const|volatile|struct)\s+)+", "", f.type).strip()
+        )
+        if table is not None:
+            lines.append(f"{target} = {table};")
+            assumptions.append(
+                f"field `{target}` is a copy of `{table}`, the library's own "
+                "allocator table, rather than nondeterministic function "
+                "pointers that point nowhere"
+            )
+            continue
         nested = _try_struct(source_text, f.type)
         if nested is not None and nested.name not in seen:
             lines += _fill_fields(
@@ -1659,6 +1712,15 @@ def _fill_fields(
                 "(ESBMC treats it as nondeterministic, but veripp did not "
                 "model its structure)"
             )
+    for cursor, length in _cursor_fields(info, pairs, typedefs):
+        constraints.append(f"VERIPP_ASSUME({prefix}.{cursor} <= {prefix}.{length});")
+        assumptions.append(
+            f"`{prefix}.{cursor}` is at most `{prefix}.{length}`: the cursor "
+            "is inside the buffer it indexes, which is what the caller "
+            "holding this object maintains. A cursor past the end is not "
+            "explored here -- the function that advances it is where that "
+            "would be a finding"
+        )
     for raw, why in info.unsupported.items():
         assumptions.append(f"member `{raw}` was not initialised: {why}")
     return lines + constraints
