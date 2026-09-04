@@ -82,6 +82,32 @@ READ of size 9 at 0x6020000000d8 thread T0
 Checked `lwip-tcpip/lwip` `master` (fetched 2026-09-05). The `case 'v'`
 block is unchanged: `strlen` first, clamp after.
 
+## Upstream pppd does not have this
+
+lwIP's `utils.c` is forked from `pppd`. Current `ppp-project/ppp` master
+(fetched 2026-09-05) has no `strlen` in this path at all:
+
+```c
+	    if (fillch == '0' && prec >= 0) {
+		n = prec;
+		termch = -1;	/* matches no unsigned char value */
+	    } else {
+		n = buflen;
+		if (prec != -1 && n > prec)
+		    n = prec;
+		termch = 0;	/* stop on null byte */
+	    }
+```
+
+It bounds `n` by the output buffer and the precision, and stops on a null
+byte *during the copy* with a `termch` sentinel rather than scanning ahead
+for one. That is the correct shape, and it is the shape lwIP's fork lacks.
+
+Whether pppd's version was always like this or was changed deliberately is
+not established here -- only that the two differ today, and that the
+difference is exactly this defect. It does mean the construct is not a
+design choice someone would defend.
+
 ## Severity
 
 * **Remote and pre-authentication.** PAP, CHAP and EAP are what run *before*
