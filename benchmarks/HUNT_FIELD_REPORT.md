@@ -12,10 +12,10 @@ The headline is not the bugs. It is the ratio.
 |---|---:|
 | Functions proved free of the eight UB classes | **163** |
 | Real defects confirmed | **6** |
-| Counterexamples that turned out to be false | **19** |
+| Counterexamples that turned out to be false | **32** |
 | veripp modelling defects that had to be fixed first | **26** |
 
-Every one of the nineteen false positives was caught by reading the
+Every one of the thirty-two false positives was caught by reading the
 assumptions veripp prints beside each result. Not one was caught by
 intuition, and several looked *more* convincing than the real findings.
 
@@ -153,6 +153,37 @@ nondeterministic struct with a NULL nested pointer).
     defined in the translation unit, so its write through `&test` is not
     modelled and `test` stays unconstrained. The same cause as
     `mbedtls_pem_write_buffer` above, four hundred lines of C apart.
+
+The remaining thirteen fall into four classes already named above, and are
+listed together because the class is the interesting part, not the function:
+
+* **An internal function called without the precondition its call sites
+  establish** — `mppe_rekey` (lwIP MPPE; `keylen` is a free `u8_t` in the
+  harness, and `mppe_init` sets it to exactly 16 or 8 or returns without
+  calling it), `snmp_asn1_enc_s32t` (`octets_needed = 65535` shifts by
+  524280, and every caller passes the 1–4 that `snmp_asn1_enc_s32t_cnt`
+  computes), `dns_call_found` and `dns_correct_response` (indexed by their
+  callers' loop bounds). With miniz's `tdefl_record_match` and mbedTLS's
+  `asn1_write_named_bitstring`, six instances. This is the largest class
+  after output buffers, and nothing in a signature can prevent it.
+* **A struct graph the library cannot build** — `detach_item_from_array`
+  and `insert_item_in_array` (cJSON_Utils) join `cJSON_DetachItemViaPointer`:
+  all three walk `->prev`, which is never null in cJSON's circular sibling
+  lists and freely null in a graph filled field by field. This is the class
+  `--sequence` exists to remove, and cJSON is out of solver budget for it.
+* **An output buffer with no length parameter** — `encode_string_as_pointer`
+  (cJSON_Utils; the caller sizes it with `pointer_encoded_length`),
+  `lcp_addci` and `ipcp_addci` (sized by the matching `*_cilen`),
+  `pppos_output_append` (assumes `PBUF_POOL_BUFSIZE`).
+* **Something outside the translation unit** — `lcp_extcode` and
+  `lcp_rprotrej` (the `protocols[]` definition lives in ppp.c),
+  `chap_input` and `chap_respond` (unlinked `pbuf_alloc`).
+
+And one that is none of those: `eap_state_name` indexes a table with an
+enum, and veripp gives an enum any representable value rather than only its
+declared enumerators. That is deliberate -- a caller can pass anything
+through an integer conversion -- but on a debug-only function whose callers
+pass a live state, it is noise.
 
 ## The twelve fixes this required
 
