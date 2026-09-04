@@ -166,6 +166,21 @@ end-to-end in a live stack, and is labelled as such.
   commonly enabled on devices that want to be reachable by NetBIOS name from
   Windows hosts.
 
+## Still present upstream
+
+Checked against `lwip-tcpip/lwip` `master` (fetched 2026-09-05), not just the
+2.2.0 tarball this hunt used. Unchanged: the same unbounded `for (;;)`, the
+same `LWIP_UNUSED_ARG(name_dec_len)`, and the same single length check in
+`netbiosns_recv` that validates only that the datagram is long enough to
+hold the two headers.
+
+A search of the CVE databases and lwIP's advisories for
+`netbiosns_name_decode` turned up nothing -- the only recent lwIP CVE that
+surfaced was CVE-2026-8836, which is SNMPv3. That is weak evidence: absence
+from a search is not absence of a report, and the bug may be known and
+unfixed rather than unknown. What it does establish is that the code in
+`master` today has the defect.
+
 ## Suggested fix
 
 The function already takes the length it needs to be given, and a bound on
