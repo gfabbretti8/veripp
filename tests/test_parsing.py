@@ -394,3 +394,36 @@ class TestANonTerminatingFunctionNeverReadsAsVerified:
             "a function that never terminates was reported as verified"
         )
         assert payload["terminates"] is not True
+
+
+from veripp.cppsig import function_definitions  # noqa: E402
+
+
+class TestFunctionLikeMacros:
+    """A macro with a braced body reads exactly like a definition.
+
+    lwIP's vj.c defines five -- ENCODE, ENCODEZ, DECODEL, DECODES, DECODEU --
+    and each was counted as a function and then refused for having no return
+    type, putting the file at "3 of 10 harnessable" when it is 4 of 5. A
+    wrong denominator is its own failure mode: it hides a surface by making
+    the tool look like it already tried and could not.
+    """
+
+    SRC = (
+        "#define ENCODE(n) { if (n) { *cp++ = (n); } }\n"
+        "#define DECODEL(f) { (f) = 1; }\n"
+        "int real_one(int x) { ENCODE(x); return x; }\n"
+    )
+
+    def test_a_function_like_macro_is_not_a_definition(self):
+        assert function_definitions(self.SRC) == ["real_one"]
+
+    def test_an_object_like_macro_does_not_hide_a_function(self):
+        """`#define ENCODE 4` takes no arguments and shadows nothing."""
+        src = "#define LIMIT 4\nint LIMIT_of(int x) { return x; }\n"
+        assert "LIMIT_of" in function_definitions(src)
+
+    def test_a_macro_and_a_function_of_the_same_name(self):
+        """The macro wins: that is what the compiler sees at every call."""
+        src = "#define wrap(x) { (x); }\nint other(void) { return 0; }\n"
+        assert function_definitions(src) == ["other"]

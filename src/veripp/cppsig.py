@@ -1226,11 +1226,20 @@ def function_definitions(source: str) -> list[str]:
     what it cannot model -- this only has to avoid missing real definitions.
     """
     scrubbed = scrub(source)
+    # A function-like macro with a braced body reads exactly like a
+    # definition. lwIP's vj.c defines five -- ENCODE, ENCODEZ, DECODEL,
+    # DECODES, DECODEU -- and each was counted as a function and then
+    # refused, which put the file's coverage at 30% when it is really 80%.
+    # A wrong denominator is its own failure: it hides a surface by making
+    # the tool look like it already tried.
+    function_macros = set(
+        re.findall(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)\(", source, re.M)
+    )
     names: list[str] = []
     seen: set[str] = set()
     for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", scrubbed):
         name = m.group(1)
-        if name in _NOT_A_CALL or name in _NOT_A_MEMBER:
+        if name in _NOT_A_CALL or name in _NOT_A_MEMBER or name in function_macros:
             continue
         lparen = scrubbed.index("(", m.end() - 1)
         try:
