@@ -186,6 +186,64 @@ class TestUnresolvedAllocator:
         ) is None
 
 
+class TestAllocatorHooks:
+    """`static JSON_Malloc_Function parson_malloc = malloc;`
+
+    The call through that pointer resolves, for the checker, to an intrinsic
+    with no body -- so every allocated pointer is unconstrained and fails at
+    its first use. Pointing the hook at a wrapper that calls malloc directly
+    restores the model without changing what the library does: the hook
+    already held that allocator.
+    """
+
+    def _harness(self, tmp_path, src):
+        p = tmp_path / "s.c"
+        p.write_text(src, encoding="utf-8")
+        return generate(p, "grow")
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n#include <stdlib.h>\n'
+        "typedef void *(*alloc_fn)(size_t);\n"
+        "static alloc_fn lib_malloc = malloc;\n"
+        "static void (*lib_free)(void *) = free;\n"
+        "char *grow(int n) { char *p = (char*)lib_malloc(4); lib_free(p);"
+        " return 0; }\n"
+    )
+
+    def test_the_hook_is_pointed_at_a_visible_body(self, tmp_path):
+        code = self._harness(tmp_path, self.SRC).code
+        assert "lib_malloc = veripp_hook_malloc;" in code
+        assert "lib_free = veripp_hook_free;" in code
+
+    def test_the_wrapper_calls_the_allocator_directly(self, tmp_path):
+        """Indirection is the whole problem; the wrapper must not add more."""
+        code = self._harness(tmp_path, self.SRC).code
+        assert "static void *veripp_hook_malloc(size_t n) { return malloc(n); }" in code
+
+    def test_it_is_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path, self.SRC).assumptions
+        assert any("allocator hooks" in a and "lib_malloc" in a
+                   for a in assumptions)
+
+    def test_a_file_with_no_hooks_gets_no_preamble(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <stdlib.h>\n'
+            "char *grow(int n) { return (char*)malloc(4); }\n"
+        )
+        harness = self._harness(tmp_path, src)
+        assert "veripp_hook_malloc" not in harness.code
+        assert not any("allocator hooks" in a for a in harness.assumptions)
+
+    def test_an_ordinary_assignment_is_not_a_hook(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <stdlib.h>\n'
+            "static int malloc_calls = 0;\n"
+            "char *grow(int n) { malloc_calls = malloc_calls + 1;"
+            " return (char*)malloc(4); }\n"
+        )
+        assert "veripp_hook" not in self._harness(tmp_path, src).code
+
+
 class TestNullSourceNote:
     """A null the harness introduced should be labelled as possibly ours.
 

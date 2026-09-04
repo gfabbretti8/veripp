@@ -1092,10 +1092,20 @@ def _comment_lines(assumptions: list[str]) -> str:
 #: this so callers can swap the allocator; the side effect is that the
 #: checker sees an indirect call to an INTRINSIC, loses its model of it, and
 #: hands back an unconstrained pointer that fails at the first use.
-_ALLOCATOR_HOOK_RE = re.compile(
-    r"^[ \t]*(?:static[ \t]+)?(?!return\b)[A-Za-z_]\w*[\w \t\*]*?[ \t\*]"
-    r"(\w+)[ \t]*=[ \t]*(malloc|calloc|realloc|free)[ \t]*;",
-    re.M,
+_ALLOCATOR_HOOK_RES = (
+    # Through a typedef: `static JSON_Malloc_Function parson_malloc = malloc;`
+    re.compile(
+        r"^[ \t]*(?:static[ \t]+)?(?!return\b)[A-Za-z_]\w*[\w \t\*]*?[ \t\*]"
+        r"(\w+)[ \t]*=[ \t]*(malloc|calloc|realloc|free)[ \t]*;",
+        re.M,
+    ),
+    # Spelled out: `static void *(*global_malloc)(size_t) = malloc;`
+    re.compile(
+        r"^[ \t]*(?:static[ \t]+)?[A-Za-z_][\w \t\*]*\([ \t]*\*[ \t]*"
+        r"(\w+)[ \t]*\)[ \t]*\([^;()]*\)[ \t]*=[ \t]*"
+        r"(malloc|calloc|realloc|free)[ \t]*;",
+        re.M,
+    ),
 )
 
 #: Wrapper bodies, by the allocator each stands in for. Calling malloc
@@ -1115,8 +1125,9 @@ _HOOK_WRAPPERS: dict[str, str] = {
 def _allocator_hooks(source_text: str) -> list[tuple[str, str]]:
     """File-scope allocator hooks, as (variable, allocator) pairs."""
     seen: dict[str, str] = {}
-    for name, allocator in _ALLOCATOR_HOOK_RE.findall(source_text):
-        seen.setdefault(name, allocator)
+    for pattern in _ALLOCATOR_HOOK_RES:
+        for name, allocator in pattern.findall(source_text):
+            seen.setdefault(name, allocator)
     return sorted(seen.items())
 
 
@@ -1405,6 +1416,17 @@ def _emit_object(
             return _emit_from_factories(
                 param, type_name, factories, assumptions,
                 _find_destructor(source_text, type_name, signature.name, typedefs),
+                teardown,
+            )
+        chain = _find_constructor_chain(
+            source_text, type_name, signature.name, typedefs
+        )
+        if chain is not None:
+            source_type, chain_factories, accessor = chain
+            return _emit_from_chain(
+                param, type_name, source_type, chain_factories, accessor,
+                assumptions,
+                _find_destructor(source_text, source_type, signature.name, typedefs),
                 teardown,
             )
 
@@ -1781,6 +1803,91 @@ def _find_destructor(
         if best is None or len(name) < len(best):
             best = name
     return best
+
+
+def _find_constructor_chain(
+    source_text: str, type_name: str, target: str, typedefs: dict[str, str]
+) -> tuple[str, list[str], str] | None:
+    """Reach `type_name` in two steps: construct something else, then ask it.
+
+    Half of a C API's handle types are never returned by a constructor. In
+    parson `JSON_Value` has three, but `JSON_Object` and `JSON_Array` have
+    none -- you get one by building a value and asking for it. Nineteen of
+    the file's functions take exactly those two types, so stopping at the
+    direct case leaves the larger half of the API on the field-filling path.
+
+    Returns (source type, its constructors, the accessor).
+    """
+    wanted = normalize_type(type_name, typedefs)
+    best: tuple[str, list[str], str] | None = None
+    for name in function_definitions(source_text):
+        if name == target:
+            continue
+        try:
+            sig = find_function(source_text, name)
+        except SignatureError:
+            continue
+        if len(sig.params) != 1 or not sig.params[0].is_pointer or not sig.body:
+            continue
+        if "*" not in sig.return_type:
+            continue
+        ret = re.sub(r"^\s*(?:(?:const|volatile|struct|union|class)\s+)+", "",
+                     sig.return_type.replace("*", " ")).strip()
+        if normalize_type(ret, typedefs) != wanted:
+            continue
+        source_type = re.sub(
+            r"^\s*(?:(?:const|volatile|struct|union|class)\s+)+", "",
+            sig.params[0].pointee(),
+        ).strip()
+        if normalize_type(source_type, typedefs) == wanted:
+            continue                      # T -> T is a walk, not construction
+        factories = _find_factories(source_text, source_type, target, typedefs)
+        if not factories:
+            continue
+        # Prefer the plainest accessor: json_value_get_object over
+        # json_object_get_wrapping_value.
+        if best is None or len(name) < len(best[2]):
+            best = (source_type, factories, name)
+    return best
+
+
+def _emit_from_chain(
+    param: Param, type_name: str, source_type: str, factories: list[str],
+    accessor: str, assumptions: list[str], destructor: str | None,
+    teardown: list[str] | None,
+) -> list[str]:
+    """Construct the thing that owns one, then ask it for the one we need."""
+    holder = f"{param.name}_src"
+    storage = f"{param.name}_obj"
+    assumptions.append(
+        f"`{param.name}` is what `{accessor}` returns for a `{source_type}` "
+        f"built by one of {', '.join(factories)} -- the solver chooses which, "
+        f"and the result is assumed non-null because a caller holding a "
+        f"`{type_name}` got it the same way. States reached by mutating the "
+        "object afterwards are NOT explored"
+    )
+    lines = [f"{source_type} *{holder} = 0;"]
+    if len(factories) == 1:
+        lines.append(f"{holder} = {factories[0]}();")
+    else:
+        lines.append(f"switch (VERIPP_NONDET_INT() % {len(factories)}) {{")
+        for index, name in enumerate(factories[:-1]):
+            lines.append(f"    case {index}: {holder} = {name}(); break;")
+        lines.append(f"    default: {holder} = {factories[-1]}(); break;")
+        lines.append("}")
+    lines += [
+        f"VERIPP_ASSUME({holder} != 0);",
+        f"{type_name} *{storage} = {accessor}({holder});",
+        f"VERIPP_ASSUME({storage} != 0);",
+        f"{_decl_type(param.type)} {param.name} = {storage};",
+    ]
+    if destructor is not None and teardown is not None:
+        teardown.append(f"{destructor}({holder});")
+        assumptions.append(
+            f"the harness frees the `{source_type}` that owns `{param.name}` "
+            f"with `{destructor}` after the call, as a caller would"
+        )
+    return lines
 
 
 def _emit_from_factories(

@@ -492,3 +492,65 @@ class TestLibraryConstructors:
         code = self._harness(tmp_path, src=src, fn="drive").code
         assert "ctx_new()" not in code
         assert "c_obj.step" in code
+
+
+class TestConstructorChains:
+    """Half of a C API's handle types are never returned by a constructor.
+
+    parson's JSON_Value has three; JSON_Object and JSON_Array have none, and
+    you get one by building a value and asking it. Nineteen of that file's
+    functions take exactly those two types, so stopping at the direct case
+    leaves the larger half of the API filling fields at random.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "typedef struct doc_t doc_t;\n"
+        "typedef struct row_t row_t;\n"
+        "struct row_t { int n; };\n"
+        "struct doc_t { row_t row; };\n"
+        "doc_t* doc_new(void) { return 0; }\n"
+        "void doc_free(doc_t* d) { (void)d; }\n"
+        "row_t* doc_row(doc_t* d) { return &d->row; }\n"
+        "int row_n(row_t* r) { return r->n; }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="row_n"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn, HarnessOptions(use_constructors=True))
+
+    def test_the_owner_is_built_and_then_asked(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "doc_new()" in code
+        assert "row_t *r_obj = doc_row(r_src);" in code
+
+    def test_the_accessor_result_is_assumed_non_null(self, tmp_path):
+        """A caller holding one got it the same way, so it is not null."""
+        assert "VERIPP_ASSUME(r_obj != 0);" in self._harness(tmp_path).code
+
+    def test_the_owner_is_freed_not_the_part(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "doc_free(r_src);" in code
+        assert "doc_free(r_obj);" not in code
+
+    def test_both_steps_are_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("doc_row" in a and "doc_new" in a for a in assumptions)
+
+    def test_a_direct_constructor_wins_over_a_chain(self, tmp_path):
+        """One step is a smaller assumption than two."""
+        src = self.SRC + "row_t* row_new(void) { return 0; }\n"
+        code = self._harness(tmp_path, src=src).code
+        assert "row_new()" in code
+        assert "doc_row" not in code
+
+    def test_a_same_type_accessor_is_a_walk_not_a_construction(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct node_t node_t;\n"
+            "struct node_t { node_t* next; int n; };\n"
+            "node_t* node_next(node_t* n) { return n->next; }\n"
+            "int node_n(node_t* n) { return n->n; }\n"
+        )
+        assert "node_next(" not in self._harness(tmp_path, src=src, fn="node_n").code
