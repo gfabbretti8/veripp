@@ -151,3 +151,86 @@ class TestSequenceFindsStatefulBugs:
         out = capsys.readouterr().out
         assert code == EXIT_VERIFIED
         assert "at most 5 calls" in out
+
+
+class TestCHandleSequences:
+    """Construct with the library's own constructor, drive, then free.
+
+    A single call on an object the harness invented is both a weak question
+    and a noisy one -- most of this project's false positives were struct
+    graphs filled field by field, describing objects the library cannot
+    build. An object the library built is well formed by construction, and a
+    sequence of its own functions is where a stateful C API's bugs live.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "#include <stdlib.h>\n"
+        "typedef struct list_t list_t;\n"
+        "struct list_t { int count; int cap; };\n"
+        "list_t *list_new(void) { return (list_t*)malloc(sizeof(list_t)); }\n"
+        "list_t *list_new_big(void) { return (list_t*)malloc(sizeof(list_t)); }\n"
+        "void list_free(list_t *l) { free(l); }\n"
+        "int list_count(list_t *l) { return l->count; }\n"
+        "void list_reserve(list_t *l, int n) { l->cap = n; }\n"
+        "void list_merge(list_t *a, list_t *b) { a->count += b->count; }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, **kw):
+        from veripp.harness import generate_c_sequence
+
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate_c_sequence(p, "list_t", HarnessOptions(max_calls=2), **kw)
+
+    def test_every_constructor_is_offered(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "list_new()" in code and "list_new_big()" in code
+        assert "VERIPP_ASSUME(veripp_handle != 0);" in code
+
+    def test_the_functions_are_driven_in_a_loop(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "for (int veripp_step = 0; veripp_step < 2; ++veripp_step) {" in code
+        assert "list_count(veripp_handle)" in code
+        assert "list_reserve(veripp_handle, n)" in code
+
+    def test_the_object_is_freed_once_at_the_end(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert code.count("list_free(veripp_handle);") == 1
+        assert "list_free" not in code.split("for (int veripp_step")[1].split("}")[0]
+
+    def test_the_deallocator_is_not_one_of_the_calls(self, tmp_path):
+        """Freeing mid-sequence and then using the handle is a caller's
+        error. Reporting it would say nothing about the library."""
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("deliberately NOT one of the calls" in a for a in assumptions)
+
+    def test_a_second_handle_parameter_is_refused(self, tmp_path):
+        """`list_merge(a, b)` -- borrowed or handed over? The signature does
+        not say, and either guess manufactures a finding."""
+        harness = self._harness(tmp_path)
+        assert "list_merge" not in harness.code.split("int main")[1]
+        assert any("borrowed or handed over" in a for a in harness.assumptions)
+
+    def test_the_call_set_can_be_narrowed(self, tmp_path):
+        code = self._harness(tmp_path, only=["list_count"]).code
+        assert "list_count(veripp_handle)" in code
+        assert "list_reserve(veripp_handle" not in code
+
+    def test_a_type_with_no_constructor_is_refused(self, tmp_path):
+        from veripp.harness import HarnessError, generate_c_sequence
+
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct box_t box_t;\n"
+            "struct box_t { int n; };\n"
+            "int box_get(box_t *b) { return b->n; }\n"
+        )
+        p = tmp_path / "s.c"
+        p.write_text(src, encoding="utf-8")
+        with pytest.raises(HarnessError, match="no constructor"):
+            generate_c_sequence(p, "box_t")
+
+    def test_the_bound_on_the_sequence_is_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("Longer sequences are NOT explored" in a for a in assumptions)

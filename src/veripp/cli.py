@@ -27,6 +27,7 @@ from .harness import (
     HarnessError,
     HarnessOptions,
     generate,
+    generate_c_sequence,
     generate_sequence,
 )
 from .llm import NullLLM, make_llm
@@ -148,6 +149,30 @@ def main(argv: list[str] | None = None) -> int:
 
     v = sub.add_parser("verify", help="verify a self-contained C++ file")
     _add_common_args(v)
+    # Only on `verify`: a sequence drives ONE object, which is not a question
+    # a whole-file scan asks.
+    v.add_argument(
+        "--sequence",
+        metavar="TYPE",
+        help="target C handle type; veripp builds one with the library's own "
+        "constructor, drives a nondeterministic sequence of every function "
+        "taking it, then frees it. The object is well formed by "
+        "construction, which is what makes a use-after-free or double-free "
+        "finding about the library rather than about the harness",
+    )
+    v.add_argument(
+        "--sequence-call",
+        dest="sequence_calls",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help=_adv(
+            "restrict --sequence to functions matching this glob "
+            "(repeatable). Every function in the sequence multiplies the "
+            "state space and drags in its own arguments, so driving one "
+            "subsystem is both tractable and usually the actual question"
+        ),
+    )
     v.add_argument("--no-llm", action="store_true", help="run the plain verifier pipeline offline")
     v.add_argument(
         "--model",
@@ -468,7 +493,8 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         "--max-calls",
         type=int,
         default=HarnessOptions.max_calls,
-        help=_adv("length of the generated call sequence for --class"),
+        help=_adv("length of the generated call sequence for --class "
+                  "or --sequence"),
     )
     what.add_argument(
         "--assert",
@@ -634,6 +660,11 @@ def _harness_options(args) -> HarnessOptions:
 
 
 def _build_harness(args) -> Harness:
+    if getattr(args, "sequence", None):
+        return generate_c_sequence(
+            args.source, args.sequence, _harness_options(args),
+            only=list(getattr(args, "sequence_calls", []) or []),
+        )
     if getattr(args, "cls", None):
         return generate_sequence(
             args.source,
@@ -1635,11 +1666,11 @@ def _config_for(args) -> VerifyConfig:
 def _verify(args) -> int:
     harness: Harness | None = None
     target = args.source
-    if args.function or getattr(args, "cls", None):
+    if args.function or getattr(args, "cls", None) or getattr(args, "sequence", None):
         try:
             harness = _build_harness(args)
         except (HarnessError, SignatureError) as exc:
-            what = args.function or args.cls
+            what = args.function or args.cls or args.sequence
             print(f"error: cannot harness `{what}`: {exc}", file=sys.stderr)
             _suggest_targets(args, what)
             return EXIT_USAGE

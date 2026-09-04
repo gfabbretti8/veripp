@@ -670,6 +670,29 @@ def _decl_head(scrubbed: str, name_start: int) -> tuple[int, bool]:
     return start, after_colon
 
 
+#: `CJSON_PUBLIC(cJSON *)` -- a macro wrapping the whole return type, which
+#: is how a C library marks its exports. cJSON spells it CJSON_PUBLIC, zlib
+#: ZEXTERN, miniz MZ_EXTERN, lwIP LWIP_DECLARE. veripp already knew not to
+#: mistake the parentheses for a constructor's initialiser list; it kept the
+#: wrapper in the return TYPE, so `CJSON_PUBLIC(cJSON *)` never matched
+#: `cJSON *` and no constructor or destructor for the type was ever found.
+_EXPORT_MACRO_RE = re.compile(r"^\s*[A-Za-z_]\w*\s*\((.*)\)\s*$", re.S)
+
+
+def _unwrap_export_macro(ret: str) -> str:
+    """`CJSON_PUBLIC(cJSON *)` -> `cJSON *`, leaving anything else alone."""
+    match = _EXPORT_MACRO_RE.match(ret)
+    if match is None:
+        return ret
+    inner = match.group(1).strip()
+    # A function POINTER return type also ends in parens -- `void (*)(int)` --
+    # and unwrapping that would produce nonsense. The wrapper's contents are
+    # a type; a function pointer's are a parameter list preceded by `(*)`.
+    if not inner or "(" in inner or "*" == inner:
+        return ret
+    return inner
+
+
 def _return_type(head: str, name: str) -> tuple[str, bool]:
     tokens = head.replace("\n", " ").split()
     is_static = "static" in tokens
@@ -679,6 +702,7 @@ def _return_type(head: str, name: str) -> tuple[str, bool]:
     ret = " ".join(kept).strip()
     # `Class::name` written as one token leaves the qualifier glued to the type.
     ret = re.sub(r"\b[A-Za-z_]\w*::\s*$", "", ret).strip()
+    ret = _unwrap_export_macro(ret)
     if not ret:
         raise SignatureError(
             f"could not determine the return type of `{name}`; constructors and "
