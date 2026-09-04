@@ -129,7 +129,7 @@ the solver then checks.
 be constructed without knowing the intended type. Refusing is correct there;
 guessing would produce a confident wrong answer.
 
-## Two ideas that measured worse
+## Two ideas that measured worse — one of which came back
 
 Objects are built with the library's own initialiser where one exists
 (`T_init(T*)`). The obvious extension is the *factory* shape many C APIs use
@@ -143,6 +143,28 @@ genuinely different objects — picking one narrows the question in a way the
 caller never asked for. And calling a real constructor drags allocation into
 every harness, which costs solver time that was buying proofs elsewhere.
 An initialiser filling a caller-owned object has neither problem.
+
+**Both objections turned out to be fixable, and the idea is back as
+`--constructors`.** The first was self-inflicted: nothing requires picking a
+factory. Offering all of them under a nondeterministic switch keeps every
+shape the library can build in scope, and is a *smaller* assumption than
+filling fields at random, not a larger one.
+
+The second was not really about allocation being expensive. It was about
+allocation being invisible: a library that lets callers swap its allocator
+calls through a function pointer, the checker cannot resolve that to its
+model of `malloc`, and every pointer that comes back is unconstrained. So
+the harness was paying for allocation and getting nothing for it — every
+constructor-built object failed at its first use. Pointing the hook at a
+wrapper that calls `malloc` directly costs nothing and makes the allocation
+real. On parson that took `json_value_free`, `json_value_equals`,
+`json_serialization_size` and `json_value_get_type` from counterexample to
+proof.
+
+It stays a flag rather than the default, for the one reason that did
+survive: an allocation and an accessor in front of every call is real solver
+time, and two of the parson functions it fixed became timeouts instead. The
+two modes ask different questions, and neither dominates.
 
 **Shrinking the bound when a run times out.** Timeouts are the largest
 unhelpful outcome left (22 of jansson's 88 functions, 39 of cJSON's), and a

@@ -12,10 +12,10 @@ The headline is not the bugs. It is the ratio.
 |---|---:|
 | Functions proved free of the eight UB classes | **159** |
 | Real defects confirmed (sanitizer-verified) | **4** |
-| Counterexamples that turned out to be false | **9** |
-| veripp modelling defects that had to be fixed first | **12** |
+| Counterexamples that turned out to be false | **15** |
+| veripp modelling defects that had to be fixed first | **20** |
 
-Every one of the nine false positives was caught by reading the
+Every one of the fifteen false positives was caught by reading the
 assumptions veripp prints beside each result. Not one was caught by
 intuition, and several looked *more* convincing than the real findings.
 
@@ -87,6 +87,36 @@ counterexamples (structs whose members sit inside `#ifdef` blocks, so the
 harness NULLed pointers it could not type), and `mz_inflateReset` (a
 nondeterministic struct with a NULL nested pointer).
 
+10. **`parson_strdup`, `parson_strndup`, `json_value_init_string`** — one
+    cause, three reports. parson lets callers swap its allocator, so it
+    calls through `static JSON_Malloc_Function parson_malloc = malloc`, and
+    an indirect call to an intrinsic leaves the checker with no model of it.
+    Every pointer downstream was unconstrained, and the first write to one
+    was reported as CWE-416 use-after-free.
+11. **`find_builtin`** (tinyexpr) — `strncmp(name, functions[i].name, len)`
+    with a NUL planted inside `name`. strncmp stops there and reports a
+    match, so the index that follows ran off the end of the string literal
+    `"abs"`. No tokeniser can produce it; identifiers do not contain NULs.
+12. **`is_decimal`** (parson) — the same shape.
+13. **`npr`** (tinyexpr) — `NaN on ieee_mul`, because `ncr` returns `NAN`
+    for `n < r` and tinyexpr uses NaN as its error value. Producing NaN is
+    defined IEEE behaviour, not undefined behaviour. Left unfixed on
+    purpose: NaN cannot come from two finite operands, so a NaN report
+    genuinely means something happened upstream, and a rule to suppress
+    these would hide the cases where that something is a bug.
+14. **`json_object_init`** (parson) — `capacity * sizeof(size_t)` overflows
+    at `capacity = 2^62`, `malloc` gets a small number, and the loop that
+    follows writes `capacity` entries into it. A textbook allocation-size
+    overflow, and unreachable: the only call site passes
+    `MAX(cell_capacity * 2, ...)`, so reaching it needs a previous
+    allocation of 2^64 bytes to have succeeded. The function is static.
+    *This one only appeared after the allocator was resolved* -- before
+    that, the run failed on the unconstrained pointer long before it got
+    here.
+15. **`json_serialize_string`** (parson) — an output buffer with no length
+    parameter, the largest noise class on real C and the third instance of
+    it in this report.
+
 ## The twelve fixes this required
 
 Ordered as encountered. Each was found because a counterexample failed
@@ -110,8 +140,26 @@ triage — none by a failing test.
 11. …falling back to the companion's name (`start` vs `bound`) when the
     body delegates, which otherwise cost 13 functions.
 12. `doctor` warns that arm64 hosts cannot parse ARM intrinsics.
+13. A pointer from an allocator with no body is an artifact, not a finding
+    -- but only when an allocator really is among the run's bodiless
+    functions, since the same properties fire on genuine use-after-free.
+14. The library's allocator hooks are pointed at wrappers that call the same
+    allocators directly, so the checker can see through the indirection at
+    all. This is the fix; 13 is the label for the cases it cannot reach.
+15. A resolved hook is no longer *also* reported as an unresolved callee.
+16. A buffer the body hands to a bounded `<string.h>` routine is text of the
+    given length, with no terminator inside it.
+17. A signed length parameter is non-negative -- left free it was negative
+    half the time, and every str- and mem- routine turns that into a huge
+    `size_t`.
+18. Objects can be built by the library's own constructors, all of them
+    offered at once so the solver picks (`--constructors`).
+19. ...including the handle types no constructor returns, reached by
+    constructing their owner and asking it.
+20. A constructor-built object is freed with the library's own deallocator,
+    so the leak in the harness does not answer instead of the question.
 
-All twelve are regression-clean at 578 tests.
+All twenty are regression-clean at 617 tests.
 
 ## Lessons that generalise
 
@@ -148,6 +196,28 @@ embedded, lightly audited code — lwIP's string helpers and parson's UTF-8
 validator. The famous libraries went 153 proofs to zero bugs. Sixteen ticks
 were spent on mbedTLS and miniz before switching targets on that evidence;
 the switch produced a finding in one tick.
+
+**An unresolved allocator poisons everything downstream of it, silently.**
+This was the single largest noise source found, and it hides as well as it
+shouts. Loudly: three parson functions reported as use-after-free, and 14 of
+cJSON's 33 counterexamples, all of them about `malloc` rather than the
+library. Quietly: with every allocated pointer unconstrained, runs fail at
+the first pointer they touch, so nothing *past* that point is ever checked
+-- `json_object_init`'s allocation-size overflow only became visible once
+the allocator was resolved. A tool that cannot see through a library's
+allocator is not checking that library's allocating code at all, and its
+output gives no hint of it.
+
+**Constructing an object is a different question from filling its fields,
+not a better one.** Field-filling asks about every field combination,
+including ones the type forbids; a constructor asks only about objects the
+library can build, and says nothing about states reached by mutating them.
+Turning constructors on took four parson functions from counterexample to
+proof -- `json_value_free` among them, which walks and frees the whole
+object graph and was unreachable while every object was random fields with
+a null pointer at depth two -- and took two others from counterexample to
+timeout, because a real allocation and an accessor now run in front of every
+call. That is why it is a flag and not the default.
 
 **Well-maintained C survives this.** mbedTLS produced 54 proofs and zero
 defects; miniz produced 57 and zero. That is the expected and correct
