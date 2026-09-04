@@ -355,6 +355,33 @@ branches and a nested loop, guarded by `*oid_len < oid_max_len`, with the
 first two writes covered by an `oid_max_len < 2` early return. That one
 veripp does prove.
 
+**The tool did not find its own best finding, and the reason is
+structural.** Scanning netbiosns.c reported `netbiosns_name_decode`
+**verified**:
+
+```
+  - `name_enc` is a NUL-terminated string of at most 4 characters
+```
+
+That is correct under the model it chose, and the model is the C convention:
+a `const char *` with no length parameter is a string. The defect is that
+the caller hands it a UDP packet, which has no terminator -- a violation of
+the contract by the CALLER, invisible to a verifier that checks one function
+at a time. Every assumption veripp printed was true; the conclusion was
+useless.
+
+The finding came from the targeting discipline, which is human, and from
+reading the function. That is worth stating plainly in a report that
+otherwise measures the tool.
+
+It is also fixable, and `--unterminated` now asks the other question --
+`char *` parameters modelled as buffers with no terminator, which is what a
+parser receives. With it, veripp finds the NetBIOS over-read on its own. It
+is opt-in and noisy by construction: on a genuine string API a finding
+there is a statement about the caller's contract rather than a defect, and
+the assumption block says so. Aimed at a packet parser, it asks exactly the
+right question.
+
 **Read the fuzzer's configuration before choosing a target, not after.**
 Four of the findings in this report were noticed to be outside the project's
 fuzzing after the fact. The fifth was found by inverting that: lwIP's

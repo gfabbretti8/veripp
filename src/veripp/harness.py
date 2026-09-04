@@ -99,6 +99,14 @@ class HarnessOptions:
     #: the harness and not about the code under test.
     setup_calls: list[str] = field(default_factory=list)
 
+    #: Model a `char *` parameter as a buffer that is NOT NUL-terminated.
+    #: The default is the C convention and is right for a string API. It is
+    #: wrong for a parser handed bytes off the wire, and it hides exactly the
+    #: bug that convention invites: lwIP's netbiosns_name_decode walks a
+    #: packet with no bound and no terminator, and veripp reported it
+    #: VERIFIED because it had supplied a terminator the network does not.
+    terminated_strings: bool = True
+
     use_initializers: bool = True
     #: Build an object by calling the library's own constructors -- the
     #: functions that RETURN one -- choosing between them nondeterministically
@@ -931,6 +939,24 @@ def _emit_lone_pointer(
         # written rather than walked, on the sizing path below.
         cap = options.max_array_len
         storage = f"{param.name}_str"
+        if not options.terminated_strings:
+            # The opposite question: is this safe when the caller hands it
+            # something that is not a C string? That is what a parser gets
+            # from the wire, and a walk-to-NUL then has nothing to stop it.
+            assumptions.append(
+                f"`{param.name}` is {cap} nondeterministic characters with "
+                "NO terminator, because --unterminated was asked for. A "
+                "counterexample here says the function is unsafe for a caller "
+                "that does not hand it a C string -- which is a statement "
+                "about the contract, and a real defect only where such a "
+                "caller exists"
+            )
+            return [
+                f"char {storage}[{cap}];",
+                f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+                f"    {storage}[{_LOOP_VAR}] = VERIPP_NONDET_CHAR();",
+                f"{_decl_type(param.type)} {param.name} = {storage};",
+            ]
         assumptions.append(
             f"`{param.name}` is a NUL-terminated string of at most {cap} "
             "characters (harness bound; string contents nondeterministic)"

@@ -650,3 +650,49 @@ class TestSetupCalls:
         for bad in ("heap = 0", "if (x) f()", "f(); g()"):
             with pytest.raises(HarnessError, match="not a call veripp will emit"):
                 self._harness(tmp_path, [bad])
+
+
+class TestUnterminatedStrings:
+    """The opposite question: what if the caller does not hand it a C string?
+
+    lwIP's netbiosns_name_decode walks a NetBIOS name two bytes at a time
+    with no counter and no end pointer, stopping only at a byte outside A-Z.
+    veripp reported it VERIFIED -- correctly, under the model it had chosen,
+    because it supplied a NUL the network does not. The defect is that the
+    caller hands it a packet buffer, and a function-local verifier cannot see
+    a caller.
+
+    --unterminated asks the other question, and finds it.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "int walk(const char *s) { int n = 0; while (*s >= 'A') { s++; n++; }"
+        " return n; }\n"
+    )
+
+    def _harness(self, tmp_path, terminated=True):
+        from veripp.harness import HarnessOptions, generate
+
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC, encoding="utf-8")
+        return generate(p, "walk", HarnessOptions(terminated_strings=terminated))
+
+    def test_the_terminator_is_not_supplied(self, tmp_path):
+        code = self._harness(tmp_path, terminated=False).code
+        assert "char s_str[4];" in code
+        assert "s_str[4] = '\\0';" not in code
+
+    def test_the_default_still_supplies_one(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "char s_str[5];" in code
+        assert "s_str[4] = '\\0';" in code
+
+    def test_what_a_finding_would_mean_is_stated(self, tmp_path):
+        assumptions = self._harness(tmp_path, terminated=False).assumptions
+        assert any("NO terminator" in a and "about the contract" in a
+                   for a in assumptions)
+
+    def test_the_default_assumption_is_unchanged(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("NUL-terminated string of at most 4" in a for a in assumptions)

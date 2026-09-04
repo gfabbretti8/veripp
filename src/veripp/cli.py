@@ -590,6 +590,18 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         ),
     )
     bounds.add_argument(
+        "--unterminated",
+        action="store_true",
+        help=_adv(
+            "model `char *` parameters as buffers with NO NUL terminator. "
+            "The default is the C convention and is right for a string API; "
+            "it is wrong for a parser handed bytes off the wire, and it "
+            "hides the bug that convention invites -- a walk-to-NUL with "
+            "nothing to stop it. Expect noise on genuine string APIs: a "
+            "finding here is about the caller's contract."
+        ),
+    )
+    bounds.add_argument(
         "--setup",
         dest="setup_calls",
         action="append",
@@ -671,6 +683,7 @@ def _harness_options(args) -> HarnessOptions:
         use_constructors=getattr(args, "constructors", False),
         preprocess=getattr(args, "preprocess", False),
         setup_calls=list(getattr(args, "setup_calls", []) or []),
+        terminated_strings=not getattr(args, "unterminated", False),
     )
 
 
