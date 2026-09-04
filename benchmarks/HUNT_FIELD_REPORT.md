@@ -11,7 +11,7 @@ The headline is not the bugs. It is the ratio.
 | | count |
 |---|---:|
 | Functions proved free of the eight UB classes | **163** |
-| Real defects confirmed | **7** |
+| Real defects confirmed | **8** |
 | Counterexamples that turned out to be false | **32** |
 | veripp modelling defects that had to be fixed first | **26** |
 
@@ -52,6 +52,7 @@ intuition, and several looked *more* convincing than the real findings.
 | lwIP | PPP: vj, pppos | 4 | 0 |
 | lwIP | PPP: mppe (MPPE) | 1 | 0 |
 | lwIP | netbiosns (NetBIOS responder) | — | **1** |
+| lwIP | smtp (client, auth setup) | — | **1** |
 | lwIP | SNMP BER/ASN.1 decoder | 10 | 0 |
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
@@ -59,7 +60,11 @@ the fourth, an out-of-bounds read reachable from parson's **public** API
 with four bytes, is in [PARSON_UTF8_OVERREAD.md](PARSON_UTF8_OVERREAD.md);
 the seventh is the most serious of them: an unbounded, remotely triggerable
 out-of-bounds read in lwIP's NetBIOS responder, from a single 50-byte UDP
-datagram, in [LWIP_NETBIOS_NAME_DECODE.md](LWIP_NETBIOS_NAME_DECODE.md).
+datagram, in [LWIP_NETBIOS_NAME_DECODE.md](LWIP_NETBIOS_NAME_DECODE.md); the
+eighth is the report's only out-of-bounds **write**, a hardcoded 64 against a
+configurable buffer in lwIP's SMTP client, in
+[LWIP_SMTP_AUTH_MEMSET.md](LWIP_SMTP_AUTH_MEMSET.md) -- not remote, not
+default, and diagnosed by the compiler, all of which is said there.
 The fifth and sixth are both in cJSON_Utils' JSON Pointer handling -- a
 malformed array index that resolves to the wrong element, and escape
 decoding that makes `add` create a key under the wrong name -- and are in
