@@ -295,6 +295,76 @@ other three fail to do.
 
 ---
 
+## Addendum: lwIP's own HTTP server reaches finding 1
+
+The original claim in this report was that these are leaf functions no
+fuzzer reaches, because reaching them means someone writing a harness for a
+string helper. That is true of the fuzzers. It is not true of lwIP.
+
+`lwip_strnstr` over-reads **only with a one-character token** -- with
+`tokenlen >= 2` the bound fails an iteration earlier and nothing is read
+past the end. So the question is which callers pass a token of length one.
+There are twelve call sites in the tree. Eleven pass `CRLF`, `CRLF CRLF`, or
+a header name. One does not:
+
+```c
+/* src/apps/http/httpd.c:2066, in http_parse_request() */
+left_len = (u16_t)(data_len - ((sp1 + 1) - data));
+sp2 = lwip_strnstr(sp1 + 1, " ", left_len);
+```
+
+That is the request-line parser looking for the space before `HTTP/1.1`,
+running on bytes straight off the socket. The scan runs to the bound
+whenever the URI region contains no space and no NUL -- which is to say, on
+any request line with no space after the URI:
+
+```
+GET /aaaaaaaa\r\n\r\n
+```
+
+Reproduced against `def.c`'s `lwip_strnstr` verbatim, with the buffer sized
+exactly as `http_parse_request` sizes it:
+
+```
+request 17 bytes, searching 13 bytes for a single space
+==75133==ERROR: AddressSanitizer: heap-buffer-overflow
+READ of size 1 at 0x603000001c71 thread T0
+    #0 lwip_strnstr httpd_strnstr.c:27
+0x603000001c71 is located 0 bytes after 17-byte region
+```
+
+### What this does and does not establish
+
+It establishes that finding 1 has a reachable in-tree call site, with the
+token length the defect requires, on attacker-controlled input. That is a
+different statement from the one this report opened with.
+
+It does **not** establish a remote heap overflow in stock lwIP, and the
+difference is worth spelling out, because `data` is one of two things:
+
+* **Chained pbufs** -- `data = httpd_req_buf`, a static
+  `char[LWIP_HTTPD_MAX_REQ_LENGTH + 1]`, with
+  `data_len <= LWIP_HTTPD_MAX_REQ_LENGTH`. The read lands on the final
+  element of that array. **In bounds**, by exactly the one byte of slack the
+  `+ 1` provides, and reads stale bytes from the previous request.
+* **A single pbuf** -- `data = p->payload`, `data_len = p->len`. The read
+  lands at `payload[len]`, which is inside the pool element unless `len`
+  equals the payload capacity (`PBUF_POOL_BUFSIZE`, TCP_MSS plus headers).
+  Pool elements are contiguous inside one static array, so even then the
+  byte is almost always still inside that array.
+
+So in stock lwIP this reads adjacent or stale bytes rather than crossing an
+allocation boundary. The value is not used -- only compared against `' '` --
+so the leak is into a control-flow decision, not into a response.
+
+What makes it worth recording anyway is that the safety here is
+circumstantial. It rests on a `+ 1` in one buffer's declaration and on pool
+elements being contiguous in another. A netif driver that hands up a
+`PBUF_RAM` sized exactly to the segment -- which the API permits and which
+custom drivers do -- gets the genuine out-of-bounds read that the
+reproduction above shows. The function is documented to read `n` bytes and
+reads `n + 1`, and every caller is relying on slack it was never promised.
+
 ## Severity
 
 Low, and worth being precise rather than dramatic:

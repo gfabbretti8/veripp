@@ -308,7 +308,7 @@ buffer, a `string` field one byte long. The proofs went *up* by four while
 the noise fell by twenty-nine, which is the shape to expect when the fix is
 to the model rather than to a threshold.
 
-**Go where the fuzzer is not.** This is now the same lesson three times, and
+**Go where the fuzzer is not.** This is now the same lesson four times, and
 it has produced every confirmed finding in this report. parson's
 confirmed over-read is in `json_value_init_string_with_len`, a construction
 API its fuzzers never call because they parse documents. lwIP ships its own
@@ -345,6 +345,25 @@ state -- which is the honest outcome and not a doubt about the code.
 branches and a nested loop, guarded by `*oid_len < oid_max_len`, with the
 first two writes covered by an `oid_max_len < 2` early return. That one
 veripp does prove.
+
+**"No caller reaches this" is a claim, and it needs checking like any
+other.** This report opened by saying lwIP's string helpers are leaf
+functions no fuzzer reaches. True of the fuzzers, and false of lwIP:
+`lwip_strnstr` over-reads only with a one-character token, eleven of its
+twelve call sites pass CRLF or a header name, and the twelfth is the HTTP
+request-line parser looking for the space before `HTTP/1.1`, on bytes off
+the socket. Any request line without a second space runs the scan to the
+bound.
+
+It does not follow that this is a remote heap overflow, and the difference
+took longer to establish than the reachability did. `data` is either a
+static buffer declared with exactly one byte of slack, or a pbuf payload
+inside a contiguous pool -- so in stock lwIP the byte read is adjacent or
+stale rather than outside an allocation. The safety is circumstantial: it
+rests on a `+ 1` in one declaration and on pool layout in the other, and a
+driver handing up a tightly sized `PBUF_RAM` gets the real thing. Recording
+both halves is the point. The first half alone overstates it and the second
+half alone would have buried a reachable call site.
 
 **Obscure beats famous.** Every real defect came from small, widely
 embedded, lightly audited code — lwIP's string helpers and parson's UTF-8
