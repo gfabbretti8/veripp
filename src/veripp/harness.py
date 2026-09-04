@@ -92,6 +92,13 @@ class HarnessOptions:
     #: compiler is available.
     preprocess: bool = False
 
+    #: Functions to call once, before anything else in the harness. A linked
+    #: translation unit usually has module state that its own init() sets up,
+    #: and nothing calls that init(): link lwIP's mem.c and every allocation
+    #: fails inside mem_malloc on a null heap pointer, which is a fact about
+    #: the harness and not about the code under test.
+    setup_calls: list[str] = field(default_factory=list)
+
     use_initializers: bool = True
     #: Build an object by calling the library's own constructors -- the
     #: functions that RETURN one -- choosing between them nondeterministically
@@ -258,6 +265,7 @@ def generate(
     stub_preamble: list[str] = []
     hook_preamble, hook_body = _resolve_allocator_hooks(text, assumptions)
     body += hook_body
+    body += _emit_setup_calls(options, assumptions)
 
     lengths = _pair_buffers_with_lengths(signature.params, typedefs,
                                          body=signature.body)
@@ -405,6 +413,31 @@ def _reject_if_compiled_out(source: Path, function: str, preprocessed: str) -> N
         f"header {source.name} is compiled with (for lwIP, a missing "
         "*_SUPPORT in lwipopts.h does exactly this)"
     )
+
+
+def _emit_setup_calls(
+    options: HarnessOptions, assumptions: list[str]
+) -> list[str]:
+    """Run the module initialisers the caller named, before anything else."""
+    if not options.setup_calls:
+        return []
+    for call in options.setup_calls:
+        # No further parens inside: `if (x) f()` matches a looser pattern,
+        # and what runs before the function under test has to be one call
+        # that a reader can see at a glance.
+        if not re.fullmatch(r"[A-Za-z_]\w*\s*\([^;{}()]*\)", call.strip()):
+            raise HarnessError(
+                f"`{call}` is not a call veripp will emit: --setup takes a "
+                "plain call such as `mem_init()`, so that what runs before "
+                "the function under test stays readable in the harness"
+            )
+    assumptions.append(
+        "the harness runs "
+        + ", ".join(c.strip() for c in options.setup_calls)
+        + " first, as the program would before reaching this code. Whatever "
+        "state those leave is what the function is checked against"
+    )
+    return [f"{call.strip().rstrip(';')};" for call in options.setup_calls]
 
 
 def _is_angle_only(text: str, name: str) -> bool:

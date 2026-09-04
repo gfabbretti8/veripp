@@ -602,3 +602,51 @@ class TestCompiledOutCode:
         p = tmp_path / "s.c"
         p.write_text(self.SRC, encoding="utf-8")
         assert "scaled(x)" in generate(p, "scaled", HarnessOptions()).code
+
+
+class TestSetupCalls:
+    """A linked module's state is set up by its own init(), and nothing calls it.
+
+    Link lwIP's mem.c to resolve its allocator and every allocation then
+    fails inside mem_malloc dereferencing a null heap pointer -- reported as
+    a real bug in httpd, three files away from anything httpd does. The heap
+    is null because mem_init() never ran.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "static int *heap;\n"
+        "static int store[4];\n"
+        "void heap_init(void) { heap = store; }\n"
+        "int take(int i) { return heap[i & 3]; }\n"
+    )
+
+    def _harness(self, tmp_path, setup=()):
+        from veripp.harness import HarnessOptions, generate
+
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC, encoding="utf-8")
+        return generate(p, "take", HarnessOptions(setup_calls=list(setup)))
+
+    def test_the_call_runs_first(self, tmp_path):
+        body = self._harness(tmp_path, ["heap_init()"]).code.split("int main")[1]
+        assert body.index("heap_init();") < body.index("take(i)")
+
+    def test_it_is_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path, ["heap_init()"]).assumptions
+        assert any("heap_init()" in a and "runs" in a for a in assumptions)
+
+    def test_several_run_in_order(self, tmp_path):
+        code = self._harness(tmp_path, ["heap_init()", "heap_init()"]).code
+        assert code.count("heap_init();") == 2
+
+    def test_nothing_is_emitted_without_it(self, tmp_path):
+        assert "heap_init" not in self._harness(tmp_path).code
+
+    def test_only_a_plain_call_is_accepted(self, tmp_path):
+        """Whatever runs before the target has to stay readable."""
+        from veripp.harness import HarnessError
+
+        for bad in ("heap = 0", "if (x) f()", "f(); g()"):
+            with pytest.raises(HarnessError, match="not a call veripp will emit"):
+                self._harness(tmp_path, [bad])

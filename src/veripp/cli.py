@@ -590,6 +590,20 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         ),
     )
     bounds.add_argument(
+        "--setup",
+        dest="setup_calls",
+        action="append",
+        default=[],
+        metavar="CALL",
+        help=_adv(
+            "call this once before the function under test, e.g. "
+            "--setup 'mem_init()'. A linked translation unit's module state "
+            "is set up by its own init(), and nothing calls that: link "
+            "lwIP's mem.c without it and every allocation fails inside "
+            "mem_malloc on a null heap. Repeatable."
+        ),
+    )
+    bounds.add_argument(
         "--preprocess",
         action="store_true",
         help=_adv(
@@ -656,6 +670,7 @@ def _harness_options(args) -> HarnessOptions:
         use_initializers=not getattr(args, "no_initializers", False),
         use_constructors=getattr(args, "constructors", False),
         preprocess=getattr(args, "preprocess", False),
+        setup_calls=list(getattr(args, "setup_calls", []) or []),
     )
 
 
