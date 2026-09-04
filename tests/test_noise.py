@@ -17,6 +17,7 @@ from veripp.esbmc import (
     VerifyResult,
     ViolatedProperty,
 )
+from veripp.cppsig import unresolved_extern_arrays
 from veripp.harness import HarnessOptions, generate
 from veripp.triage import (
     Diagnosis, TargetInfo, mechanical_artifact, real_failures,
@@ -350,6 +351,50 @@ class TestAllocatorHooks:
             " return (char*)malloc(4); }\n"
         )
         assert "veripp_hook" not in self._harness(tmp_path, src).code
+
+
+class TestUnresolvedExternArrays:
+    """`extern const struct protent* const protocols[];`
+
+    Declared in a header, defined in another translation unit. Without the
+    definition the checker has no size and no contents, so every index is out
+    of bounds and every walk to a terminator runs off the end. lwIP's
+    protocols[] ends in the NULL that stops the loops walking it, and with
+    ppp.c unlinked both lcp_rprotrej and lcp_extcode -- handlers for received
+    packets -- reported an out-of-bounds read on it.
+
+    veripp has always disclosed unresolved CALLEES. This is the same hole in
+    the same wall, on the data side, and it cost two false leads on
+    security-relevant code before anyone noticed it was silent.
+    """
+
+    DECL = "extern const int table[];\n"
+
+    def test_an_indexed_extern_array_is_disclosed(self):
+        assert unresolved_extern_arrays(
+            self.DECL, "int f(int i) { return table[i]; }"
+        ) == ["table"]
+
+    def test_a_defined_array_is_not(self):
+        source = self.DECL + "const int table[] = { 1, 2, 3 };\n"
+        assert unresolved_extern_arrays(
+            source, "int f(int i) { return table[i]; }"
+        ) == []
+
+    def test_an_array_the_body_never_indexes_is_not(self):
+        assert unresolved_extern_arrays(self.DECL, "int f(void) { return 0; }") == []
+
+    def test_a_local_array_is_not(self):
+        assert unresolved_extern_arrays(
+            "", "int f(int i) { int local[4] = {0}; return local[i]; }"
+        ) == []
+
+    def test_a_sized_extern_declaration_is_not_the_problem(self):
+        """`extern int table[8];` carries the size, which is what was
+        missing."""
+        assert unresolved_extern_arrays(
+            "extern const int table[8];\n", "int f(int i) { return table[i]; }"
+        ) == []
 
 
 class TestNullSourceNote:

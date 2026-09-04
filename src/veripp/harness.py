@@ -39,6 +39,7 @@ from .cppsig import (
     find_function,
     find_struct,
     function_definitions,
+    unresolved_extern_arrays,
     unresolved_callees,
     match_bracket,
     normalize_type,
@@ -311,6 +312,16 @@ def generate(
     if teardown:
         body.append("")
         body += teardown
+
+    missing_arrays = unresolved_extern_arrays(expanded, signature.body)
+    if missing_arrays:
+        assumptions.append(
+            "these arrays are declared but not defined in this translation "
+            f"unit, so they have NO size and NO contents: "
+            f"{', '.join(missing_arrays)}. Every index into one is out of "
+            "bounds and every walk to a terminator runs off the end, "
+            "whatever the code does (link the defining source with --link)"
+        )
 
     unresolved = unresolved_callees(expanded, signature.body)
     # A resolved hook is a variable, not a bodiless function, and saying its

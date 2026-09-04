@@ -1113,6 +1113,50 @@ def collect_enum_types(source: str) -> set[str]:
 _DECLARED_RE_TEMPLATE = r"\b{name}\s*\([^;{{}}]*\)\s*(?:const\s*)?;"
 
 
+#: `extern const struct protent* const protocols[];` -- an array declared
+#: here and defined in another translation unit.
+_EXTERN_ARRAY_RE = re.compile(
+    r"^[ \t]*extern\b[^;=()]*?\b(\w+)\s*\[\s*\]\s*;", re.M
+)
+
+
+def unresolved_extern_arrays(source: str, body: str) -> list[str]:
+    """Arrays `body` indexes that are declared here and defined elsewhere.
+
+    Without the definition the checker has no size and no contents, so every
+    index into one is out of bounds and every scan for a terminator runs
+    forever. lwIP's `protocols[]` is declared in ppp_impl.h, defined in
+    ppp.c, and ends in a NULL that stops the loops that walk it -- with
+    ppp.c unlinked, lcp_rprotrej and lcp_extcode both reported an
+    out-of-bounds read on a table they only ever walk to that NULL.
+
+    veripp discloses unresolved CALLEES and always has. This is the same
+    hole in the same wall: nothing about the data.
+    """
+    scrubbed_body = scrub(body)
+    used = set(re.findall(r"\b([A-Za-z_]\w*)\s*\[", scrubbed_body))
+    if not used:
+        return []
+    scrubbed_source = scrub(source)
+    unresolved: list[str] = []
+    for name in sorted(used):
+        if not re.search(
+            _EXTERN_ARRAY_RE.pattern.replace(r"(\w+)", re.escape(name)),
+            scrubbed_source, re.M,
+        ):
+            continue
+        # A definition is the same name followed by `[` and then either a
+        # size or an initialiser, without `extern`.
+        defined = re.search(
+            r"^(?![ \t]*extern\b)[ \t]*[A-Za-z_][^;=]*?\b"
+            + re.escape(name) + r"\s*\[[^\]]*\]\s*=",
+            scrubbed_source, re.M,
+        )
+        if defined is None:
+            unresolved.append(name)
+    return unresolved
+
+
 def unresolved_callees(source: str, body: str) -> list[str]:
     """Functions `body` calls that are declared here but defined elsewhere.
 
