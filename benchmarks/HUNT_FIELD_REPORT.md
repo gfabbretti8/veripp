@@ -46,7 +46,10 @@ intuition, and several looked *more* convincing than the real findings.
 | lwIP | PPP: ipcp | 17 | 0 |
 | lwIP | PPP: upap | 9 | 0 |
 | lwIP | PPP: chap-new | 8 | 0 |
-| lwIP | PPP: eap, vj | 3 | 0 |
+| lwIP | PPP: eap | 16 | 0 |
+| lwIP | PPP: chap_ms (MS-CHAP) | 11 | 0 |
+| lwIP | PPP: vj, pppos | 4 | 0 |
+| lwIP | SNMP BER/ASN.1 decoder | 10 | 0 |
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
 the fourth, an out-of-bounds read reachable from parson's **public** API
@@ -266,6 +269,21 @@ is 25 files of attacker-facing framing -- LCP, IPCP, CCP, EAP, PAP, CHAP,
 MS-CHAP, VJ decompression, HDLC -- and it is the oldest code in the tree.
 Reaching it took seven veripp fixes, because every function in it takes a
 `ppp_pcb *` and ppp_pcb is a struct built out of `#if` blocks.
+
+**Two invariants worth writing down, because veripp could not prove either
+and both are correct.** lwIP's VJ decompression initialises
+`comp->last_recv = 255` into a 16-entry `rstate[]`, and the implicit-index
+path indexes it with no bound check. It is safe because `vj_compress_init`
+also sets `VJF_TOSS`, and `VJF_TOSS` is cleared only on the two lines that
+immediately follow a bounds-checked assignment to `last_recv`. Three
+functions and one flag hold that together. veripp times out rather than
+proving it -- a pbuf chain plus sixteen saved header states is too much
+state -- which is the honest outcome and not a doubt about the code.
+
+`snmp_asn1_dec_oid` maintains `oid_ptr == oid + *oid_len` across two
+branches and a nested loop, guarded by `*oid_len < oid_max_len`, with the
+first two writes covered by an `oid_max_len < 2` early return. That one
+veripp does prove.
 
 **Obscure beats famous.** Every real defect came from small, widely
 embedded, lightly audited code — lwIP's string helpers and parson's UTF-8
