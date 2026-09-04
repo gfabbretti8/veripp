@@ -38,6 +38,15 @@ intuition, and several looked *more* convincing than the real findings.
 | miniz | zip | 34 | 0 |
 | parson | whole file, 144 functions | 30 | **1** |
 | tinyexpr | whole file | 18 | 0 |
+| lwIP | ip4_frag (IP reassembly) | 7 | 0 |
+| lwIP | pbuf | 11 | 0 |
+| lwIP | dns | 10 | 0 |
+| lwIP | PPP: lcp | 22 | 0 |
+| lwIP | PPP: ccp | 20 | 0 |
+| lwIP | PPP: ipcp | 17 | 0 |
+| lwIP | PPP: upap | 9 | 0 |
+| lwIP | PPP: chap-new | 8 | 0 |
+| lwIP | PPP: eap, vj | 3 | 0 |
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
 the fourth, an out-of-bounds read reachable from parson's **public** API
@@ -242,6 +251,21 @@ an allocator that returns nowhere, a parse cursor past the end of its own
 buffer, a `string` field one byte long. The proofs went *up* by four while
 the noise fell by twenty-nine, which is the shape to expect when the fix is
 to the model rather than to a threshold.
+
+**Go where the fuzzer is not.** This is the same lesson twice. parson's
+confirmed over-read is in `json_value_init_string_with_len`, a construction
+API its fuzzers never call because they parse documents. lwIP ships its own
+fuzzer in `test/fuzz`, which drives an ethernet frame through
+netif -> ip4 -> udp/tcp/dns -- and the three confirmed lwIP defects are in
+`def.c`, string helpers that path never touches. Scanning ip4_frag, pbuf and
+dns afterwards produced 28 proofs and nothing else, which is the expected
+result for code that is already fuzzed continuously.
+
+`PPP_SUPPORT` does not appear in lwIP's fuzzing configuration at all. That
+is 25 files of attacker-facing framing -- LCP, IPCP, CCP, EAP, PAP, CHAP,
+MS-CHAP, VJ decompression, HDLC -- and it is the oldest code in the tree.
+Reaching it took seven veripp fixes, because every function in it takes a
+`ppp_pcb *` and ppp_pcb is a struct built out of `#if` blocks.
 
 **Obscure beats famous.** Every real defect came from small, widely
 embedded, lightly audited code — lwIP's string helpers and parson's UTF-8
