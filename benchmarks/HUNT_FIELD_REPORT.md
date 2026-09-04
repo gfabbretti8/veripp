@@ -50,6 +50,7 @@ intuition, and several looked *more* convincing than the real findings.
 | lwIP | PPP: eap | 16 | 0 |
 | lwIP | PPP: chap_ms (MS-CHAP) | 11 | 0 |
 | lwIP | PPP: vj, pppos | 4 | 0 |
+| lwIP | PPP: mppe (MPPE) | 1 | 0 |
 | lwIP | SNMP BER/ASN.1 decoder | 10 | 0 |
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
@@ -228,6 +229,21 @@ unclear cursor directions was correct and immediately cost 13 of 20
 functions in one file — invisible from the change itself. A refusal that
 quietly erases coverage is its own failure mode; it needs a coverage
 regression check, not just a test suite.
+
+**A file that is compiled out reports as a file the tool cannot handle.**
+lwIP's mppe.c came back 0 of 7 harnessable, every function refused for
+taking a `ppp_pcb *` -- a type veripp had been constructing happily in five
+other PPP files. The cause was not veripp. `MPPE_SUPPORT` was missing from
+the hunt's lwipopts.h, so the whole file was inside a dead `#if` and the
+preprocessed source contained neither `ppp_pcb` nor `ppp_mppe_state`. With
+one line added to the configuration it is 7 of 7.
+
+This is the same failure mode as the miniz budget starvation and the
+function-like macros in vj.c, and it is now the third instance: an output
+that understates coverage reads as "the tool tried and this code defeated
+it", and the surface gets skipped. Nothing distinguishes it from a genuine
+refusal without going and looking. A `--preprocess` run that finds none of
+the file's own types is a signal worth reporting on its own.
 
 **Inconclusive results lie too.** miniz first reported 19/19 inconclusive,
 which reads as "this code defeats analysis". It was `-j 4` at a 40-second
