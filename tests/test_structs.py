@@ -1078,3 +1078,38 @@ class TestInOutPointerParameters:
         )
         with pytest.raises(HarnessError):
             self._harness(tmp_path, src=src, fn="deep")
+
+
+class TestUnterminatedStringFields:
+    """A parser gets its bytes through a field as often as an argument.
+
+    The terminator veripp supplies is its own invention in both places, so
+    --unterminated has to reach both or it only asks half the question.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+        "typedef struct node_t node_t;\n"
+        "struct node_t { char *name; node_t *next; };\n"
+        "int len(node_t *x) { return (int)strlen(x->name); }\n"
+    )
+
+    def _harness(self, tmp_path, terminated=True):
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC, encoding="utf-8")
+        return generate(p, "len", HarnessOptions(terminated_strings=terminated))
+
+    def test_the_field_loses_its_terminator(self, tmp_path):
+        code = self._harness(tmp_path, terminated=False).code
+        assert "char x_obj_name_target[4];" in code
+        assert "x_obj_name_target[4] = 0;" not in code
+
+    def test_the_default_keeps_it(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "char x_obj_name_target[5];" in code
+        assert "x_obj_name_target[4] = 0;" in code
+
+    def test_the_field_case_is_disclosed_too(self, tmp_path):
+        assumptions = self._harness(tmp_path, terminated=False).assumptions
+        assert any("NO terminator" in a and "x_obj.name" in a
+                   for a in assumptions)

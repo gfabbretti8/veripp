@@ -2624,6 +2624,22 @@ def _fill_pointer_field(
         # eleven remaining counterexamples were one `char *` field being
         # handed to strcmp.
         cap = options.max_array_len
+        if not options.terminated_strings:
+            # Same question as for a string PARAMETER: a parser often gets
+            # its bytes through a field rather than an argument, and the
+            # terminator is just as much the harness's invention there.
+            assumptions.append(
+                f"pointer field `{target}` is {cap} nondeterministic "
+                "characters with NO terminator, because --unterminated was "
+                "asked for. A counterexample here says the code is unsafe "
+                "when this field does not hold a C string"
+            )
+            return [
+                f"{pointee} {storage}[{cap}];",
+                f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+                f"    {storage}[{_LOOP_VAR}] = ({pointee})VERIPP_NONDET_CHAR();",
+                f"{target} = {storage};",
+            ]
         assumptions.append(
             f"pointer field `{target}` is a NUL-terminated string of at most "
             f"{cap} characters (harness bound; contents nondeterministic). "
