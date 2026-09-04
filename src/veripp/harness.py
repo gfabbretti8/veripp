@@ -949,7 +949,13 @@ _STRING_POINTEES = ("char", "unsigned char", "signed char")
 _TERMINATOR_TESTS = (
     r"while\s*\(\s*\*\s*{name}\s*\)",
     r"\*\s*{name}\s*(?:==|!=)\s*0",
-    r"{name}\s*\[\s*0\s*\]\s*(?:==|!=)\s*0",
+    # Any index, not only a literal 0. cJSON_Utils walks a JSON Pointer with
+    # `pointer[position] != '\0'`, and requiring the `[0]` spelling meant that
+    # buffer was modelled as four unterminated bytes -- so the loop ran off
+    # the end and decode_array_index_from_pointer was reported for an
+    # over-read it cannot commit. Testing ANY element against NUL is the
+    # same promise as testing the first one: the code stops at a terminator.
+    r"{name}\s*\[[^\]]*\]\s*(?:==|!=)\s*0",
     r"!\s*\*\s*{name}\b",
     r"\(\s*\*\s*{name}\s*\)\s*\[\s*0\s*\]\s*(?:==|!=)\s*0",
     # Handing the pointer to a <string.h> routine that stops at NUL is the

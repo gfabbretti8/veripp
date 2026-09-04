@@ -513,3 +513,42 @@ class TestFixedSizeWrites:
             "void fill(unsigned char *out, int n) { memset(out, 0, n); }\n"
         )
         assert not any("fixed-size" in a for a in self._assumptions(tmp_path, src))
+
+
+class TestTerminatorEvidenceAtAnyIndex:
+    """`pointer[position] != '\\0'` is the same promise as `pointer[0]`.
+
+    Requiring the literal `[0]` spelling meant cJSON_Utils' JSON Pointer
+    walk was modelled as four unterminated bytes, so the loop ran off the end
+    and decode_array_index_from_pointer was reported for an over-read it
+    cannot commit. Reading the function that false positive nominated is how
+    the real bug in it was found -- but the report itself was wrong, and a
+    wrong report is a cost whether or not it happens to point somewhere.
+    """
+
+    def _is_string(self, tmp_path, body, param="const unsigned char *p"):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            f"int walk({param}) {{ {body} }}\n"
+        )
+        (tmp_path / "s.c").write_text(src, encoding="utf-8")
+        return any("NUL-terminated string" in a
+                   for a in generate(tmp_path / "s.c", "walk").assumptions)
+
+    def test_a_variable_index_counts_as_terminator_evidence(self, tmp_path):
+        assert self._is_string(
+            tmp_path,
+            "unsigned i = 0; while (p[i] != 0) { i++; } return (int)i;",
+        )
+
+    def test_the_literal_zero_index_still_counts(self, tmp_path):
+        assert self._is_string(tmp_path, "return p[0] == 0 ? 1 : 0;")
+
+    def test_an_expression_index_counts(self, tmp_path):
+        assert self._is_string(
+            tmp_path, "unsigned i = 0; return p[i + 1] != 0 ? 1 : 0;"
+        )
+
+    def test_a_body_that_tests_no_terminator_is_not_a_string(self, tmp_path):
+        """An `unsigned char *` is binary data until the code says otherwise."""
+        assert not self._is_string(tmp_path, "return p[0] + p[1];")
