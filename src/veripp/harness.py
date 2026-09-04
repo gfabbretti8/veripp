@@ -283,6 +283,11 @@ def generate(
         body += teardown
 
     unresolved = unresolved_callees(expanded, signature.body)
+    # A resolved hook is a variable, not a bodiless function, and saying its
+    # side effects are unmodelled is now false. An assumption block is only
+    # useful if every line in it is true, so this one goes.
+    resolved_hooks = {name for name, _ in _allocator_hooks(text)}
+    unresolved = [c for c in unresolved if c not in resolved_hooks]
     if unresolved:
         assumptions.append(
             "these callees are declared but not defined in this translation "

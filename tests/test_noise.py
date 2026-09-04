@@ -234,6 +234,16 @@ class TestAllocatorHooks:
         assert "veripp_hook_malloc" not in harness.code
         assert not any("allocator hooks" in a for a in harness.assumptions)
 
+    def test_a_resolved_hook_is_not_also_reported_as_unresolved(self, tmp_path):
+        """It is a variable pointing at a body now, not a bodiless callee.
+
+        Saying both is a contradiction, and an assumption block is only worth
+        reading if every line in it is true.
+        """
+        assumptions = self._harness(tmp_path, self.SRC).assumptions
+        assert not any("lib_malloc" in a and "not defined" in a
+                       for a in assumptions)
+
     def test_an_ordinary_assignment_is_not_a_hook(self, tmp_path):
         src = (
             '#include "veripp/contracts.hpp"\n#include <stdlib.h>\n'
