@@ -230,6 +230,17 @@ class TestUnresolvedAllocator:
         )
         assert "--link" in why
 
+    def test_a_library_allocator_wrapper_counts_as_one(self):
+        """lwIP calls pbuf_alloc and mem_malloc; glib g_malloc; ffmpeg
+        av_malloc. They all say so in the name."""
+        for name in ("pbuf_alloc", "mem_malloc", "memp_malloc", "g_malloc"):
+            why = mechanical_artifact(
+                self._result("dereference failure: invalid pointer",
+                             f"WARNING: no body for function {name}\n"),
+                Path("/tmp/veripp_harness_f.c"),
+            )
+            assert why and name in why
+
     def test_the_same_property_stands_when_the_allocator_was_resolved(self):
         """Otherwise every real use-after-free would be filed as noise."""
         assert mechanical_artifact(

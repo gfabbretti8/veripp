@@ -84,8 +84,23 @@ _UNRESOLVED_ALLOCATION_PROPERTIES: tuple[str, ...] = (
 )
 
 
+def _is_allocator(name: str) -> bool:
+    """Whether a bodiless callee is one that hands back memory.
+
+    The C names are exact; everything else is a library wrapping them, and
+    they all say so in the name -- lwIP's `pbuf_alloc`, `mem_malloc` and
+    `memp_malloc`, glib's `g_malloc`, ffmpeg's `av_malloc`. Matching on
+    "alloc" is a heuristic, but it only ever applies to a callee that really
+    has no body in the run, and what it does is downgrade a counterexample to
+    an artifact with the reason spelled out. Being wrong costs a lead that
+    was about to be wrong anyway.
+    """
+    lowered = name.lower()
+    return name in _ALLOCATORS or "alloc" in lowered
+
+
 def _stubbed_allocators(result: VerifyResult) -> list[str]:
-    return sorted(a for a in result.stubbed_calls if a in _ALLOCATORS)
+    return sorted(a for a in result.stubbed_calls if _is_allocator(a))
 
 
 #: How `Harness.write` names what it produces. A path without this prefix is

@@ -953,3 +953,70 @@ class TestCallbackFields:
 
     def test_an_ordinary_field_is_untouched(self, tmp_path):
         assert "n_obj.kind = VERIPP_NONDET_INT();" in self._harness(tmp_path).code
+
+
+class TestInlineVtableMembers:
+    """`void (*handle_failure)(ppp_pcb *, unsigned char *, int);`
+
+    A callback declared in place rather than through a typedef -- which is
+    how a vtable is normally written. The struct parser does not model the
+    shape and dropped these members entirely, without even saying so: the
+    member was left uninitialised, the checker read it as nondeterministic,
+    and lwIP's chap_handle_status was reported for dispatching through it.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct ops {\n"
+        "  int code;\n"
+        "  void (*on_fail)(int a, char *b);\n"
+        "  int (*rank)(int a);\n"
+        "};\n"
+        "struct box { struct ops *ops; };\n"
+        "int go(struct box *b) { b->ops->on_fail(1, 0); return b->ops->rank(2); }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="go"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_each_member_gets_a_stub_with_its_own_signature(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "static void veripp_stub_ops__on_fail(int a, char *b) { }" in code
+        assert "static int veripp_stub_ops__rank(int a) {" in code
+
+    def test_the_members_are_assigned(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert ".on_fail = veripp_stub_ops__on_fail;" in code
+        assert ".rank = veripp_stub_ops__rank;" in code
+
+    def test_the_ordinary_member_is_still_filled(self, tmp_path):
+        assert ".code = VERIPP_NONDET_INT();" in self._harness(tmp_path).code
+
+    def test_the_gap_is_stated_rather_than_silent(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("on_fail" in a and "NOT modelled" in a for a in assumptions)
+
+
+class TestRunTogetherLengthNames:
+    """`us_user` beside `us_userlen`, with no separator.
+
+    lwIP's PAP state writes it that way. Unpaired, a 255-byte length was
+    applied to a four-character string and upap_sauthreq was reported for the
+    MEMCPY that follows -- a write, and a convincing-looking one.
+    """
+
+    def test_the_length_is_paired(self, tmp_path):
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "struct auth { char *us_user; unsigned char us_userlen;"
+            " int other; };\n"
+            "void copy(struct auth *a, char *out)"
+            " { memcpy(out, a->us_user, a->us_userlen); }\n",
+            encoding="utf-8",
+        )
+        harness = generate(p, "copy")
+        assert any("us_userlen" in a and "filled together" in a
+                   for a in harness.assumptions)

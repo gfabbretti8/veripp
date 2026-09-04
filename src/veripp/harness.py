@@ -1075,6 +1075,47 @@ _FUNCTION_POINTER_TYPEDEF_RE = (
 _STUB_PREFIX = "veripp_stub_"
 
 
+#: `void (*handle_failure)(ppp_pcb *pcb, unsigned char *inp, int len);` --
+#: a callback declared in place rather than through a typedef, which is how
+#: a vtable is usually written.
+_INLINE_CALLBACK_MEMBER_RE = re.compile(
+    r"(?P<ret>[A-Za-z_][\w \t\*]*?)\(\s*\*\s*(?P<name>\w+)\s*\)"
+    r"\s*\((?P<params>[^;{}]*)\)\s*;"
+)
+
+#: Separates the struct from the member in a stub's name.
+_STUB_SEP = "__"
+
+
+def _struct_body(source_text: str, type_name: str) -> str | None:
+    match = re.search(
+        r"\b(?:struct|union)\s+" + re.escape(type_name) + r"\b[^{;]*\{(.*?)\n\}",
+        source_text, re.S,
+    )
+    return match.group(1) if match else None
+
+
+def _inline_callback_members(
+    source_text: str, type_name: str
+) -> dict[str, tuple[str, str]]:
+    """Callback members of `type_name`, as name -> (return type, parameters).
+
+    The struct parser drops these -- they are not a shape it models -- and
+    dropping them silently is the worst of the options: the member is left
+    uninitialised, the checker treats it as nondeterministic, and calling it
+    fails. lwIP's CHAP dispatches through
+    `pcb->chap_client.digest->handle_failure(...)`, and chap_handle_status
+    was reported for it.
+    """
+    body = _struct_body(source_text, type_name)
+    if body is None:
+        return {}
+    return {
+        m.group("name"): (m.group("ret").strip(), " ".join(m.group("params").split()))
+        for m in _INLINE_CALLBACK_MEMBER_RE.finditer(body)
+    }
+
+
 def _callback_stub(source_text: str, type_name: str, typedefs: dict[str, str]) -> str | None:
     """A no-op with the signature of `type_name`, if it is a function pointer.
 
@@ -1085,6 +1126,15 @@ def _callback_stub(source_text: str, type_name: str, typedefs: dict[str, str]) -
     the smallest thing that is actually callable, and what it would really
     have done is simply not modelled -- which is said, not hidden.
     """
+    if _STUB_SEP in type_name:
+        struct_name, member = type_name.split(_STUB_SEP, 1)
+        found = _inline_callback_members(source_text, struct_name).get(member)
+        if found is None:
+            return None
+        returns, params = found
+        params = params or "void"
+        return _stub_definition(returns, f"{_STUB_PREFIX}{type_name}", params,
+                                typedefs)
     match = re.search(
         _FUNCTION_POINTER_TYPEDEF_RE.format(name=re.escape(type_name)), source_text
     )
@@ -1092,11 +1142,17 @@ def _callback_stub(source_text: str, type_name: str, typedefs: dict[str, str]) -
         return None
     returns = match.group(1).strip()
     params = " ".join(match.group(2).split()).strip() or "void"
+    return _stub_definition(returns, f"{_STUB_PREFIX}{type_name}", params, typedefs)
+
+
+def _stub_definition(
+    returns: str, name: str, params: str, typedefs: dict[str, str]
+) -> str:
     body = ""
-    if returns not in ("void", ""):
+    if returns.strip() not in ("void", ""):
         nondet = nondet_for(returns, typedefs)
         body = f" return {nondet if nondet else '0'};"
-    return f"static {returns} {_STUB_PREFIX}{type_name}({params}) {{{body} }}"
+    return f"static {returns} {name}({params}) {{{body} }}"
 
 
 def _elaborated_tag(source_text: str, name: str) -> str:
@@ -1744,6 +1800,11 @@ def _pair_struct_fields(
         stem = f.name.rsplit("_", 1)[0] if "_" in f.name else f.name
         candidates = [f"{stem}_{s}" for s in ("num", "count", "size", "len", "n")]
         candidates += [f"{f.name}_{s}" for s in ("num", "count", "size", "len")]
+        # Run together, with no separator: lwIP's PAP state holds `us_user`
+        # beside `us_userlen`, and `us_passwd` beside `us_passwdlen`. Unpaired,
+        # a 255-byte length was applied to a four-character string and
+        # upap_sauthreq was reported for the MEMCPY that follows.
+        candidates += [f"{f.name}{s}" for s in ("len", "size", "count", "num")]
         match = next((c for c in candidates if c in integers), None)
         if match is None and len(pointers) == 1:
             # An unambiguous struct: one buffer, one plausible count.
@@ -1900,6 +1961,20 @@ def _fill_fields(
                 "buffer. A real object whose totals run across a chain can "
                 "exceed it, and those states are NOT explored"
             )
+
+    for member, (returns, _params) in _inline_callback_members(
+        source_text, info.name
+    ).items():
+        lines.append(
+            f"{prefix}.{member} = "
+            f"{_STUB_PREFIX}{info.name}{_STUB_SEP}{member};"
+        )
+        assumptions.append(
+            f"callback member `{prefix}.{member}` is a no-op with the right "
+            "signature. What a real one would do is NOT modelled -- but the "
+            "struct parser does not model this shape, so it was previously "
+            "left uninitialised, and calling it failed whatever the code did"
+        )
 
     for cursor, length in _cursor_fields(info, pairs, typedefs):
         constraints.append(f"VERIPP_ASSUME({prefix}.{cursor} <= {prefix}.{length});")
