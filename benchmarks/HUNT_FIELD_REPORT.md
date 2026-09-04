@@ -11,7 +11,7 @@ The headline is not the bugs. It is the ratio.
 | | count |
 |---|---:|
 | Functions proved free of the eight UB classes | **163** |
-| Real defects confirmed | **8** |
+| Real defects confirmed | **9** |
 | Counterexamples that turned out to be false | **32** |
 | veripp modelling defects that had to be fixed first | **26** |
 
@@ -53,6 +53,7 @@ intuition, and several looked *more* convincing than the real findings.
 | lwIP | PPP: mppe (MPPE) | 1 | 0 |
 | lwIP | netbiosns (NetBIOS responder) | — | **1** |
 | lwIP | smtp (client, auth setup) | — | **1** |
+| lwIP | PPP: utils.c (`%.*v`) | — | **1** |
 | lwIP | SNMP BER/ASN.1 decoder | 10 | 0 |
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
@@ -64,7 +65,11 @@ datagram, in [LWIP_NETBIOS_NAME_DECODE.md](LWIP_NETBIOS_NAME_DECODE.md); the
 eighth is the report's only out-of-bounds **write**, a hardcoded 64 against a
 configurable buffer in lwIP's SMTP client, in
 [LWIP_SMTP_AUTH_MEMSET.md](LWIP_SMTP_AUTH_MEMSET.md) -- not remote, not
-default, and diagnosed by the compiler, all of which is said there.
+default, and diagnosed by the compiler, all of which is said there. The
+ninth is the widest-reaching: `%.*v` in lwIP's PPP printf calls `strlen` on
+the counted field it was handed a length for, across seven call sites in
+PAP, CHAP and EAP, all of them pre-authentication --
+[LWIP_PPP_SLPRINTF_V.md](LWIP_PPP_SLPRINTF_V.md).
 The fifth and sixth are both in cJSON_Utils' JSON Pointer handling -- a
 malformed array index that resolves to the wrong element, and escape
 decoding that makes `add` create a key under the wrong name -- and are in
@@ -354,6 +359,22 @@ state -- which is the honest outcome and not a doubt about the code.
 branches and a nested loop, guarded by `*oid_len < oid_max_len`, with the
 first two writes covered by an `oid_max_len < 2` early return. That one
 veripp does prove.
+
+**A function given a length that does not use it.** Three of the nine
+findings are this one shape, and it is now the most productive single thing
+to grep for:
+
+* `netbiosns_name_decode` takes `name_dec_len` and discards it with
+  `LWIP_UNUSED_ARG`, bounding writes by a constant and reads by nothing.
+* `ppp_vslprintf`'s `%.*v` takes a precision and calls `strlen` first,
+  clamping afterwards -- on fields lifted out of PAP, CHAP and EAP packets.
+* `smtp_base64_encode` takes a `target_len` and discards it, bounding its
+  writes with an assertion that release builds compile out. That one is safe
+  at every call site, which is the reminder that the shape is a lead and not
+  a finding.
+
+`grep -rn LWIP_UNUSED_ARG <module> | grep -iE 'len|size'` found the first
+and the third directly. The second was one line above a false positive.
 
 **The tool did not find its own best finding, and the reason is
 structural.** Scanning netbiosns.c reported `netbiosns_name_decode`
