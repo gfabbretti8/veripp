@@ -63,6 +63,30 @@ _MECHANICAL_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ),
 )
 
+#: Allocators whose absence makes every pointer downstream unconstrained.
+#: `parson_malloc`-style indirection is the usual way a body goes missing:
+#: the library declares a function POINTER so callers can swap the allocator,
+#: and the checker cannot resolve the call to its own model of malloc.
+_ALLOCATORS = frozenset({
+    "malloc", "calloc", "realloc", "aligned_alloc", "memalign",
+    "posix_memalign", "valloc", "pvalloc", "strdup", "strndup", "operator new",
+})
+
+#: Properties that follow from an unresolved allocator alone. Unlike the
+#: alignment rule above these fire on real bugs too, so they only count as
+#: artifacts when an allocator is actually among the stubbed calls.
+_UNRESOLVED_ALLOCATION_PROPERTIES: tuple[str, ...] = (
+    "dereference failure: invalid pointer",
+    "dereference failure: NULL pointer",
+    "dereference failure: Access to object out of bounds",
+    "dereference failure: Access of non-dynamic memory",
+    "forgotten memory",
+)
+
+
+def _stubbed_allocators(result: VerifyResult) -> list[str]:
+    return sorted(a for a in result.stubbed_calls if a in _ALLOCATORS)
+
 
 def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
     """Why this counterexample is an artifact, when that is decidable offline.
@@ -77,6 +101,23 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
     for needle, why in _MECHANICAL_ARTIFACTS:
         if needle in prop.description:
             return why
+    # A pointer that came from an allocator with no body is unconstrained, so
+    # touching it fails whatever the library does. Requiring the allocator to
+    # be genuinely stubbed keeps real use-after-free and wild-pointer findings
+    # -- which report the same properties -- out of this bucket.
+    stubbed = _stubbed_allocators(result)
+    if stubbed and any(
+        needle in prop.description for needle in _UNRESOLVED_ALLOCATION_PROPERTIES
+    ):
+        return (
+            f"the pointer comes from {', '.join(stubbed)}, which had no body "
+            "in this run (commonly an indirect call through a function "
+            "pointer the library exposes so the allocator can be swapped). "
+            "Its return value is therefore unconstrained, and any use of it "
+            "fails regardless of what the code under test does. Link the "
+            "allocator with --link, or point veripp at compile_commands.json, "
+            "to check this properly"
+        )
     # A property that fails inside the generated file, rather than in the code
     # under test, is by definition about the harness.
     if prop.loc.file and Path(prop.loc.file).name == harness_path.name:

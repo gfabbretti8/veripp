@@ -125,6 +125,67 @@ class TestMechanicalArtifacts:
         assert "harness artifact" in diagnosis.explanation
 
 
+class TestUnresolvedAllocator:
+    """A pointer from an allocator with no body fails whatever the code does.
+
+    Libraries expose the allocator as a function pointer so it can be swapped
+    -- parson's `parson_malloc`, cJSON's `global_hooks.allocate` -- and the
+    checker cannot resolve an indirect call to its own model of malloc. The
+    return value is then unconstrained and every use of it fails. Reproduced
+    in eight lines: the same code calling malloc directly verifies.
+
+    These properties fire on genuine use-after-free too, so the allocator has
+    to be demonstrably missing before the failure is written off.
+    """
+
+    def _result(self, description, raw):
+        return VerifyResult(
+            Outcome.COUNTEREXAMPLE, VerifyConfig(),
+            properties=[ViolatedProperty(
+                loc=SourceLoc(file="lib.c", line=1), description=description
+            )],
+            raw_output=raw,
+        )
+
+    STUBBED = "WARNING: no body for function malloc\n"
+
+    def test_a_pointer_from_a_bodiless_allocator_is_an_artifact(self):
+        why = mechanical_artifact(
+            self._result("dereference failure: invalid pointer", self.STUBBED),
+            Path("/tmp/veripp_harness_f.c"),
+        )
+        assert why and "malloc" in why and "unconstrained" in why
+
+    def test_the_way_out_is_named(self):
+        why = mechanical_artifact(
+            self._result("dereference failure: invalid pointer", self.STUBBED),
+            Path("/tmp/veripp_harness_f.c"),
+        )
+        assert "--link" in why
+
+    def test_the_same_property_stands_when_the_allocator_was_resolved(self):
+        """Otherwise every real use-after-free would be filed as noise."""
+        assert mechanical_artifact(
+            self._result("dereference failure: invalid pointer", ""),
+            Path("/tmp/veripp_harness_f.c"),
+        ) is None
+
+    def test_an_unrelated_bodiless_callee_does_not_excuse_a_pointer_bug(self):
+        assert mechanical_artifact(
+            self._result(
+                "dereference failure: invalid pointer",
+                "WARNING: no body for function log_message\n",
+            ),
+            Path("/tmp/veripp_harness_f.c"),
+        ) is None
+
+    def test_a_property_unrelated_to_the_pointer_still_stands(self):
+        assert mechanical_artifact(
+            self._result("division by zero", self.STUBBED),
+            Path("/tmp/veripp_harness_f.c"),
+        ) is None
+
+
 class TestNullSourceNote:
     """A null the harness introduced should be labelled as possibly ours.
 
