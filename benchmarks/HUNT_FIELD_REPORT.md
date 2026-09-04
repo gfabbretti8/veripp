@@ -11,7 +11,7 @@ The headline is not the bugs. It is the ratio.
 | | count |
 |---|---:|
 | Functions proved free of the eight UB classes | **163** |
-| Real defects confirmed (sanitizer-verified) | **4** |
+| Real defects confirmed | **5** |
 | Counterexamples that turned out to be false | **19** |
 | veripp modelling defects that had to be fixed first | **26** |
 
@@ -27,6 +27,7 @@ intuition, and several looked *more* convincing than the real findings.
 |---|---|---:|---:|
 | lwIP | `def.c` string helpers | 1 | **3** |
 | cJSON | whole file, 116 functions | 35 | 0 |
+| cJSON_Utils | whole file, 38 functions | 6 | **1** |
 | nanopb | `pb_encode.c` | 11 | 0 |
 | mbedTLS 3.6 | base64 | 5 | 0 |
 | mbedTLS 3.6 | pem | 7 | 0 |
@@ -53,8 +54,12 @@ intuition, and several looked *more* convincing than the real findings.
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
 the fourth, an out-of-bounds read reachable from parson's **public** API
-with four bytes, is in [PARSON_UTF8_OVERREAD.md](PARSON_UTF8_OVERREAD.md).
-None is reported upstream.
+with four bytes, is in [PARSON_UTF8_OVERREAD.md](PARSON_UTF8_OVERREAD.md);
+the fifth, a JSON Pointer that resolves to the wrong array element and lets
+a patch write there, is in
+[CJSON_UTILS_POINTER_INDEX.md](CJSON_UTILS_POINTER_INDEX.md). That one is
+not a memory-safety bug and no sanitizer fires on it. None is reported
+upstream.
 
 ## The nine false positives
 
@@ -255,7 +260,8 @@ buffer, a `string` field one byte long. The proofs went *up* by four while
 the noise fell by twenty-nine, which is the shape to expect when the fix is
 to the model rather than to a threshold.
 
-**Go where the fuzzer is not.** This is the same lesson twice. parson's
+**Go where the fuzzer is not.** This is now the same lesson three times, and
+it has produced every confirmed finding in this report. parson's
 confirmed over-read is in `json_value_init_string_with_len`, a construction
 API its fuzzers never call because they parse documents. lwIP ships its own
 fuzzer in `test/fuzz`, which drives an ethernet frame through
@@ -263,6 +269,13 @@ netif -> ip4 -> udp/tcp/dns -- and the three confirmed lwIP defects are in
 `def.c`, string helpers that path never touches. Scanning ip4_frag, pbuf and
 dns afterwards produced 28 proofs and nothing else, which is the expected
 result for code that is already fuzzed continuously.
+
+cJSON is the cleanest case of the three, because both halves were measured.
+Its core parser, which its fuzzer drives continuously, came back 35 proofs
+and zero defects. `cJSON_Utils.c` is in the same repository, ships in the
+same release, and is a separate translation unit the fuzzer does not build
+-- and the first read of the first function a counterexample nominated found
+a one-character bug that has been there for years.
 
 `PPP_SUPPORT` does not appear in lwIP's fuzzing configuration at all. That
 is 25 files of attacker-facing framing -- LCP, IPCP, CCP, EAP, PAP, CHAP,
