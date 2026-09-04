@@ -79,6 +79,12 @@ class HarnessOptions:
     #: broader-but-less-real question: every field combination, including ones
     #: the type's invariants forbid.
     use_initializers: bool = True
+    #: Build an object by calling the library's own constructors -- the
+    #: functions that RETURN one -- choosing between them nondeterministically
+    #: so no single shape is assumed. Off by default: it drags allocation into
+    #: every harness, which costs solver time, and the field-filling default
+    #: asks the broader question.
+    use_constructors: bool = False
     #: Translation units compiled alongside the harness (--link). Their
     #: definitions resolve callees, so they must be visible here too or veripp
     #: would warn about stubs the run does not actually have.
@@ -1258,6 +1264,15 @@ def _emit_object(
     type_name = re.sub(
         r"^\s*(?:(?:const|volatile|struct|union|class|enum)\s+)+", "", type_name
     ).strip()
+
+    # Before asking what the fields could be, ask whether the library itself
+    # will hand us one. Ahead of find_struct on purpose: when a constructor
+    # is available the struct's shape stops being the harness's business.
+    if options.use_constructors and param.is_pointer:
+        factories = _find_factories(source_text, type_name, signature.name, typedefs)
+        if factories:
+            return _emit_from_factories(param, type_name, factories, assumptions)
+
     info = find_struct(source_text, type_name)
 
     storage = f"{param.name}_obj"
@@ -1546,6 +1561,82 @@ def _find_initializer(
             continue
         return name
     return None
+
+
+#: How many constructors to offer the solver. Each is a branch and an
+#: allocation, so the whole point is lost if the switch dwarfs the function
+#: under test.
+_MAX_FACTORIES = 6
+
+
+def _find_factories(
+    source_text: str, type_name: str, target: str, typedefs: dict[str, str]
+) -> list[str]:
+    """Nullary functions in this file that RETURN a `type_name *`.
+
+    A type usually has several -- cJSON alone ships CreateObject, CreateArray,
+    CreateNull, CreateTrue -- and they produce genuinely different objects.
+    An earlier attempt picked one and measured worse, which is unsurprising:
+    choosing a single factory narrows the question in a way no caller asked
+    for. Returning all of them lets the harness pick nondeterministically, so
+    every constructible shape stays in scope while none of the impossible
+    ones a field-by-field fill invents do.
+    """
+    wanted = normalize_type(type_name, typedefs)
+    found: list[str] = []
+    for name in function_definitions(source_text):
+        if name == target:
+            continue
+        try:
+            sig = find_function(source_text, name)
+        except SignatureError:
+            continue
+        if sig.params:
+            continue                      # needs inputs we would have to invent
+        if not sig.body:
+            # Declared here, defined elsewhere: the allocation is not
+            # modelled, so calling it yields a pointer with nothing behind it
+            # and every dereference downstream fabricates a counterexample.
+            continue
+        ret = sig.return_type.replace("*", " ").strip()
+        if "*" not in sig.return_type:
+            continue
+        ret = re.sub(r"^\s*(?:(?:const|volatile|struct|union|class)\s+)+", "",
+                     ret).strip()
+        if normalize_type(ret, typedefs) != wanted:
+            continue
+        found.append(name)
+        if len(found) >= _MAX_FACTORIES:
+            break
+    return found
+
+
+def _emit_from_factories(
+    param: Param, type_name: str, factories: list[str], assumptions: list[str],
+) -> list[str]:
+    """Let the solver choose which of the library's constructors ran."""
+    storage = f"{param.name}_obj"
+    assumptions.append(
+        f"`{param.name}` is whatever one of {', '.join(factories)} returns -- "
+        "the harness lets the solver choose which, so every shape the library "
+        "can build is in scope and none that it cannot. States reached by "
+        "mutating the object afterwards are NOT explored"
+    )
+    lines = [f"{type_name} *{storage} = 0;"]
+    if len(factories) == 1:
+        lines.append(f"{storage} = {factories[0]}();")
+    else:
+        lines.append(f"switch (VERIPP_NONDET_INT() % {len(factories)}) {{")
+        for index, name in enumerate(factories[:-1]):
+            lines.append(f"    case {index}: {storage} = {name}(); break;")
+        lines.append(f"    default: {storage} = {factories[-1]}(); break;")
+        lines.append("}")
+    # A constructor that returned null models an allocation failure, which is
+    # a different question from the one being asked; the caller would have
+    # checked. Without this every such harness fails on the null instead.
+    lines.append(f"VERIPP_ASSUME({storage} != 0);")
+    lines.append(f"{_decl_type(param.type)} {param.name} = {storage};")
+    return lines
 
 
 def _try_struct(source_text: str, type_name: str) -> StructInfo | None:

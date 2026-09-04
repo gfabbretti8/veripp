@@ -395,3 +395,100 @@ class TestUnions:
         assert "s_obj.p =" not in harness.code
         assert any("union, left nondeterministic" in a for a in harness.assumptions)
         assert "LZ4_stream_t s_obj;" in harness.code
+
+
+class TestLibraryConstructors:
+    """Build an object by calling the functions that RETURN one.
+
+    An initialiser fills a struct the caller already owns, so it only helps
+    where the definition is in view. A constructor allocates and returns,
+    which is how most C APIs hand out their handle types -- and it is the
+    only way in when the definition is not visible at all.
+
+    An earlier attempt at this picked one constructor by shape and measured
+    worse. It should have: a type usually has several that build genuinely
+    different objects, and choosing one narrows the question in a way no
+    caller asked for. These tests pin that all of them are offered and the
+    solver decides.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "typedef struct node_t node_t;\n"
+        "struct node_t { int kind; node_t* next; };\n"
+        "node_t* node_new_leaf(void) { return 0; }\n"
+        "node_t* node_new_branch(void) { return 0; }\n"
+        "int node_kind(node_t* n) { return n->kind; }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="node_kind", **kw):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        kw.setdefault("use_constructors", True)
+        return generate(p, fn, HarnessOptions(**kw))
+
+    def test_every_constructor_is_offered_not_one(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "node_new_leaf()" in code
+        assert "node_new_branch()" in code
+        assert "VERIPP_NONDET_INT() % 2" in code
+
+    def test_a_null_return_is_assumed_away(self, tmp_path):
+        """Allocation failure is a different question; the caller checks."""
+        assert "VERIPP_ASSUME(n_obj != 0);" in self._harness(tmp_path).code
+
+    def test_the_object_replaces_field_filling(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "n_obj.kind" not in code
+        assert "n_obj_next_target" not in code
+
+    def test_the_narrower_question_is_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("node_new_leaf" in a and "node_new_branch" in a
+                   for a in assumptions)
+        assert any("NOT explored" in a for a in assumptions)
+
+    def test_it_is_off_by_default(self, tmp_path):
+        code = self._harness(tmp_path, use_constructors=False).code
+        assert "node_new_leaf" not in code
+        assert "n_obj.kind" in code
+
+    def test_a_constructor_is_not_called_on_itself(self, tmp_path):
+        src = self.SRC + "node_t* node_new_from(node_t* n) { return n; }\n"
+        code = self._harness(tmp_path, src=src, fn="node_new_from").code
+        assert "node_new_from()" not in code
+
+    def test_a_constructor_needing_arguments_is_not_one(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct box_t box_t;\n"
+            "struct box_t { int n; };\n"
+            "box_t* box_new(int n) { (void)n; return 0; }\n"
+            "int box_get(box_t* b) { return b->n; }\n"
+        )
+        code = self._harness(tmp_path, src=src, fn="box_get").code
+        assert "box_new" not in code
+        assert "b_obj.n" in code
+
+    def test_a_constructor_of_another_type_is_not_one(self, tmp_path):
+        src = self.SRC + "int* int_new(void) { return 0; }\n"
+        assert "int_new()" not in self._harness(tmp_path, src=src).code
+
+    def test_a_constructor_that_is_only_declared_is_not_used(self, tmp_path):
+        """Its allocation is in another translation unit, so it is not modelled.
+
+        Calling it would hand the harness a pointer with nothing behind it,
+        and every dereference downstream would fail on a buffer the real
+        constructor would have allocated. That is a fabricated counterexample,
+        which is worse than no coverage. Link the defining source instead.
+        """
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct ctx_t ctx_t;\n"
+            "struct ctx_t { int step; };\n"
+            "ctx_t* ctx_new(void);\n"
+            "int drive(ctx_t* c) { return c->step; }\n"
+        )
+        code = self._harness(tmp_path, src=src, fn="drive").code
+        assert "ctx_new()" not in code
+        assert "c_obj.step" in code

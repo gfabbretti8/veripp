@@ -564,6 +564,18 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         ),
     )
     bounds.add_argument(
+        "--constructors",
+        action="store_true",
+        help=_adv(
+            "build object parameters by calling the library's own "
+            "constructors -- the functions that return one -- letting the "
+            "solver choose between them. Only objects the library can really "
+            "build are then in scope, instead of every field combination; "
+            "the cost is an allocation inside every harness, and that states "
+            "reached by mutating the object afterwards are not explored."
+        ),
+    )
+    bounds.add_argument(
         "--no-overflow-check",
         action="store_true",
         help=_adv(
@@ -605,6 +617,7 @@ def _harness_options(args) -> HarnessOptions:
         include_dirs=_include_dirs(args),
         link_sources=[s.resolve() for s in getattr(args, "link", [])],
         use_initializers=not getattr(args, "no_initializers", False),
+        use_constructors=getattr(args, "constructors", False),
     )
 
 
