@@ -1020,3 +1020,61 @@ class TestRunTogetherLengthNames:
         harness = generate(p, "copy")
         assert any("us_userlen" in a and "filled together" in a
                    for a in harness.assumptions)
+
+
+class TestInOutPointerParameters:
+    """`struct pbuf **nb` -- the callee replaces the object it is given.
+
+    How C returns a swapped buffer. lwIP's VJ decompression takes one and
+    exchanges the pbuf as it expands the header back out. veripp refused the
+    shape, so vj_uncompress_tcp and vj_compress_tcp -- the only two functions
+    in that file that run on data from the wire -- were unreachable.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct buf { int len; struct buf *next; };\n"
+        "int expand(struct buf **pb) { return (*pb)->len; }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="expand"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_the_object_is_built_and_its_address_taken_twice(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "struct buf pb_inner_obj;" in code
+        assert "struct buf * pb_inner = &pb_inner_obj;" in code
+        assert "struct buf ** pb = &pb_inner;" in code
+
+    def test_the_single_object_is_disclosed(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("in/out parameter" in a and "NOT modelled" in a
+                   for a in assumptions)
+
+    def test_a_scalar_out_parameter_is_left_alone(self, tmp_path):
+        """`int **` is not an object handed back, and the backwards-cursor
+        machinery already owns `T **p` paired with a `T *start`. Widening
+        this to scalars would collide with that, so it stays refused --
+        unchanged, not newly broken."""
+        from veripp.harness import HarnessError
+
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "int deref(int **p) { return **p; }\n"
+        )
+        with pytest.raises(HarnessError):
+            self._harness(tmp_path, src=src, fn="deref")
+
+    def test_a_triple_pointer_is_still_refused(self, tmp_path):
+        """One level of in/out is a shape; three is a guess."""
+        from veripp.harness import HarnessError
+
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "struct buf { int len; };\n"
+            "int deep(struct buf ***p) { return (**p)->len; }\n"
+        )
+        with pytest.raises(HarnessError):
+            self._harness(tmp_path, src=src, fn="deep")

@@ -754,6 +754,10 @@ def _emit_scalar(
                               source_text, teardown)
             if obj is not None:
                 return obj
+            obj = _try_double_pointer(param, signature, assumptions, options,
+                                      typedefs, source_text, teardown)
+            if obj is not None:
+                return obj
         return _emit_lone_pointer(param, assumptions, options, typedefs,
                                   signature.body, macro_text or source_text)
     if param.is_reference:
@@ -777,6 +781,45 @@ def _emit_scalar(
             "the harness by hand and verify it directly (no --function)."
         )
     return [f"{_decl_type(param.type)} {param.name} = {nondet};"]
+
+
+def _try_double_pointer(
+    param: Param, signature: Signature, assumptions: list[str],
+    options: HarnessOptions, typedefs: dict[str, str], source_text: str,
+    teardown: list[str] | None = None,
+) -> list[str] | None:
+    """`struct pbuf **pb` -- an in/out parameter holding one object.
+
+    The callee reads the object through it and writes a new pointer back,
+    which is how C returns a replaced buffer: lwIP's VJ decompression takes
+    `struct pbuf **nb` and swaps the pbuf as it expands the header. veripp
+    refused the shape outright, so vj_uncompress_tcp and vj_compress_tcp --
+    the two functions in that file that run on data from the wire -- were
+    unreachable.
+
+    Build the object, take its address into a named pointer, and pass the
+    address of that. The extra level costs nothing and the callee can
+    reassign it, as its callers expect to observe.
+    """
+    inner_type = param.pointee()
+    if not inner_type.rstrip().endswith("*"):
+        return None
+    inner = Param(type=inner_type, name=f"{param.name}_inner")
+    if nondet_for(inner.pointee(), typedefs) is not None:
+        return None                # a scalar out-parameter, handled elsewhere
+    built = _try_object(inner, signature, assumptions, options, typedefs,
+                        source_text, teardown)
+    if built is None:
+        return None
+    assumptions.append(
+        f"`{param.name}` points to one `{_elaborated(inner_type)}` that the "
+        "harness owns, so the callee can replace it as an in/out parameter "
+        "is meant to. Only one object is behind it -- a chain the callee "
+        "walks past its end is NOT modelled here"
+    )
+    return built + [
+        f"{_decl_type(param.type)} {param.name} = &{inner.name};",
+    ]
 
 
 def _try_object(param, signature, assumptions, options, typedefs, source_text,
