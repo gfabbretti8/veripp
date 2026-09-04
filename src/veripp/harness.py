@@ -1758,6 +1758,31 @@ def _fill_counted_pointer_field(
     counter = f"{prefix}.{count_field}"
 
     nondet = nondet_for(pointee, typedefs)
+    if normalize_type(pointee, typedefs) == "void":
+        # `struct pbuf { void *payload; u16_t tot_len; ... }` is the packet,
+        # and nulling it -- with the length forced to 0 to match -- meant
+        # every lwIP function that reads packet data failed on a null the
+        # harness had chosen. A void* says nothing about the type it points
+        # to, but the count beside it says how much memory is there.
+        pointee = "unsigned char"
+        storage = f"{target.replace('.', '_')}_bytes"
+        fill = [
+            f"for (unsigned long veripp_k = 0; veripp_k < {cap}; ++veripp_k)",
+            f"    {storage}[veripp_k] = (unsigned char)VERIPP_NONDET_CHAR();",
+        ]
+        note = (f"{cap} nondeterministic bytes -- its declared type says "
+                "nothing about what is really there, but a null would be the "
+                "harness's own doing rather than the library's")
+        assumptions.append(
+            f"`{target}` points to {note}, and `{counter}` is bounded to "
+            f"{cap} to match"
+        )
+        constraints.append(f"VERIPP_ASSUME({counter} <= {cap});")
+        return [
+            f"unsigned char {storage}[{cap}];",
+            *fill,
+            f"{target} = (void *){storage};",
+        ]
     if nondet is not None:
         fill = [
             f"for (unsigned long veripp_k = 0; veripp_k < {cap}; ++veripp_k)",
@@ -1858,6 +1883,28 @@ def _fill_pointer_field(
     if nondet is not None:
         assumptions.append(f"pointer field `{target}` points to one nondeterministic `{pointee}`")
         return [f"{pointee} {storage} = {nondet};", f"{target} = &{storage};"]
+
+    if normalize_type(pointee, typedefs) == "void":
+        # `struct pbuf { void *payload; ... }` is the packet. Nulling it
+        # guarantees a null dereference in every function that touches the
+        # data, and that null was the harness's choice rather than anything
+        # the library did -- every lwIP packet path failed on it at the first
+        # line. Bytes are the one honest model for a void*: the declaration
+        # says nothing about the type, but it does say there is memory there.
+        cap = options.max_array_len
+        assumptions.append(
+            f"pointer field `{target}` points to {cap} nondeterministic bytes "
+            "(harness bound). A `void *` says nothing about what it points "
+            "to, so neither its real type nor its real size is modelled -- "
+            "but a null here would be the harness's own doing, not the "
+            "library's"
+        )
+        return [
+            f"unsigned char {storage}[{cap}];",
+            f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+            f"    {storage}[{_LOOP_VAR}] = (unsigned char)VERIPP_NONDET_CHAR();",
+            f"{target} = (void *){storage};",
+        ]
 
     nested = _try_struct(source_text, pointee)
     if nested is None:

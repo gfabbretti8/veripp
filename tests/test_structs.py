@@ -728,3 +728,64 @@ class TestUntypedefedStructs:
         p.write_text(src, encoding="utf-8")
         code = generate(p, "node_n", HarnessOptions(use_constructors=True)).code
         assert "struct node *x_obj = 0;" in code
+
+
+class TestVoidPointerFields:
+    """`struct pbuf { void *payload; u16_t tot_len; ... }` is the packet.
+
+    Nulled -- with the count beside it forced to zero to match -- every lwIP
+    function that reads packet data failed on a null the harness had chosen,
+    before it had looked at anything the library does. A void* declaration
+    says nothing about the type it points to, but it does say there is
+    memory there, and a count beside it says how much.
+    """
+
+    COUNTED = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct packet { struct packet *next; void *payload;"
+        " unsigned short tot_len; };\n"
+        "int first(struct packet *p)"
+        " { return p->tot_len ? ((unsigned char *)p->payload)[0] : 0; }\n"
+    )
+
+    LONE = (
+        '#include "veripp/contracts.hpp"\n'
+        "struct box { void *data; int kind; };\n"
+        "int peek(struct box *b) { return ((unsigned char *)b->data)[0]; }\n"
+    )
+
+    def _harness(self, tmp_path, src, fn):
+        p = tmp_path / "s.c"
+        p.write_text(src, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_a_counted_void_field_is_bytes_not_null(self, tmp_path):
+        harness = self._harness(tmp_path, self.COUNTED, "first")
+        assert "p_obj.payload = (void *)p_obj_payload_bytes;" in harness.code
+        assert "p_obj.payload = 0;" not in harness.code
+
+    def test_the_count_is_no_longer_pinned_to_zero(self, tmp_path):
+        """It was, because a null pointer can only have zero elements."""
+        code = self._harness(tmp_path, self.COUNTED, "first").code
+        assert "VERIPP_ASSUME(p_obj.tot_len == 0);" not in code
+        assert "VERIPP_ASSUME(p_obj.tot_len <= 4);" in code
+
+    def test_a_lone_void_field_is_bytes_too(self, tmp_path):
+        harness = self._harness(tmp_path, self.LONE, "peek")
+        assert "b_obj.data = (void *)b_obj_data_target;" in harness.code
+
+    def test_what_is_not_known_about_it_is_said(self, tmp_path):
+        assumptions = self._harness(tmp_path, self.LONE, "peek").assumptions
+        assert any("says nothing about what it points to" in a
+                   for a in assumptions)
+
+    def test_an_unconstructible_struct_pointer_is_still_null(self, tmp_path):
+        """Bytes are honest for a void*; inventing a layout is not."""
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "struct opaque;\n"
+            "struct holder { struct opaque *o; int n; };\n"
+            "int get(struct holder *h) { return h->n; }\n"
+        )
+        harness = self._harness(tmp_path, src, "get")
+        assert "h_obj.o = 0;" in harness.code
