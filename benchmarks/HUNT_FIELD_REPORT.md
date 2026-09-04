@@ -11,7 +11,7 @@ The headline is not the bugs. It is the ratio.
 | | count |
 |---|---:|
 | Functions proved free of the eight UB classes | **163** |
-| Real defects confirmed | **6** |
+| Real defects confirmed | **7** |
 | Counterexamples that turned out to be false | **32** |
 | veripp modelling defects that had to be fixed first | **26** |
 
@@ -51,12 +51,16 @@ intuition, and several looked *more* convincing than the real findings.
 | lwIP | PPP: chap_ms (MS-CHAP) | 11 | 0 |
 | lwIP | PPP: vj, pppos | 4 | 0 |
 | lwIP | PPP: mppe (MPPE) | 1 | 0 |
+| lwIP | netbiosns (NetBIOS responder) | — | **1** |
 | lwIP | SNMP BER/ASN.1 decoder | 10 | 0 |
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
 the fourth, an out-of-bounds read reachable from parson's **public** API
 with four bytes, is in [PARSON_UTF8_OVERREAD.md](PARSON_UTF8_OVERREAD.md);
-the fifth and sixth are both in cJSON_Utils' JSON Pointer handling -- a
+the seventh is the most serious of them: an unbounded, remotely triggerable
+out-of-bounds read in lwIP's NetBIOS responder, from a single 50-byte UDP
+datagram, in [LWIP_NETBIOS_NAME_DECODE.md](LWIP_NETBIOS_NAME_DECODE.md).
+The fifth and sixth are both in cJSON_Utils' JSON Pointer handling -- a
 malformed array index that resolves to the wrong element, and escape
 decoding that makes `add` create a key under the wrong name -- and are in
 [CJSON_UTILS_JSON_POINTER.md](CJSON_UTILS_JSON_POINTER.md). Those two are
@@ -345,6 +349,20 @@ state -- which is the honest outcome and not a doubt about the code.
 branches and a nested loop, guarded by `*oid_len < oid_max_len`, with the
 first two writes covered by an `oid_max_len < 2` early return. That one
 veripp does prove.
+
+**Read the fuzzer's configuration before choosing a target, not after.**
+Four of the findings in this report were noticed to be outside the project's
+fuzzing after the fact. The fifth was found by inverting that: lwIP's
+`test/fuzz/lwipopts.h` enables `LWIP_MDNS_RESPONDER` and `LWIP_SNMP`, so
+mdns and snmp were ruled out despite both being name parsers of exactly the
+shape that had been productive elsewhere. What it does not enable is
+netbiosns, mqtt, tftp, smtp, sntp, http_client or PPP. netbiosns was picked
+from that list because it is a listener that decodes a fixed-width name out
+of an inbound datagram, and the first function read in it takes the length
+of its output buffer and discards it with `LWIP_UNUSED_ARG`.
+
+That is twenty minutes of reading a configuration file, and it beat every
+heuristic about famous versus obscure libraries used earlier in this hunt.
 
 **"No caller reaches this" is a claim, and it needs checking like any
 other.** This report opened by saying lwIP's string helpers are leaf
