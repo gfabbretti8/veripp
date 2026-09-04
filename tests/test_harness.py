@@ -552,3 +552,53 @@ class TestTerminatorEvidenceAtAnyIndex:
     def test_a_body_that_tests_no_terminator_is_not_a_string(self, tmp_path):
         """An `unsigned char *` is binary data until the code says otherwise."""
         assert not self._is_string(tmp_path, "return p[0] + p[1];")
+
+
+class TestCompiledOutCode:
+    """A dead `#if` must not be reported as a type veripp cannot construct.
+
+    lwIP's mppe.c came back 0 of 7 harnessable, every function refused for
+    taking a `ppp_pcb *` -- a type veripp builds happily in five other files
+    in the same tree. MPPE_SUPPORT was simply not enabled, so the file sat
+    inside a dead #if and the preprocessed source contained neither the
+    functions nor their types. Every message named the type system; none
+    named the configuration.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n'
+        "#if FEATURE_ON\n"
+        "int scaled(int x) { return x * 2; }\n"
+        "#endif\n"
+        "int always(int x) { return x + 1; }\n"
+    )
+
+    def _generate(self, tmp_path, fn, **defines):
+        from veripp.harness import HarnessOptions, generate
+
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC, encoding="utf-8")
+        return generate(p, fn, HarnessOptions(preprocess=True))
+
+    def test_a_function_behind_a_dead_if_says_so(self, tmp_path):
+        from veripp.harness import HarnessError
+
+        with pytest.raises(HarnessError, match="not in this build"):
+            self._generate(tmp_path, "scaled")
+
+    def test_the_message_points_at_the_configuration(self, tmp_path):
+        from veripp.harness import HarnessError
+
+        with pytest.raises(HarnessError, match="#if"):
+            self._generate(tmp_path, "scaled")
+
+    def test_a_function_that_survives_is_harnessed(self, tmp_path):
+        assert "always(x)" in self._generate(tmp_path, "always").code
+
+    def test_the_check_is_skipped_without_preprocessing(self, tmp_path):
+        """Without a preprocessor veripp reads the text, where both exist."""
+        from veripp.harness import HarnessOptions, generate
+
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC, encoding="utf-8")
+        assert "scaled(x)" in generate(p, "scaled", HarnessOptions()).code

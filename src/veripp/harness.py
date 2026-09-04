@@ -235,9 +235,11 @@ def generate(
     signature = find_function(text, function)
     # Struct definitions usually live in the library's own header, not the .cpp
     # being targeted, so resolve types against both.
-    expanded = (
-        (preprocess_source(source, options) if options.preprocess else None)
-        or _with_local_includes(source, text, options.include_dirs)
+    preprocessed = preprocess_source(source, options) if options.preprocess else None
+    if preprocessed is not None:
+        _reject_if_compiled_out(source, signature.name, preprocessed)
+    expanded = preprocessed or _with_local_includes(
+        source, text, options.include_dirs
     )
     # Linked TUs resolve callees, so their definitions must be visible
     # here too, or veripp reports stubs the run does not actually have.
@@ -378,6 +380,31 @@ def preprocess_source(source: Path, options: HarnessOptions) -> str | None:
         if done.stdout.strip():
             return done.stdout
     return None
+
+
+def _reject_if_compiled_out(source: Path, function: str, preprocessed: str) -> None:
+    """Refuse with the real reason when the configuration excludes the code.
+
+    lwIP's mppe.c reported 0 of 7 functions harnessable, each one refused for
+    taking a `ppp_pcb *` -- a type veripp constructs happily in five other
+    files in the same tree. MPPE_SUPPORT was simply not enabled, so the whole
+    file was inside a dead #if and the preprocessed source contained neither
+    the functions nor their types. Every message pointed at the type system
+    and none of them at the configuration.
+
+    A refusal that names the wrong cause is worse than a loud failure: it
+    reads as "the tool tried and this code defeats it", and the surface gets
+    skipped.
+    """
+    if re.search(r"\b" + re.escape(function) + r"\b", preprocessed):
+        return
+    raise HarnessError(
+        f"`{function}` is not in this build: the preprocessor removed it, so "
+        "it sits inside an #if that the include path and -D flags leave off. "
+        f"Nothing is wrong with `{function}` -- check the configuration "
+        f"header {source.name} is compiled with (for lwIP, a missing "
+        "*_SUPPORT in lwipopts.h does exactly this)"
+    )
 
 
 def _is_angle_only(text: str, name: str) -> bool:
