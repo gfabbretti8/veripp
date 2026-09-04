@@ -607,3 +607,73 @@ class TestCursorInsideItsBuffer:
             "int peek(io_t *b) { return b->in[b->offset]; }\n"
         )
         assert "offset <=" not in self._harness(tmp_path, src=src).code
+
+
+class TestStringFields:
+    """`cJSON.string` and `cJSON.valuestring` are C strings.
+
+    Modelled as one nondeterministic char, anything that walks one to its
+    terminator reads past it -- and cJSON's get_object_item hands exactly
+    that to strcmp. Seven of the eleven counterexamples left in that file
+    after the allocator and the cursor were dealt with were this one field.
+
+    It is the rule veripp already applied to string PARAMETERS, which had
+    simply never reached fields.
+    """
+
+    # Two pointers, so neither gets paired with the integer as its count --
+    # cJSON's shape, where `string` sits beside `next` and `child`.
+    SRC = (
+        '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+        "typedef struct node_t node_t;\n"
+        "struct node_t { char *name; node_t *next; int type; };\n"
+        "int match(node_t *x, const char *k) { return strcmp(k, x->name); }\n"
+    )
+
+    def _harness(self, tmp_path, src=None, fn="match"):
+        p = tmp_path / "s.c"
+        p.write_text(src if src is not None else self.SRC, encoding="utf-8")
+        return generate(p, fn)
+
+    def test_a_char_field_is_a_terminated_string(self, tmp_path):
+        code = self._harness(tmp_path).code
+        assert "char x_obj_name_target[5];" in code
+        assert "x_obj_name_target[4] = 0;" in code
+
+    def test_the_bound_is_disclosed_as_a_bound(self, tmp_path):
+        assumptions = self._harness(tmp_path).assumptions
+        assert any("NUL-terminated string of at most 4" in a
+                   and "x_obj.name" in a for a in assumptions)
+
+    def test_an_unsigned_char_field_is_one_too(self, tmp_path):
+        """It is how most byte-handling C spells every string."""
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "typedef struct node_t node_t;\n"
+            "struct node_t { unsigned char *name; node_t *next; };\n"
+            "int len(node_t *x) { return (int)strlen((char*)x->name); }\n"
+        )
+        assert "x_obj_name_target[5]" in self._harness(
+            tmp_path, src=src, fn="len").code
+
+    def test_a_non_character_field_still_points_at_one_value(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct node_t node_t;\n"
+            "struct node_t { int *value; node_t *next; };\n"
+            "int get(node_t *x) { return *x->value; }\n"
+        )
+        assert "x_obj.value = &" in self._harness(tmp_path, src=src, fn="get").code
+
+    def test_a_counted_buffer_field_keeps_its_count(self, tmp_path):
+        """A field paired with a length is an array, not a string; putting a
+        terminator in it would be a claim about binary data."""
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "typedef struct { unsigned char *data; unsigned long data_len; }"
+            " blob_t;\n"
+            "int first(blob_t *b) { return b->data_len ? b->data[0] : 0; }\n"
+        )
+        harness = self._harness(tmp_path, src=src, fn="first")
+        assert any("data_len` is bounded" in a for a in harness.assumptions)
+        assert "b_obj_data_items[4] = 0;" not in harness.code

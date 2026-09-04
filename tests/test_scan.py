@@ -279,11 +279,26 @@ class TestGeneratedCIsValidC:
         p = tmp_path / "s.c"
         p.write_text(
             '#include "veripp/contracts.hpp"\n'
+            "typedef struct { int* count; } item;\n"
+            "static int len(item* i) { return i->count ? 1 : 0; }\n"
+        , encoding="utf-8")
+        code = generate(p, "len").code
+        assert "i_obj.count = &" in code
+
+    def test_a_string_field_points_at_a_local_array(self, tmp_path):
+        """A `char*` field is a C string, so its storage is an array rather
+        than a single value -- which decays, and lives in main either way."""
+        from veripp.harness import generate
+
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
             "typedef struct { char* label; } item;\n"
             "static int len(item* i) { return i->label ? 1 : 0; }\n"
         , encoding="utf-8")
         code = generate(p, "len").code
-        assert "i_obj.label = &" in code
+        assert "char i_obj_label_target[5];" in code
+        assert "i_obj.label = i_obj_label_target;" in code
 
 
 class TestEmptyScan:

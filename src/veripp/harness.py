@@ -1818,6 +1818,28 @@ def _fill_pointer_field(
     pointee = f.pointee()
     nondet = nondet_for(pointee, typedefs)
     storage = f"{target.replace('.', '_')}_target"
+    if normalize_type(pointee, typedefs) in _STRING_POINTEES:
+        # `cJSON.string` and `cJSON.valuestring` are C strings, and a single
+        # nondeterministic char is the wrong model for one: anything that
+        # walks to the terminator reads past it, and the counterexample
+        # blames the library. Exactly the rule already applied to string
+        # PARAMETERS, which had never reached fields -- seven of cJSON's
+        # eleven remaining counterexamples were one `char *` field being
+        # handed to strcmp.
+        cap = options.max_array_len
+        assumptions.append(
+            f"pointer field `{target}` is a NUL-terminated string of at most "
+            f"{cap} characters (harness bound; contents nondeterministic). "
+            "Its real size is not knowable from the type -- one element "
+            "instead would manufacture an over-read in anything that walks it"
+        )
+        return [
+            f"{pointee} {storage}[{cap + 1}];",
+            f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+            f"    {storage}[{_LOOP_VAR}] = ({pointee})VERIPP_NONDET_CHAR();",
+            f"{storage}[{cap}] = 0;",
+            f"{target} = {storage};",
+        ]
     if nondet is not None:
         assumptions.append(f"pointer field `{target}` points to one nondeterministic `{pointee}`")
         return [f"{pointee} {storage} = {nondet};", f"{target} = &{storage};"]
