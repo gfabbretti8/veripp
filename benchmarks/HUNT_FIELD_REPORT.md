@@ -187,11 +187,29 @@ listed together because the class is the interesting part, not the function:
   `--sequence` exists to remove, and cJSON is out of solver budget for it.
 * **An output buffer with no length parameter** — `encode_string_as_pointer`
   (cJSON_Utils; the caller sizes it with `pointer_encoded_length`),
-  `lcp_addci` and `ipcp_addci` (sized by the matching `*_cilen`),
+  `lcp_addci`, `ipcp_addci` and `ccp_addci` (sized by the matching
+  `*_cilen`, which mirrors the writer condition for condition),
   `pppos_output_append` (assumes `PBUF_POOL_BUFSIZE`).
+
+  All three `*_addci` writers share a latent hazard worth naming even though
+  none of them can reach it. `fsm_sconfreq` asks `*_cilen` for a size, then
+  clamps it to `peer_mru - HEADERLEN`, then calls `*_addci`, which writes
+  what `*_cilen` said and knows nothing about the clamp. It cannot bite only
+  because `lcp_reqci` NAKs any MRU below `PPP_MINMRU` (128), so the floor is
+  124 bytes and every protocol's options total well under it. The safety is
+  the peer's MRU minimum, two files away from the writer.
 * **Something outside the translation unit** — `lcp_extcode` and
   `lcp_rprotrej` (the `protocols[]` definition lives in ppp.c),
   `chap_input` and `chap_respond` (unlinked `pbuf_alloc`).
+
+One more oddity, recorded because it is real and is not a memory-safety
+bug: `ccp_addci`'s deflate-draft branch writes `p[2] = p[2 - CILEN_DEFLATE]`,
+reading `p[-2]` to copy the size byte from the `deflate_correct` option
+written just before it. With `deflate_draft` set and `deflate_correct`
+clear there is no such option, so it copies two bytes of the PPP header
+instead. In bounds, since `outp` has already advanced past `MAKEHEADER`, and
+the result is a garbage size byte in an option nobody enabled --
+`DEFLATE_SUPPORT` is off by default.
 
 And one that is none of those: `eap_state_name` indexes a table with an
 enum, and veripp gives an enum any representable value rather than only its
