@@ -395,3 +395,31 @@ class TestUnusedLengthParameters:
         src = ("#define LWIP_UNUSED_ARG(x) (void)x\n"
                "int f(const char *p, int n) { LWIP_UNUSED_ARG(n); return *p; }\n")
         assert _unused_length_report(src, ["f"]) == {"f": (["n"], [])}
+
+
+class TestRetryKeepsDerivedFieldsInSync:
+    """A second attempt replaces the property, so everything read off it must
+    be recomputed.
+
+    `access` was added to FunctionResult and populated on the first pass but
+    not in the retry, so a function that settled on a harder attempt kept the
+    label from a property it no longer had -- and reported a read as a write.
+    That is the single thing that field must never do, since the whole point
+    of it is to say which counterexamples are worth reading first.
+    """
+
+    def test_every_property_derived_field_is_updated_on_retry(self):
+        """Whatever the retry sets from `prop`, it must set all of it."""
+        import inspect
+
+        from veripp import scan as scan_mod
+
+        source = inspect.getsource(scan_mod._retry_pass)
+        block = source[source.index("if settled:"):]
+        for field in ("r.detail", "r.file", "r.line", "r.column", "r.cwes",
+                      "r.access", "r.artifact"):
+            assert field in block, (
+                f"{field} is derived from the counterexample but the retry "
+                "path does not refresh it; a settled retry would keep a "
+                "value describing a property it no longer has"
+            )

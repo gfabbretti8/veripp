@@ -610,6 +610,10 @@ def _retry_pass(
             r.line = prop.loc.line if prop and prop.loc else 0
             r.column = prop.loc.column if prop and prop.loc else 0
             r.cwes = list(getattr(prop, "cwes", []) or []) if prop else []
+            # Derived from the property, so it has to be recomputed here with
+            # everything else. Leaving it behind labelled a read as a write,
+            # which is the one thing this field must not do.
+            r.access = access_kind(prop) if prop else None
             report.settled += 1
         if progress is not None:
             progress(done, len(candidates), r)
