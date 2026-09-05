@@ -108,6 +108,55 @@ def _stubbed_allocators(result: VerifyResult) -> list[str]:
 GENERATED_HARNESS_PREFIX = "veripp_harness_"
 
 
+#: Wording ESBMC uses that settles the direction on its own.
+_EXPLICIT_WRITES = ("memset of", "on DST", "writing memory segment")
+_EXPLICIT_READS = ("reading memory segment", "on SRC")
+
+#: The dereferenced expression standing on the left of a plain `=`. Not `==`,
+#: not `<=`; and `+=` and friends read as well as write, so they count.
+_ASSIGNMENT_RE = re.compile(r"^[^=!<>]*[\]\)\w]\s*(?:[-+*/|&^]|<<|>>)?=(?!=)")
+
+
+def access_kind(prop: ViolatedProperty) -> str | None:
+    """Whether a violated dereference is a write, a read, or undetermined.
+
+    A read past a buffer and a write past one are the same property to a
+    solver and very different things afterwards. Measuring lwIP's allocator
+    made that concrete: it puts a `struct mem` header after every block, and
+    the first byte of that header is zero -- so a walk-to-NUL running off a
+    pbuf stops after one byte, while a write off the same pbuf lands in the
+    heap's own metadata.
+
+    ESBMC says which it is for some properties and not for the commonest
+    one, `array bounds violated`. Where it does not, the source line is
+    read: an assignment to the failing expression is a write. Where neither
+    settles it the answer is None, because guessing the direction would be
+    guessing the severity.
+    """
+    description = prop.description
+    if any(marker in description for marker in _EXPLICIT_WRITES):
+        return "write"
+    if any(marker in description for marker in _EXPLICIT_READS):
+        return "read"
+    line = _source_line(prop)
+    if line is None:
+        return None
+    if _ASSIGNMENT_RE.match(line.strip()):
+        return "write"
+    return None
+
+
+def _source_line(prop: ViolatedProperty) -> str | None:
+    if not prop.loc.file or not prop.loc.line:
+        return None
+    try:
+        lines = Path(prop.loc.file).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    index = prop.loc.line - 1
+    return lines[index] if 0 <= index < len(lines) else None
+
+
 def real_failures(result: VerifyResult, harness_path: Path) -> list[ViolatedProperty]:
     """The violated properties that are not explained by the harness.
 

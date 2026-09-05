@@ -20,7 +20,7 @@ from veripp.esbmc import (
 from veripp.cppsig import unresolved_extern_arrays
 from veripp.harness import HarnessOptions, generate
 from veripp.triage import (
-    Diagnosis, TargetInfo, mechanical_artifact, real_failures,
+    Diagnosis, TargetInfo, access_kind, mechanical_artifact, real_failures,
     triage_counterexample,
 )
 
@@ -395,6 +395,70 @@ class TestUnresolvedExternArrays:
         assert unresolved_extern_arrays(
             "extern const int table[8];\n", "int f(int i) { return table[i]; }"
         ) == []
+
+
+class TestReadVersusWrite:
+    """The same property to a solver, a different thing afterwards.
+
+    Measuring lwIP's allocator settled this: it puts a `struct mem` header
+    after every block and the first byte of that header is zero, so a
+    walk-to-NUL running off a pbuf stops after one byte. A write off the same
+    pbuf lands in the heap's own metadata. Ranking them together buried the
+    ones worth reading first.
+
+    Where neither ESBMC's wording nor the source line settles the direction,
+    the answer is None -- guessing it would be guessing the severity.
+    """
+
+    def _prop(self, description, file="", line=0):
+        return ViolatedProperty(
+            loc=SourceLoc(file=file, line=line), description=description
+        )
+
+    def test_esbmc_wording_settles_a_write(self):
+        assert access_kind(
+            self._prop("dereference failure: memset of memory segment of size 40")
+        ) == "write"
+
+    def test_esbmc_wording_settles_a_read(self):
+        assert access_kind(
+            self._prop("dereference failure on memcpy: reading memory segment")
+        ) == "read"
+
+    def test_an_assignment_on_the_failing_line_is_a_write(self, tmp_path):
+        src = tmp_path / "s.c"
+        src.write_text("int f(int *p, int i) {\n  p[i] = 1;\n  return 0;\n}\n")
+        assert access_kind(
+            self._prop("array bounds violated", str(src), 2)
+        ) == "write"
+
+    def test_a_comparison_is_not_an_assignment(self, tmp_path):
+        src = tmp_path / "s.c"
+        src.write_text("int f(int *p, int i) {\n  return p[i] == 1;\n}\n")
+        assert access_kind(
+            self._prop("array bounds violated", str(src), 2)
+        ) is None
+
+    def test_a_plain_read_is_undetermined_not_guessed(self, tmp_path):
+        """`return p[i];` is a read, but saying so from one line is a guess
+        about severity, so it is left open."""
+        src = tmp_path / "s.c"
+        src.write_text("int f(int *p, int i) {\n  return p[i];\n}\n")
+        assert access_kind(
+            self._prop("array bounds violated", str(src), 2)
+        ) is None
+
+    def test_a_compound_assignment_counts(self, tmp_path):
+        src = tmp_path / "s.c"
+        src.write_text("int f(int *p, int i) {\n  p[i] += 1;\n  return 0;\n}\n")
+        assert access_kind(
+            self._prop("array bounds violated", str(src), 2)
+        ) == "write"
+
+    def test_a_missing_source_file_is_undetermined(self):
+        assert access_kind(
+            self._prop("array bounds violated", "/nonexistent/x.c", 9)
+        ) is None
 
 
 class TestNullSourceNote:

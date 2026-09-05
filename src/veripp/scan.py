@@ -25,7 +25,7 @@ from .esbmc import Outcome, VerifyConfig, run
 from .harness import HarnessError, HarnessOptions, generate
 from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
-from .triage import TargetInfo, mechanical_artifact
+from .triage import TargetInfo, access_kind, mechanical_artifact
 
 
 @dataclass
@@ -56,6 +56,12 @@ class FunctionResult:
     #: is only ever a label; the outcome moves to "preconditioned" solely
     #: when the solver verified the function under the proposal and the
     #: vacuity probe confirmed something was actually checked.
+    #: "write", "read", or None when neither ESBMC's wording nor the source
+    #: line settles it. A read past a buffer and a write past one are the
+    #: same property to a solver and very different afterwards, so writes
+    #: are listed first.
+    access: str | None = None
+
     triage_kind: str | None = None
     triage_note: str = ""
     triage_error: str | None = None
@@ -202,16 +208,25 @@ class ScanReport:
             # outranks nothing, and nothing outranks a solver.
             rank = {"real_bug": 0, None: 1, "harness_issue": 2,
                     "missing_assumption": 2}
+            # Within a triage verdict, writes first. lwIP's allocator puts a
+            # zeroed header after every block, so a read running off a buffer
+            # stops almost at once while a write off the same buffer lands in
+            # the heap's own metadata. Same property to the solver, different
+            # thing afterwards.
+            access_rank = {"write": 0, None: 1, "read": 2}
             tags = {"real_bug": "triage: real bug",
                     "missing_assumption":
                         "triage: needs a precondition, none accepted yet",
                     "harness_issue": "triage: harness issue"}
             ordered = sorted(
                 self.counterexamples,
-                key=lambda r: (rank.get(r.triage_kind, 1), r.name),
+                key=lambda r: (rank.get(r.triage_kind, 1),
+                               access_rank.get(r.access, 1), r.name),
             )
             for r in ordered[:20]:
                 tag = tags.get(r.triage_kind)
+                if r.access:
+                    tag = f"{r.access}{'' if tag is None else '; ' + tag}"
                 lines.append(f"    {r.name}: {r.detail}"
                              + (f"  [{tag}]" if tag else ""))
             if len(self.counterexamples) > 20:
@@ -447,6 +462,7 @@ def scan(
             line=(prop.loc.line if prop and prop.loc else 0),
             column=(prop.loc.column if prop and prop.loc else 0),
             cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
+            access=access_kind(prop) if prop else None,
         )
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
