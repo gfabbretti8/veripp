@@ -124,28 +124,57 @@ i.e. 4096 bytes past the end of the datagram
 
 Nothing in the function would have stopped it at 4 MiB either.
 
-## Reaching past the pbuf in a real stack
+## Reaching past the pbuf in a real stack — measured, and it corrects this report
 
-The reproduction models the payload as sized to the datagram, which is what
-the caller's contract actually promises. In a stock build a datagram usually
-arrives in a `PBUF_POOL` element whose payload capacity is
-`PBUF_POOL_BUFSIZE`, so the first bytes read past `p->len` are still inside
-that element — stale bytes from a previous packet.
+An earlier revision of this section argued that the read leaves its
+allocation "on the attacker's schedule": pool elements are contiguous, the
+stale bytes are previous datagrams the attacker also sent, so filling memory
+with `A` first was a matter of sending more queries. That reasoning was
+labelled as reasoning rather than measurement. It has now been measured, and
+**it was wrong.**
 
-That is a delay, not a bound, and it is one the attacker controls:
+`benchmarks/repro/netbios_pbuf.c` links lwIP's own `pbuf.c`, `mem.c` and
+`memp.c` from the tree and allocates the datagram with `pbuf_alloc`.
 
-* Pool elements are contiguous in one static array, so the walk continues
-  from one element into the next.
-* The stale bytes it walks through are *previous datagrams*, which the
-  attacker also sent. Filling the pool with `A` first is a matter of sending
-  more NetBIOS queries.
-* Paths that hand up an exactly-sized `PBUF_RAM` — `pbuf_coalesce`, the
-  loopback netif, drivers that allocate per frame — remove the delay
-  entirely, and are what the reproduction models.
+**Default configuration** (lwIP's static heap, `MEM_LIBC_MALLOC=0`):
 
-So the read leaves its allocation on the attacker's schedule rather than by
-luck. This step is reasoned from lwIP's pool layout rather than run
-end-to-end in a live stack, and is labelled as such.
+```
+  one query  decode read 38 bytes from encname; the datagram had 37 left
+  groomed    8 queries in flight, first payload=0x102694054
+  groomed    decode read 38 bytes from encname; the datagram had 37 left
+  PBUF_POOL  decode read 38 bytes from encname; the datagram had 37 left
+  bytes immediately after the datagram: 00 40 00 00 00 00 00 00
+```
+
+**Exactly one byte past, in every case.** The byte after the payload is the
+next block's `struct mem` header, and it is zero, so the walk stops there.
+Eight queries in flight changes nothing: lwIP interleaves that metadata
+between every pair of allocations, so a run of attacker bytes cannot span
+two blocks. The grooming argument does not survive contact with the
+allocator.
+
+**With `MEM_LIBC_MALLOC=1` and `MEMP_MEM_MALLOC=1`** — both documented lwIP
+options, for platforms with a real heap — each pbuf is its own allocation
+and there is no lwIP metadata after it:
+
+```
+==587==ERROR: AddressSanitizer: heap-buffer-overflow
+READ of size 1 at 0x60c000000240 thread T0
+    #0 netbiosns_name_decode netbios_pbuf.c:33
+0x60c000000240 is located 0 bytes after 128-byte region [0x60c0000001c0,0x60c000000240)
+allocated by thread T0 here:
+    #1 mem_malloc mem.c:209
+    #2 pbuf_alloc pbuf.c:284
+```
+
+That is a genuine out-of-bounds read past a real pbuf, in a supported
+configuration. How far it then runs depends on what the platform heap put
+next, which is not lwIP's to control and not demonstrated here.
+
+The 4096-byte figure below describes a synthetic layout — a single
+allocation filled with uppercase bytes — that lwIP's own allocators do not
+produce. It shows that the loop has no bound. It does not show that lwIP
+reaches that far.
 
 ## Severity
 
@@ -154,9 +183,12 @@ end-to-end in a live stack, and is labelled as such.
   the local name, so it does not depend on the query matching anything.
 * **Read-only.** `idx < NETBIOS_NAME_LEN` bounds the writes into a
   17-byte buffer correctly. There is no corruption.
-* **The read is unbounded**, which on an MCU without an MMU means walking
-  into peripheral or unmapped address space, and on anything with memory
-  protection means a fault. Denial of service is the reliable outcome.
+* **The loop is unbounded; the measured over-read is one byte.** Those are
+  different claims and the second is the one that survives measurement in
+  lwIP's default allocators. In a `MEM_LIBC_MALLOC` build the read leaves
+  the allocation, which ASan confirms; how far it goes then is the platform
+  heap's business. The "walks into unmapped space" reading is not supported
+  by anything measured here and should not be repeated.
 * **Not an information leak by itself.** Only the first 16 decoded bytes are
   kept, and the response echoes `encname` from the packet
   (`MEMCPY(resp->query_name, netbios_question_hdr->encname, 33)`), which is
