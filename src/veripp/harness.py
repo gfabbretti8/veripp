@@ -253,9 +253,11 @@ def generate(
     preprocessed = preprocess_source(source, options) if options.preprocess else None
     if preprocessed is not None:
         _reject_if_compiled_out(source, signature.name, preprocessed)
-    expanded = preprocessed or _with_local_includes(
-        source, text, options.include_dirs
-    )
+    # Kept even when preprocessing: size macros only exist before the
+    # preprocessor runs, and `CILEN_MPPE` lives in a header, so neither the
+    # preprocessed text nor the .c file on its own can resolve it.
+    with_headers = _with_local_includes(source, text, options.include_dirs)
+    expanded = preprocessed or with_headers
     # Linked TUs resolve callees, so their definitions must be visible
     # here too, or veripp reports stubs the run does not actually have.
     expanded = "\n".join([expanded, *_linked_text(options)])
@@ -293,7 +295,7 @@ def generate(
         if param.name in buffers or param.name in paired_cursor:
             continue
         body += _emit_scalar(param, signature, assumptions, options, typedefs,
-                             expanded, teardown, macro_text=text)
+                             expanded, teardown, macro_text=with_headers)
 
     for buffer_name, length in lengths.items():
         if buffer_name in paired_cursor:
@@ -1041,6 +1043,12 @@ def _emit_lone_pointer(
     # overrun a buffer the harness made too small, and reported the library
     # for it. Size it from how the function actually indexes the pointer.
     extent = _indexed_extent(param, body, options)
+    # Indices are relative to wherever the pointer has been walked to, so the
+    # two add: the furthest index in the last block, plus every step taken to
+    # reach it.
+    walked = _advanced_extent(param, body, source_text)
+    if walked:
+        extent = min(extent + walked, _MAX_FIXED_EXTENT)
     # A fixed-size write says outright how big the buffer has to be, and it
     # outranks both the index scan and the harness bound: the index scan can
     # only see what it can evaluate, and the bound is an arbitrary number.
@@ -1070,8 +1078,8 @@ def _emit_lone_pointer(
     assumptions.append(
         fixed_note
         or f"`{param.name}` is non-null and points to at least {extent} valid "
-        f"`{pointee}` elements (no length parameter; {extent} is the highest "
-        "index the body uses)"
+        f"`{pointee}` elements (no length parameter; {extent} is how far the "
+        "body indexes and walks it)"
     )
     var = f"veripp_i_{param.name}"
     return [
@@ -1253,6 +1261,51 @@ def _fixed_write_extent(
 #: Enough for any real fixed-size write, and small enough that a mistake
 #: here cannot produce an unusable harness.
 _MAX_FIXED_EXTENT = 4096
+
+
+#: How a body walks an output pointer forward: `p += CILEN_MPPE`, and lwIP's
+#: macro for the same thing, `INCPTR(CILEN_MPPE, p)`.
+_ADVANCE_PATTERNS = (
+    r"\b{name}\s*\+=\s*([A-Za-z_0-9]+)\s*;",
+    r"\bINCPTR\s*\(\s*([A-Za-z_0-9]+)\s*,\s*{name}\s*\)",
+)
+
+#: Serialisation macros that write and advance in one step. Each occurrence
+#: moves the cursor by a fixed number of bytes -- lwIP's PPP option writers
+#: are built almost entirely out of these, and counting only `p += K` saw
+#: none of it. The widths are the macros' own.
+_ADVANCE_MACROS = {"PUTCHAR": 1, "PUTSHORT": 2, "PUTLONG": 4}
+
+
+def _advanced_extent(param: Param, body: str, source_text: str) -> int:
+    """How far the body walks the pointer forward, when that is resolvable.
+
+    An option writer fills a few bytes, steps past them, and fills a few
+    more. Counting only the literal indices sees the first block and calls
+    the buffer four bytes long, which is how `ccp_addci` came to be reported
+    for an out-of-bounds write while faithfully writing the twenty-one bytes
+    `ccp_cilen` had asked the caller to allocate.
+
+    The advances are conditional -- each option is written only if
+    negotiated -- so summing them all is the worst case, which is exactly
+    what the buffer has to survive.
+    """
+    if not body:
+        return 0
+    scrubbed = scrub(body)
+    name = re.escape(param.name)
+    total = 0
+    for pattern in _ADVANCE_PATTERNS:
+        for m in re.finditer(pattern.format(name=name), scrubbed):
+            value = _constant_value(m.group(1), source_text)
+            if value is not None:
+                total += value
+    for macro, width in _ADVANCE_MACROS.items():
+        hits = re.findall(
+            rf"\b{macro}\s*\([^;()]*,\s*{name}\s*\)", scrubbed
+        )
+        total += width * len(hits)
+    return total
 
 
 def _indexed_extent(param: Param, body: str, options: HarnessOptions) -> int:

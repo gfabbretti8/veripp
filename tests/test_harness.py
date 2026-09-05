@@ -696,3 +696,76 @@ class TestUnterminatedStrings:
     def test_the_default_assumption_is_unchanged(self, tmp_path):
         assumptions = self._harness(tmp_path).assumptions
         assert any("NUL-terminated string of at most 4" in a for a in assumptions)
+
+
+class TestOutputBufferWalking:
+    """An option writer fills a few bytes, steps past them, fills a few more.
+
+    Counting only the literal indices sees the first block and calls the
+    buffer four bytes long -- which is how lwIP's ccp_addci came to be
+    reported for an out-of-bounds write while faithfully writing the
+    twenty-one bytes ccp_cilen had told the caller to allocate. An output
+    buffer with no length parameter is the largest single source of noise on
+    real C in this project's record, and this is the part of it that is
+    recoverable from the body.
+    """
+
+    def _extent(self, tmp_path, body, src_extra=""):
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n' + src_extra +
+            f"void fill(unsigned char *p) {{ {body} }}\n",
+            encoding="utf-8",
+        )
+        for a in generate(p, "fill").assumptions:
+            if "points to at least" in a:
+                return int(a.split("at least ")[1].split()[0])
+        return None
+
+    def test_a_plain_advance_is_counted(self, tmp_path):
+        """Bytes 0, 1 and 6 are touched, so 7 are needed and 8 are given.
+
+        The index scan already returns "highest index plus one", and the walk
+        is added to that, so the answer is over by one. Over is the safe
+        direction for a buffer the harness is inventing: too small
+        manufactures an overflow, too large loses nothing the body would
+        have reached anyway."""
+        assert self._extent(
+            tmp_path, "p[0] = 1; p[1] = 2; p += 6; p[0] = 3;"
+        ) == 8
+
+    def test_a_macro_advance_is_resolved(self, tmp_path):
+        assert self._extent(
+            tmp_path, "p[0] = 1; p += STEP; p[0] = 2;",
+            src_extra="#define STEP 6\n",
+        ) == 7
+
+    def test_lwip_incptr_counts(self, tmp_path):
+        assert self._extent(
+            tmp_path,
+            "#define INCPTR(n, cp) ((cp) += (n))\n" and "p[0] = 1; INCPTR(4, p);",
+        ) == 5
+
+    def test_write_and_advance_macros_count_their_width(self, tmp_path):
+        """PUTCHAR/PUTSHORT/PUTLONG move the cursor 1, 2 and 4 bytes."""
+        extra = ("#define PUTCHAR(c, cp) { *(cp)++ = (unsigned char)(c); }\n"
+                 "#define PUTSHORT(s, cp) { *(cp)++ = 0; *(cp)++ = 0; }\n")
+        assert self._extent(
+            tmp_path, "PUTCHAR(1, p); PUTCHAR(2, p); PUTSHORT(3, p);",
+            src_extra=extra,
+        ) == 5
+
+    def test_a_body_that_never_advances_is_unchanged(self, tmp_path):
+        assert self._extent(tmp_path, "p[0] = 1; p[3] = 2;") == 4
+
+    def test_an_unresolvable_advance_is_not_counted(self, tmp_path):
+        """`p += n` with a free `n` says nothing, and guessing would size the
+        buffer from thin air."""
+        p = tmp_path / "s.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n'
+            "void fill(unsigned char *p, int n) { p[0] = 1; p += n; p[0] = 2; }\n",
+            encoding="utf-8",
+        )
+        assumptions = generate(p, "fill").assumptions
+        assert not any("at least 1000" in a for a in assumptions)
