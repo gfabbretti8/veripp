@@ -386,6 +386,33 @@ Two lessons, and the second is the uncomfortable one. A claim about
 instinct to strengthen a good finding is exactly when that discipline is
 hardest to apply to oneself.
 
+**An experiment run to strengthen a finding weakened it, which is the
+experiment doing its job.** The NetBIOS write-up argued that the over-read
+leaves its allocation "on the attacker's schedule" -- pool elements are
+contiguous, the bytes after a datagram are earlier datagrams the attacker
+also sent, so grooming is a matter of sending more queries. That was
+labelled as reasoning rather than measurement, which was honest but not
+sufficient.
+
+Linking lwIP's own `pbuf.c`, `mem.c` and `memp.c` and measuring it: **one
+byte, every time.** `PBUF_RAM`, `PBUF_POOL`, and eight queries in flight all
+give the same answer, because `mem_malloc` places a `struct mem` header
+after every allocation and that header starts with a zero. A run of attacker
+bytes cannot span two blocks. With `MEM_LIBC_MALLOC=1` there is no header
+and the read does leave the allocation, ASan-confirmed against the real
+`pbuf_alloc` -- so the defect is real and the configuration decides its
+reach.
+
+The 4096-byte demonstration in that file describes a synthetic layout lwIP
+does not produce. It shows the loop has no bound; it does not show lwIP
+reaches that far, and the file now says so.
+
+Two lessons, and the second is the uncomfortable one. A claim about
+*reachability* deserves the same triage as a counterexample -- and the
+instinct to strengthen a good finding is exactly when that discipline is
+hardest to apply to oneself.
+
+
 **A function given a length that does not use it.** Three of the nine
 findings are this one shape, and it is now the most productive single thing
 to grep for:
