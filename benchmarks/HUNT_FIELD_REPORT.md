@@ -451,6 +451,42 @@ which is the worst finding in this report, named from the signature alone.
 It is labelled a lead and not a finding on purpose: the same shape in
 smtp_base64_encode is safe at every call site.
 
+**Every other hit from that sweep triaged clean, and two of them are worth
+naming as latent hazards rather than defects.**
+
+mbedTLS's `psa_aead_setup` and `psa_cipher_setup` discard `key_buffer_size`
+and take the key length from `attributes->bits` instead. That is deliberate
+and architectural: `(void) key_buffer_size` appears thirteen times across
+five PSA files, and the caller derives the size as
+`PSA_EXPORT_KEY_OUTPUT_SIZE(...)` from the same attributes. A driver
+interface fixes the signature the way a callback does, so a builtin not
+needing a parameter is expected -- the same benign shape as lwIP's
+`*_tcp_sent(len)`, reached by a different route.
+
+TinyUSB's RNDIS control handler is the interesting one. `rndis_query_cmplt`
+writes a 24-byte header plus a payload into `_netd_epbuf.ctrl`, and the
+largest payload is the supported-OID list at `4 * OID_LIST_LENGTH` = 88
+bytes, so 112 of 120 are used. It fits. What makes it a hazard is how:
+`rndis_reports.c` computes its own requirement as
+
+```c
+#define ENC_BUF_SIZE    (OID_LIST_LENGTH * 4 + 32)      /* = 120 */
+```
+
+**and never uses it.** The buffer is sized by an unrelated literal,
+`NETD_CONTROL_SIZE 120`, in a different file. The two agree today by
+arithmetic coincidence. Three more entries in `OIDSupportedList` -- a
+one-line change, and the list is the natural thing to extend -- puts the
+requirement at 124 against an allocation of 120, and the overflow lands in
+a `CFG_TUD_MEM_SECTION` buffer. The declaration that would have caught it
+exists and is dead code.
+
+`board_get_unique_id(id, max_len)` discards `max_len` in all 36 board
+implementations and writes 12 bytes unconditionally. No caller in the tree
+passes a smaller buffer, and it is a BSP entry point for application code
+rather than something an attacker reaches, so it is recorded as a contract
+the API states and no implementation honours.
+
 **Swept across seven libraries it found a tenth defect, and the first that
 is a write.** TinyUSB's host examples convert a USB string descriptor to
 UTF-8 in place, in a 256-byte buffer, with `_convert_utf16le_to_utf8`
