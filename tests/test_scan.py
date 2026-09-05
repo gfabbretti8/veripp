@@ -338,3 +338,60 @@ class TestEmptyScan:
         p = tmp_path / "api.h"
         p.write_text("int f(int);\n", encoding="utf-8")
         assert "scan the .c/.cpp" in scan(p, VerifyConfig(), HarnessOptions(), jobs=1).summary()
+
+
+class TestUnusedLengthParameters:
+    """A length-shaped parameter the body never reads.
+
+    The most productive single shape in this project's hunting, and the only
+    one that needs no solver. lwIP's netbiosns_name_decode takes a
+    name_dec_len, discards it with LWIP_UNUSED_ARG, and walks an inbound UDP
+    datagram with no bound -- the worst finding in the report, and this check
+    names it from the signature alone.
+
+    It reports and does not judge: smtp_base64_encode has the same shape and
+    is safe at every call site.
+    """
+
+    def _check(self, src):
+        from veripp.cppsig import find_function
+        from veripp.harness import unused_length_parameters
+
+        return unused_length_parameters(find_function(src, "f"))
+
+    def test_a_discarded_length_is_flagged(self):
+        src = ("#define LWIP_UNUSED_ARG(x) (void)x\n"
+               "int f(const char *p, int n) { LWIP_UNUSED_ARG(n); return *p; }\n")
+        assert self._check(src) == (["n"], [])
+
+    def test_a_void_cast_discard_counts(self):
+        src = "int f(const char *p, int len) { (void)len; return *p; }\n"
+        assert self._check(src) == (["len"], [])
+
+    def test_a_length_used_only_in_an_assertion_is_separate(self):
+        """A release build removes the assertion and with it the bound."""
+        src = ("#define LWIP_ASSERT(m, x) do { } while(0)\n"
+               "int f(char *out, int out_len) {\n"
+               "  LWIP_ASSERT(\"too short\", out_len >= 4);\n"
+               "  out[0] = 1; return 0; }\n")
+        assert self._check(src) == ([], ["out_len"])
+
+    def test_a_length_that_is_used_is_not_flagged(self):
+        src = "int f(const char *p, int n) { return n > 0 ? p[n - 1] : 0; }\n"
+        assert self._check(src) == ([], [])
+
+    def test_a_non_length_parameter_is_ignored(self):
+        """An unused `flags` is ordinary; an unused `len` is a red flag."""
+        src = "int f(const char *p, int flags) { return *p; }\n"
+        assert self._check(src) == ([], [])
+
+    def test_a_pointer_is_not_a_length(self):
+        src = "int f(char *buf, int *count) { return buf[0]; }\n"
+        assert self._check(src) == ([], [])
+
+    def test_the_scan_reports_it(self, tmp_path):
+        from veripp.scan import _unused_length_report
+
+        src = ("#define LWIP_UNUSED_ARG(x) (void)x\n"
+               "int f(const char *p, int n) { LWIP_UNUSED_ARG(n); return *p; }\n")
+        assert _unused_length_report(src, ["f"]) == {"f": (["n"], [])}

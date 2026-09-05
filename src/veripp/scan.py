@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .cppsig import (
     SignatureError,
+    find_function,
     function_definitions,
     match_bracket,
     scrub,
@@ -22,7 +23,9 @@ from .cppsig import (
 from dataclasses import replace as _replace
 
 from .esbmc import Outcome, VerifyConfig, run
-from .harness import HarnessError, HarnessOptions, generate
+from .harness import (
+    HarnessError, HarnessOptions, generate, unused_length_parameters,
+)
 from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
 from .triage import TargetInfo, access_kind, mechanical_artifact
@@ -85,6 +88,12 @@ class ScanReport:
     #: the full escalation ladder, and how many that settled.
     retried: int = 0
     settled: int = 0
+    #: Length-shaped parameters a function never reads, or reads only inside
+    #: an assertion. Independent of harnessing and of the solver, and the
+    #: shape behind three of this project's confirmed findings.
+    unused_lengths: dict[str, tuple[list[str], list[str]]] = field(
+        default_factory=dict
+    )
 
     @property
     def terminating(self) -> list[FunctionResult]:
@@ -200,6 +209,17 @@ class ScanReport:
                           "the failing input and is satisfiable):"]
             for r in sorted(self.preconditioned, key=lambda r: r.name):
                 lines.append(f"    {r.name}: " + " && ".join(r.preconditions))
+        if self.unused_lengths:
+            lines += ["", "  length parameters the body never reads "
+                          "(not findings -- leads):"]
+            for name, (never, asserted) in sorted(self.unused_lengths.items()):
+                for param in never:
+                    lines.append(f"    {name}({param}) never read")
+                for param in asserted:
+                    lines.append(
+                        f"    {name}({param}) read only inside an assertion, "
+                        "which a release build removes"
+                    )
         if self.counterexamples:
             lines += ["", "  counterexamples (most likely to matter first):"]
             # With triage the ordering is informed: the model's judgement
@@ -313,6 +333,22 @@ def _implementation_hint(source: Path, text: str) -> str | None:
     )
 
 
+def _unused_length_report(
+    text: str, names: list[str]
+) -> dict[str, tuple[list[str], list[str]]]:
+    """Every function whose length parameter goes unread, harnessable or not."""
+    found: dict[str, tuple[list[str], list[str]]] = {}
+    for name in names:
+        try:
+            signature = find_function(text, name)
+        except SignatureError:
+            continue
+        never, asserted = unused_length_parameters(signature)
+        if never or asserted:
+            found[name] = (never, asserted)
+    return found
+
+
 def _reason(detail: str) -> str:
     """Collapse a refusal message to its class, for counting."""
     for needle, label in (
@@ -402,6 +438,11 @@ def scan(
     names = only or [n for n in function_definitions(text) if n != "main"]
     scrubbed = scrub(text)   # once: comments and string literals removed
     report = ScanReport(source=source, candidates=len(names))
+    # Independent of harnessing, and of the solver: a length-shaped parameter
+    # the body never reads is the shape that produced three of this
+    # project's findings. It costs one signature parse per function and it
+    # covers the ones veripp cannot harness, which the solver never sees.
+    report.unused_lengths = _unused_length_report(text, names)
     if not names:
         report.implementation_hint = _implementation_hint(source, text)
         return report

@@ -633,6 +633,66 @@ def _pair_buffers_with_lengths(
     return pairs
 
 
+def unused_length_parameters(
+    signature: Signature,
+) -> tuple[list[str], list[str]]:
+    """Length-shaped parameters the body never reads.
+
+    The most productive single shape in this project's hunting, and the one
+    that needs no solver to spot. A function given a length and not using it
+    is bounding its reads or its writes by something else -- a constant, an
+    assertion, or nothing:
+
+    * lwIP's `netbiosns_name_decode(name_enc, name_dec, name_dec_len)`
+      discards `name_dec_len` with `LWIP_UNUSED_ARG` and walks an inbound
+      UDP datagram with no bound at all.
+    * lwIP's `smtp_base64_encode(target, target_len, ...)` discards
+      `target_len` and bounds its writes with an assertion that release
+      builds compile out.
+
+    Neither is a finding on its own -- the second turned out safe at every
+    call site -- so this reports and does not judge.
+
+    Returns `(never_used, assertion_only)`. The split matters: an assertion
+    is the bound smtp_base64_encode uses, and `LWIP_NOASSERT` compiles it
+    out, so in a release build the two categories are the same thing.
+    `LWIP_UNUSED_ARG(x)` and `(void)x;` count as not using it, because that
+    is what they mean.
+    """
+    body = signature.body
+    if not body:
+        return [], []
+    scrubbed = scrub(body)
+    # A discard is an admission, not a use.
+    without_discards = re.sub(
+        r"\b(?:LWIP_UNUSED_ARG|LWIP_ERROR_ARG)\s*\([^)]*\)", "", scrubbed)
+    without_discards = re.sub(r"\(\s*void\s*\)\s*\w+\s*;", "",
+                              without_discards)
+    # Assertions vanish in a release build, so a parameter used only there is
+    # not bounding anything that ships.
+    without_asserts = re.sub(
+        r"\b\w*ASSERT\w*\s*\(" + _BALANCED_TAIL, "", without_discards)
+
+    never: list[str] = []
+    assertion_only: list[str] = []
+    for param in signature.params:
+        if param.is_pointer or param.is_reference or not param.name:
+            continue
+        if not _is_length_name(param.name):
+            continue
+        word = r"\b" + re.escape(param.name) + r"\b"
+        if not re.search(word, without_discards):
+            never.append(param.name)
+        elif not re.search(word, without_asserts):
+            assertion_only.append(param.name)
+    return never, assertion_only
+
+
+#: Matches the rest of a call's argument list, one level of nesting deep --
+#: enough for `LWIP_ASSERT("msg", a >= f(b))` without a real parser.
+_BALANCED_TAIL = r"(?:[^()]|\([^()]*\))*\)"
+
+
 def _is_length_name(name: str) -> bool:
     lowered = name.lower()
     return lowered in _LENGTH_NAMES or lowered.endswith(

@@ -402,6 +402,25 @@ to grep for:
 `grep -rn LWIP_UNUSED_ARG <module> | grep -iE 'len|size'` found the first
 and the third directly. The second was one line above a false positive.
 
+That grep is now a check veripp runs. `scan` reports every length-shaped
+parameter a function never reads, and separately every one it reads only
+inside an assertion -- because `LWIP_NOASSERT` removes the assertion and
+with it the bound, which is exactly `smtp_base64_encode`. It costs one
+signature parse per function, needs no solver, and covers the functions
+veripp cannot harness, which the solver never sees at all.
+
+Pointed at netbiosns.c it prints
+
+```
+  length parameters the body never reads (not findings -- leads):
+    netbiosns_name_decode(name_dec_len) never read
+```
+
+which is the worst finding in this report, named from the signature alone.
+It is labelled a lead and not a finding on purpose: the same shape in
+smtp_base64_encode is safe at every call site, and an unused `len` in a
+fixed-signature callback is ordinary.
+
 **The tool did not find its own best finding, and the reason is
 structural.** Scanning netbiosns.c reported `netbiosns_name_decode`
 **verified**:
