@@ -185,11 +185,23 @@ listed together because the class is the interesting part, not the function:
   all three walk `->prev`, which is never null in cJSON's circular sibling
   lists and freely null in a graph filled field by field. This is the class
   `--sequence` exists to remove, and cJSON is out of solver budget for it.
-* **An output buffer with no length parameter** — `encode_string_as_pointer`
-  (cJSON_Utils; the caller sizes it with `pointer_encoded_length`),
-  `lcp_addci`, `ipcp_addci` and `ccp_addci` (sized by the matching
-  `*_cilen`, which mirrors the writer condition for condition),
-  `pppos_output_append` (assumes `PBUF_POOL_BUFSIZE`).
+* **An output buffer with no length parameter** — the largest single source
+  of noise on real C in this record, and now substantially smaller. veripp
+  sized these by counting literal indices alone, which sees the first block
+  a writer fills and nothing after it. It now also reads how far the body
+  *walks* the pointer (`p += K`, `INCPTR`, `PUTCHAR`/`PUTSHORT`/`PUTLONG`,
+  bare `*p++`) and what a callee one level down demands of it. lwIP's option
+  writers went from a four-byte buffer to 25, 31 and 35, and MS-CHAP's
+  `chapms_make_response` — a wrapper that writes one header byte and
+  delegates 49 to `ChapMS` — from one byte to 51. `ccp_addci`, `ipcp_addci`
+  and the whole of chap_ms.c verify as a result.
+
+  What survives is the genuinely unrecoverable part: `lcp_addci`'s endpoint
+  discriminator is a `MEMCPY` of a length computed at runtime, and
+  `encode_string_as_pointer`
+  is sized by the caller with `pointer_encoded_length`. `pppos_output_append`
+  assumes `PBUF_POOL_BUFSIZE`, a constant reached through a struct field. No
+  reading of the body recovers any of those.
 
   All three `*_addci` writers share a latent hazard worth naming even though
   none of them can reach it. `fsm_sconfreq` asks `*_cilen` for a size, then

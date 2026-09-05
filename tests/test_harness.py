@@ -769,3 +769,62 @@ class TestOutputBufferWalking:
         )
         assumptions = generate(p, "fill").assumptions
         assert not any("at least 1000" in a for a in assumptions)
+
+
+class TestForwardedBufferSize:
+    """A wrapper writes a header and delegates the rest.
+
+        *response++ = MS_CHAP_RESPONSE_LEN;
+        ChapMS(pcb, challenge, secret, secret_len, response);
+
+    Nothing in chapms_make_response says how big `response` must be. ChapMS
+    says it in its first line, and the wrapper needs that plus the byte it
+    wrote itself. Sizing the wrapper's buffer from its own body alone gave it
+    one element and reported lwIP for the memset of 49 that followed.
+    """
+
+    SRC = (
+        '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+        "#define RESP_LEN 49\n"
+        "static void inner(unsigned char *out) { memset(out, 0, RESP_LEN); }\n"
+        "void wrapper(unsigned char *out) { *out++ = RESP_LEN; inner(out); }\n"
+    )
+
+    def _extent(self, tmp_path, src, fn):
+        p = tmp_path / "s.c"
+        p.write_text(src, encoding="utf-8")
+        for a in generate(p, fn).assumptions:
+            if "points to at least" in a:
+                return int(a.split("at least ")[1].split()[0])
+        return None
+
+    def test_the_callees_requirement_is_carried_back(self, tmp_path):
+        """1 for the header byte, 49 from inner, 1 for the index base."""
+        assert self._extent(tmp_path, self.SRC, "wrapper") == 51
+
+    def test_the_callee_itself_is_unchanged(self, tmp_path):
+        assert self._extent(tmp_path, self.SRC, "inner") == 49
+
+    def test_a_self_call_is_not_followed(self, tmp_path):
+        """Recursion would otherwise add its own requirement forever."""
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "void loop(unsigned char *out) { memset(out, 0, 8); loop(out); }\n"
+        )
+        assert self._extent(tmp_path, src, "loop") == 8
+
+    def test_a_pointer_not_passed_on_gains_nothing(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n#include <string.h>\n'
+            "static void other(unsigned char *x) { memset(x, 0, 40); }\n"
+            "void keep(unsigned char *out) { unsigned char t[40];"
+            " other(t); out[0] = 1; }\n"
+        )
+        assert self._extent(tmp_path, src, "keep") is None
+
+    def test_a_bare_post_increment_counts_as_one_step(self, tmp_path):
+        src = (
+            '#include "veripp/contracts.hpp"\n'
+            "void two(unsigned char *p) { *p++ = 1; *p++ = 2; p[0] = 3; }\n"
+        )
+        assert self._extent(tmp_path, src, "two") == 3

@@ -890,7 +890,8 @@ def _emit_scalar(
             if obj is not None:
                 return obj
         return _emit_lone_pointer(param, assumptions, options, typedefs,
-                                  signature.body, macro_text or source_text)
+                                  signature.body, macro_text or source_text,
+                                  signature)
     if param.is_reference:
         if source_text and nondet_for(param.pointee(), typedefs) is None:
             obj = _try_object(param, signature, assumptions, options, typedefs,
@@ -970,6 +971,7 @@ def _emit_lone_pointer(
     typedefs: dict[str, str],
     body: str = "",
     source_text: str = "",
+    signature: Signature | None = None,
 ) -> list[str]:
     pointee = param.pointee()
     _pointee = normalize_type(pointee, typedefs)
@@ -1047,8 +1049,12 @@ def _emit_lone_pointer(
     # two add: the furthest index in the last block, plus every step taken to
     # reach it.
     walked = _advanced_extent(param, body, source_text)
-    if walked:
-        extent = min(extent + walked, _MAX_FIXED_EXTENT)
+    forwarded = (
+        _forwarded_extent(param, signature, source_text, options.max_array_len)
+        if signature is not None else 0
+    )
+    if walked or forwarded:
+        extent = min(extent + walked + forwarded, _MAX_FIXED_EXTENT)
     # A fixed-size write says outright how big the buffer has to be, and it
     # outranks both the index scan and the harness bound: the index scan can
     # only see what it can evaluate, and the bound is an arbitrary number.
@@ -1263,6 +1269,12 @@ def _fixed_write_extent(
 _MAX_FIXED_EXTENT = 4096
 
 
+#: Keywords that read as calls. Not imported from cppsig: this only needs
+#: the control-flow words, and a shorter list is easier to be sure about.
+_NOT_CALLABLE = frozenset({
+    "if", "for", "while", "switch", "return", "sizeof", "do", "else",
+})
+
 #: How a body walks an output pointer forward: `p += CILEN_MPPE`, and lwIP's
 #: macro for the same thing, `INCPTR(CILEN_MPPE, p)`.
 _ADVANCE_PATTERNS = (
@@ -1305,7 +1317,57 @@ def _advanced_extent(param: Param, body: str, source_text: str) -> int:
             rf"\b{macro}\s*\([^;()]*,\s*{name}\s*\)", scrubbed
         )
         total += width * len(hits)
+    # `*response++ = MS_CHAP_RESPONSE_LEN;` -- a header byte written by hand
+    # before the rest is delegated. One step each.
+    total += len(re.findall(rf"\*\s*{name}\s*\+\+", scrubbed))
+    total += len(re.findall(rf"(?<![*\w]){name}\s*\+\+\s*;", scrubbed))
     return total
+
+
+def _forwarded_extent(
+    param: Param, signature: Signature, source_text: str, cap: int,
+) -> int:
+    """What a callee in this file demands of a pointer handed on to it.
+
+    A wrapper writes a header and delegates the body:
+
+        *response++ = MS_CHAP_RESPONSE_LEN;
+        ChapMS(pcb, challenge, secret, secret_len, response);
+
+    Nothing in chapms_make_response says how big `response` must be. ChapMS
+    says it, in its first line -- `BZERO(response, MS_CHAP_RESPONSE_LEN)` --
+    and the wrapper needs that plus the byte it wrote itself. The shape is
+    common enough to be worth one level of lookup; it is not followed deeper,
+    because each level is another chance to be wrong about which parameter
+    corresponds to which.
+    """
+    if not signature.body:
+        return 0
+    scrubbed = scrub(signature.body)
+    name = re.escape(param.name)
+    best = 0
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(([^;{}]*)\)", scrubbed):
+        callee, args = m.group(1), m.group(2)
+        if callee == signature.name or callee in _NOT_CALLABLE:
+            continue
+        position = next(
+            (i for i, a in enumerate(args.split(","))
+             if re.fullmatch(rf"\s*{name}\s*", a)),
+            None,
+        )
+        if position is None:
+            continue
+        try:
+            callee_sig = find_function(source_text, callee)
+        except SignatureError:
+            continue
+        if position >= len(callee_sig.params):
+            continue
+        needed = _fixed_write_extent(
+            callee_sig.params[position], callee_sig.body, source_text, cap
+        )
+        best = max(best, needed)
+    return best
 
 
 def _indexed_extent(param: Param, body: str, options: HarnessOptions) -> int:
