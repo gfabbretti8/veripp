@@ -11,7 +11,7 @@ The headline is not the bugs. It is the ratio.
 | | count |
 |---|---:|
 | Functions proved free of the eight UB classes | **163** |
-| Real defects confirmed | **9** |
+| Real defects confirmed | **10** |
 | Counterexamples that turned out to be false | **32** |
 | veripp modelling defects that had to be fixed first | **26** |
 
@@ -54,6 +54,7 @@ intuition, and several looked *more* convincing than the real findings.
 | lwIP | netbiosns (NetBIOS responder) | — | **1** |
 | lwIP | smtp (client, auth setup) | — | **1** |
 | lwIP | PPP: utils.c (`%.*v`) | — | **1** |
+| TinyUSB | host examples, string descriptors | — | **1** |
 | lwIP | SNMP BER/ASN.1 decoder | 10 | 0 |
 
 Three real defects are in [LWIP_STRING_HELPERS.md](LWIP_STRING_HELPERS.md);
@@ -449,6 +450,21 @@ Pointed at netbiosns.c it prints
 which is the worst finding in this report, named from the signature alone.
 It is labelled a lead and not a finding on purpose: the same shape in
 smtp_base64_encode is safe at every call site.
+
+**Swept across seven libraries it found a tenth defect, and the first that
+is a write.** TinyUSB's host examples convert a USB string descriptor to
+UTF-8 in place, in a 256-byte buffer, with `_convert_utf16le_to_utf8`
+discarding the destination size under a `// TODO: Check for runover.`
+comment. UTF-8 is 1.5× the width of UTF-16 at U+0800 and above, so a
+descriptor claiming `bLength = 255` writes 378 bytes into 256 --
+ASan-confirmed, 122 bytes past the end, content derived from the descriptor.
+A `bLength` of 1 underflows the same function's length arithmetic to
+2**63-1. Both still in master. It is example code rather than the library,
+which is said plainly in the write-up.
+
+The sweep's precision is the reason that was findable: cJSON (1114
+functions), parson, miniz, nanopb and tinyexpr returned **zero** hits
+between them; mbedTLS returned two out of 2436 functions.
 
 **Swept across all 124 files of lwIP it returns two hits, and they are the
 two real ones.** The first version returned 26. The 24 that went away were
