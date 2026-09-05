@@ -448,8 +448,21 @@ Pointed at netbiosns.c it prints
 
 which is the worst finding in this report, named from the signature alone.
 It is labelled a lead and not a finding on purpose: the same shape in
-smtp_base64_encode is safe at every call site, and an unused `len` in a
-fixed-signature callback is ordinary.
+smtp_base64_encode is safe at every call site.
+
+**Swept across all 124 files of lwIP it returns two hits, and they are the
+two real ones.** The first version returned 26. The 24 that went away were
+almost all one pattern: a function that discards the pointer *and* its
+length together -- `ccp_datainput`, `ccp_extcode`, seven SNMP dispatch
+callbacks, five `*_tcp_sent` handlers. A fixed-signature callback that does
+not need either is not a function bounding something wrongly, it is a
+function not doing that job at all.
+
+So a length is now only reported when it pairs with a buffer parameter *and*
+the body actually touches that buffer. That is the difference between
+`netbiosns_name_decode`, which writes through `name_dec` and ignores the
+length bounding it, and `ccp_datainput`, which ignores both. Two hits out of
+roughly two thousand functions, no false positives, and no solver.
 
 **The tool did not find its own best finding, and the reason is
 structural.** Scanning netbiosns.c reported `netbiosns_name_decode`

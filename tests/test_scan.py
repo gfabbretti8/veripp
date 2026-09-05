@@ -389,6 +389,31 @@ class TestUnusedLengthParameters:
         src = "int f(char *buf, int *count) { return buf[0]; }\n"
         assert self._check(src) == ([], [])
 
+    def test_a_length_whose_buffer_is_also_unused_is_not_a_smell(self):
+        """lwIP's ccp_datainput discards `pkt` and `len` together: it reacts
+        to a decompression error and never looks at the payload. A function
+        not doing a job is not a function doing it wrongly."""
+        src = ("#define LWIP_UNUSED_ARG(x) (void)x\n"
+               "int f(const char *pkt, int len) {\n"
+               "  LWIP_UNUSED_ARG(pkt); LWIP_UNUSED_ARG(len); return 1; }\n")
+        assert self._check(src) == ([], [])
+
+    def test_a_length_with_no_buffer_to_bound_is_not_a_smell(self):
+        """The tcp_sent callbacks take a `len` and no buffer at all -- the
+        signature is lwIP's, not the implementation's."""
+        src = ("#define LWIP_UNUSED_ARG(x) (void)x\n"
+               "int f(void *arg, int len) { LWIP_UNUSED_ARG(len); return 1; }\n")
+        assert self._check(src) == ([], [])
+
+    def test_the_buffer_being_used_is_what_makes_it_one(self):
+        """netbiosns_name_decode writes through name_dec and ignores the
+        length that bounds it. That is the shape."""
+        src = ("#define LWIP_UNUSED_ARG(x) (void)x\n"
+               "int f(char *name_dec, int name_dec_len) {\n"
+               "  LWIP_UNUSED_ARG(name_dec_len);\n"
+               "  name_dec[0] = 1; return 0; }\n")
+        assert self._check(src) == (["name_dec_len"], [])
+
     def test_the_scan_reports_it(self, tmp_path):
         from veripp.scan import _unused_length_report
 

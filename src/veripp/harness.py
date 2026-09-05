@@ -675,6 +675,15 @@ def unused_length_parameters(
     without_asserts = re.sub(
         r"\b\w*ASSERT\w*\s*\(" + _BALANCED_TAIL, "", without_discards)
 
+    # A length only bounds something if there is a buffer for it to bound and
+    # the body actually touches that buffer. Across all of lwIP the raw check
+    # produced 26 hits, 24 of them functions that discard the pointer AND its
+    # length together -- a fixed-signature callback that does not need either,
+    # which is not a smell. Pairing removes every one of those and keeps both
+    # real findings.
+    paired = _pair_buffers_with_lengths(signature.params, None, body=body)
+    buffer_for = {length: name for name, length in paired.items()}
+
     never: list[str] = []
     assertion_only: list[str] = []
     for param in signature.params:
@@ -682,6 +691,12 @@ def unused_length_parameters(
             continue
         if not _is_length_name(param.name):
             continue
+        buffer_name = buffer_for.get(param.name)
+        if buffer_name is None:
+            continue      # a length describing nothing in this signature
+        if not re.search(r"\b" + re.escape(buffer_name) + r"\b",
+                         without_discards):
+            continue      # the buffer is unused too: the job is not done here
         word = r"\b" + re.escape(param.name) + r"\b"
         if not re.search(word, without_discards):
             never.append(param.name)
