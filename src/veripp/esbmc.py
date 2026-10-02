@@ -15,9 +15,10 @@ import re
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
+from typing import NamedTuple
 
 #: ESBMC does not predefine a macro identifying itself, so veripp defines one.
 #: `include/veripp/contracts.hpp` keys all of its behaviour off it.
@@ -611,22 +612,86 @@ def _tool_error(output: str, exit_code: int | None) -> str | None:
 # ordinary container idiom. veripp refuses to present "verified" from a
 # checker that fails this probe without saying so.
 
-SOUNDNESS_PROBES: dict[str, tuple[str, str]] = {
-    "member-array bounds (esbmc#6508)": (
+
+class Probe(NamedTuple):
+    """A program with one planted bug, and the property it must violate."""
+
+    code: str
+    std: str
+    #: Part of the violated property's description. Matching the verdict
+    #: alone would accept a checker that rejects the program for some other
+    #: reason, and say nothing about the check the probe is there for.
+    expect: str
+
+
+#: One planted bug for every check veripp turns on by default, run under
+#: exactly those checks. A check that cannot catch its own planted bug makes
+#: every "verified" it contributes to a false one.
+SOUNDNESS_PROBES: dict[str, Probe] = {
+    "member-array bounds (esbmc#6508)": Probe(
         "struct S { int a[4]; unsigned n; };\n"
         "static void push(struct S *s, int v) { s->a[s->n++] = v; }\n"
         "int main(void) { struct S s; s.n = 0;\n"
         "  for (int i = 0; i < 5; ++i) push(&s, i);\n"
         "  return 0; }\n",
         "c11",
+        "array bounds violated",
     ),
-    "local-array bounds": (
+    "local-array bounds": Probe(
         "int main(void) { int a[4]; unsigned n = 0;\n"
         "  for (int i = 0; i < 5; ++i) a[n++] = i;\n"
         "  return 0; }\n",
         "c11",
+        "array bounds violated",
+    ),
+    "arithmetic overflow": Probe(
+        "int nondet_int(void);\n"
+        "int main(void) { int a = nondet_int(); return a + 1; }\n",
+        "c11",
+        "arithmetic overflow on add",
+    ),
+    "null pointer": Probe(
+        "int main(void) { int *p = 0; return *p; }\n",
+        "c11",
+        "dereference failure: NULL pointer",
+    ),
+    "division by zero": Probe(
+        "int nondet_int(void);\n"
+        "int main(void) { int d = nondet_int(); return 10 / d; }\n",
+        "c11",
+        "division by zero",
+    ),
+    "memory leak": Probe(
+        "#include <stdlib.h>\n"
+        "int main(void) { int *p = malloc(sizeof *p); if (p) *p = 1; return 0; }\n",
+        "c11",
+        "forgotten memory",
+    ),
+    "uninitialised read": Probe(
+        "int main(void) { int x; return x; }\n",
+        "c11",
+        "use of uninitialized variable",
+    ),
+    # Unsigned, and by at least the width: a signed `1 << s` trips the
+    # overflow check first and would say nothing about this one.
+    "undefined shift": Probe(
+        "int nondet_int(void);\n"
+        "int main(void) { int s = nondet_int(); if (s < 32) return 0;\n"
+        "  return (int)(1u << s); }\n",
+        "c11",
+        "undefined behavior on shift operation",
+    ),
+    "NaN": Probe(
+        "int main(void) { double inf = __builtin_inf();\n"
+        "  return (inf - inf) > 0; }\n",
+        "c11",
+        "NaN on",
     ),
 }
+
+#: Bumped with any change to how the probes are run; with the probes' own
+#: text it keys the remembered results, so changing either re-asks.
+_PROBE_SET_VERSION = 2
 
 
 #: Code that pulls ARM's vector intrinsics. ESBMC's clang frontend does not
@@ -669,11 +734,17 @@ def check_arm_intrinsics(esbmc_bin: str | None = None,
     return "Unrecognized clang builtin type" not in out
 
 
-def check_soundness(esbmc_bin: str | None = None, timeout_s: int = 60) -> dict[str, bool]:
+def check_soundness(
+    esbmc_bin: str | None = None, timeout_s: int = 60, remember: bool = False
+) -> dict[str, bool]:
     """Run known-failing programs; each MUST be reported as failing.
 
-    Returns probe name -> whether the checker correctly rejected it. A False
-    means this installation silently misses that class of bug.
+    Returns probe name -> whether the checker rejected it for the planted
+    bug. A False means this installation silently misses that class of bug.
+
+    With `remember`, results are reused for a checker whose bytes were probed
+    before, instead of asked again -- `verify` asks after every proof. A run
+    that probes stores what it found either way.
     """
     import tempfile
 
@@ -681,19 +752,73 @@ def check_soundness(esbmc_bin: str | None = None, timeout_s: int = 60) -> dict[s
     if binary is None:
         raise RuntimeError("esbmc not found on PATH")
 
+    key = _probe_key(binary)
+    if remember:
+        known = _read_probe_memo().get(key)
+        if isinstance(known, dict) and set(known) == set(SOUNDNESS_PROBES):
+            return {name: known[name] is True for name in SOUNDNESS_PROBES}
+
+    # The checks veripp runs by default, so each probe asks what a real run
+    # would: a check a probe needs but veripp does not switch on would pass
+    # the probe and still be missing from every verification.
+    config = VerifyConfig(unwind=8, timeout_s=timeout_s)
     results: dict[str, bool] = {}
     with tempfile.TemporaryDirectory() as tmp:
-        for name, (code, std) in SOUNDNESS_PROBES.items():
+        for name, probe in SOUNDNESS_PROBES.items():
             path = Path(tmp) / "probe.c"
-            path.write_text(code, encoding="utf-8")
+            path.write_text(probe.code, encoding="utf-8")
             try:
-                proc = subprocess.run(
-                    [binary, str(path), "--std", std, "--unwind", "8"],
-                    capture_output=True, text=True, timeout=timeout_s,
-                )
-            except subprocess.TimeoutExpired:
+                result = run(path, replace(config, c_std=probe.std),
+                             esbmc_bin=binary)
+            except OSError:
                 results[name] = False
                 continue
-            out = proc.stdout + proc.stderr
-            results[name] = "VERIFICATION FAILED" in out
+            results[name] = result.outcome is Outcome.COUNTEREXAMPLE and any(
+                probe.expect in p.description for p in result.properties
+            )
+    _write_probe_memo(key, results)
     return results
+
+
+def _probe_key(binary: str) -> str:
+    """The checker's bytes and the probes asked of it, as one key."""
+    import hashlib
+
+    from .cache import checker_digest
+    from .checker import state_dir
+
+    probes = hashlib.sha256(
+        f"{_PROBE_SET_VERSION}\0{sorted(SOUNDNESS_PROBES.items())!r}".encode()
+    ).hexdigest()
+    return f"{checker_digest(binary, memo=state_dir() / 'checkers.json')}:{probes}"
+
+
+def _probe_memo_path() -> Path:
+    from .checker import state_dir
+
+    return state_dir() / "soundness.json"
+
+
+def _read_probe_memo() -> dict:
+    import json
+
+    try:
+        memo = json.loads(_probe_memo_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return memo if isinstance(memo, dict) else {}
+
+
+def _write_probe_memo(key: str, results: dict[str, bool]) -> None:
+    import json
+
+    memo = _read_probe_memo()
+    memo[key] = results
+    path = _probe_memo_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(memo, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        pass  # not remembered: the next run asks again, which is only slower

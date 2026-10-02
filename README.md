@@ -160,8 +160,11 @@ veripp scan . --changed origin/main      # only files this branch touches
 
 `scan` skips build and vendored directories. It retries unsettled functions
 within a time budget (`--retry-budget`, default 120 s) and caches verdicts
-for files that haven't changed. The cache key covers headers, linked sources,
-bounds and the checker version. Counterexamples are grouped by file, with
+for files that haven't changed. The cache key covers every project header
+the file reaches (through `-I` and `compile_commands.json` alike), linked
+sources and force-included headers, the bounds and harness options, and the
+checker and veripp themselves, identified by their bytes rather than by a
+version string. Counterexamples are grouped by file, with
 writes listed before reads. Length parameters that a function never reads
 are listed separately as leads.
 

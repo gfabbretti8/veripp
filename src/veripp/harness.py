@@ -492,27 +492,25 @@ def _linked_text(options: HarnessOptions) -> list[str]:
 DEFAULT_INCLUDE_DEPTH = 5
 
 
-def _with_local_includes(
+def local_include_closure(
     source: Path,
     text: str,
     include_dirs: list[Path] | None = None,
     depth: int = DEFAULT_INCLUDE_DEPTH,
-) -> str:
-    """`text` plus the contents of the headers it `#include`s, transitively.
+) -> list[tuple[Path, str]]:
+    """The project headers `text` pulls in, transitively, with their contents.
 
-    Struct definitions and project typedefs live in the library's headers, not
-    in the .cpp being targeted, so the generator cannot see the types it must
-    construct without following them. Headers are resolved the way the
-    compiler resolves them: next to the including file, then along -I paths
-    from the compilation database. System includes are left alone -- their
-    scalars are already known, and their contents would only slow the scan.
+    Headers are resolved the way the compiler resolves them: next to the
+    including file, then along the -I paths. System includes are left alone:
+    a name is only followed when it exists in a directory the build named,
+    which keeps <stdio.h> out automatically. Returned in the order they are
+    first reached, each resolved path once.
     """
     search = [source.parent, *(include_dirs or [])]
     seen: set[Path] = set()
-    parts: list[str] = []
+    found: list[tuple[Path, str]] = []
 
     def absorb(current: Path, body: str, remaining: int) -> None:
-        parts.append(body)
         if remaining <= 0:
             return
         # A project's own header is often included with angle brackets and
@@ -535,13 +533,31 @@ def _with_local_includes(
                     break
                 seen.add(resolved)
                 try:
-                    absorb(candidate, candidate.read_text(encoding="utf-8", errors="replace"), remaining - 1)
+                    header = candidate.read_text(encoding="utf-8", errors="replace")
                 except OSError:
-                    pass
+                    break
+                found.append((resolved, header))
+                absorb(candidate, header, remaining - 1)
                 break
 
     absorb(source, text, depth)
-    return "\n".join(parts)
+    return found
+
+
+def _with_local_includes(
+    source: Path,
+    text: str,
+    include_dirs: list[Path] | None = None,
+    depth: int = DEFAULT_INCLUDE_DEPTH,
+) -> str:
+    """`text` plus the contents of the headers it `#include`s, transitively.
+
+    Struct definitions and project typedefs live in the library's headers, not
+    in the .cpp being targeted, so the generator cannot see the types it must
+    construct without following them.
+    """
+    closure = local_include_closure(source, text, include_dirs, depth)
+    return "\n".join([text, *(body for _, body in closure)])
 
 
 def _expand_pointer_aliases(signature: Signature, aliases: dict[str, str]) -> None:

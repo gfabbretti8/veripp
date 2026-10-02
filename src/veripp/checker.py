@@ -64,6 +64,13 @@ def managed_dir() -> Path:
     return base / "veripp" / "checker"
 
 
+def state_dir() -> Path:
+    """Where veripp remembers things about checkers: their digests, and what
+    the soundness probes found. Beside the managed checker, and moved with it
+    by $VERIPP_CHECKER_DIR."""
+    return managed_dir().parent
+
+
 def managed_esbmc() -> str | None:
     """The checker veripp installed, if there is one and it can be executed."""
     name = "esbmc.exe" if sys.platform == "win32" else "esbmc"
