@@ -10,6 +10,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 from dataclasses import dataclass, field
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -520,6 +521,9 @@ def scan(
         _triage_pass(report, config, options, llm, harness_paths,
                      triage_progress)
         report.triaged = True
+    # The harnesses were inputs to the runs above and nothing else; a scan
+    # of a large tree used to leave one directory of them per file.
+    shutil.rmtree(workdir, ignore_errors=True)
     return report
 
 

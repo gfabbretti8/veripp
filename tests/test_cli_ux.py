@@ -560,3 +560,64 @@ class TestFlagsMeanTheSameThingEverywhere:
         assert "triage counterexamples" in flat
         assert "re-checked by the solver" in flat
         assert "skip the LLM triage pass" in flat
+
+
+class TestKeepHarness:
+    """`--keep-harness` was inverted: it printed "(harness kept at ...)" when
+    NOT given, and nothing when given. Kept or not, the directory stayed, so
+    every `verify --function` left one behind in /tmp, and so did every file
+    a scan visited."""
+
+    @staticmethod
+    def _verify(tmp_path, monkeypatch, capsys, *flags):
+        from veripp import cli
+        from veripp.agent import AgentReport
+        from veripp.esbmc import Outcome, VerifyResult
+
+        made: list[Path] = []
+        real = cli.scratch_dir
+
+        def recorded(*args, **kwargs):
+            made.append(real(*args, **kwargs))
+            return made[-1]
+
+        def checked(source, config, **kwargs):
+            return AgentReport(final=VerifyResult(Outcome.COUNTEREXAMPLE, config),
+                               harness=kwargs.get("harness"))
+
+        monkeypatch.setattr(cli, "scratch_dir", recorded)
+        monkeypatch.setattr(cli, "verify_with_agent", checked)
+        src = tmp_path / "f.c"
+        src.write_text("int f(int x) { return x; }\n", encoding="utf-8")
+        cli.main(["verify", str(src), "--function", "f", "--no-llm", *flags])
+        (scratch,) = made
+        return scratch, capsys.readouterr().out
+
+    def test_without_it_the_harness_is_removed_and_not_named(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        scratch, out = self._verify(tmp_path, monkeypatch, capsys)
+        assert not scratch.exists()
+        assert str(scratch) not in out
+        assert "harness kept" not in out
+
+    def test_with_it_the_harness_is_kept_and_named(self, tmp_path, monkeypatch, capsys):
+        scratch, out = self._verify(tmp_path, monkeypatch, capsys, "--keep-harness")
+        assert (scratch / "veripp_harness_f.c").is_file()
+        assert f"(harness kept in {scratch})" in out
+
+    def test_a_scan_removes_its_harnesses(self, tmp_path, monkeypatch):
+        from veripp import scan as scan_module
+        from veripp.esbmc import Outcome, VerifyConfig, VerifyResult
+
+        made: list[Path] = []
+        real = scan_module.scratch_dir
+        monkeypatch.setattr(scan_module, "scratch_dir",
+                            lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+        monkeypatch.setattr(scan_module, "run", lambda path, config, esbmc_bin=None:
+                            VerifyResult(Outcome.COUNTEREXAMPLE, config))
+        src = tmp_path / "f.c"
+        src.write_text("int f(int x) { return x; }\n", encoding="utf-8")
+        scan_module.scan(src, VerifyConfig(), retry_budget=0)
+        (scratch,) = made
+        assert not scratch.exists()

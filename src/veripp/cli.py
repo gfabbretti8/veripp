@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -194,7 +195,11 @@ def main(argv: list[str] | None = None) -> int:
         help="also write the JSON report here, keeping the readable output "
              "on stdout (so CI can have both without verifying twice)",
     )
-    v.add_argument("--keep-harness", action="store_true", help="print where the harness was written")
+    v.add_argument(
+        "--keep-harness", action="store_true",
+        help="keep the generated harness, and every variant of it the run "
+        "wrote, and print where; otherwise they are removed when it ends",
+    )
     v.add_argument(
         "--repro",
         metavar="PATH",
@@ -445,7 +450,14 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_USAGE
         return EXIT_VERIFIED
 
-    return _verify(args)
+    try:
+        return _verify(args)
+    finally:
+        # A generated harness lives in a directory of its own, with every
+        # variant the run wrote beside it. It is kept only when asked for.
+        scratch = getattr(args, "_scratch", None)
+        if scratch is not None and not args.keep_harness:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 #: Every ESBMC knob stays reachable -- the point of veripp is access to the
@@ -1702,7 +1714,8 @@ def _verify(args) -> int:
             print(f"error: cannot harness `{what}`: {exc}", file=sys.stderr)
             _suggest_targets(args, what)
             return EXIT_USAGE
-        target = harness.write(scratch_dir())
+        args._scratch = scratch_dir()
+        target = harness.write(args._scratch)
 
     extra_args: list[str] = []
     for header in args.include_file:
@@ -1775,9 +1788,11 @@ def _verify(args) -> int:
         if written:
             print(written, file=sys.stderr)
 
-    readable = report.summary()
     if harness and not args.keep_harness:
-        readable += f"\n(harness kept at {target})"
+        report.harness = None  # about to be removed; do not name it
+    readable = report.summary()
+    if harness and args.keep_harness:
+        readable += f"\n(harness kept in {args._scratch})"
     _emit(args, _payload(report, harness), readable)
 
     return _exit_code(report)
