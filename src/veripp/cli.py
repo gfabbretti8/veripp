@@ -19,9 +19,12 @@ from .baseline import (
     key_for,
 )
 from .agent import AgentReport, Budget, verify_with_agent
+from .checker import install_hint
 from .compdb import CompDBError, entry_for, find_database
 from .cppsig import SignatureError
-from .esbmc import Outcome, VerifyConfig, check_soundness, find_esbmc
+from .esbmc import (
+    CheckerNotFound, Outcome, VerifyConfig, check_soundness, find_esbmc,
+)
 from .harness import (
     Harness,
     HarnessError,
@@ -1742,15 +1745,21 @@ def _verify(args) -> int:
         if harness and args.function
         else None
     )
-    report = verify_with_agent(
-        target,
-        config,
-        llm=llm,
-        budget=Budget(),
-        assumptions=harness.assumptions if harness else [],
-        harness=target if harness else None,
-        target=target_info,
-    )
+    try:
+        report = verify_with_agent(
+            target,
+            config,
+            llm=llm,
+            budget=Budget(),
+            assumptions=harness.assumptions if harness else [],
+            harness=target if harness else None,
+            target=target_info,
+        )
+    except CheckerNotFound as exc:
+        # Said plainly, with the command that fixes it, instead of as the
+        # last line of a traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     if harness and getattr(args, "assume", None):
         report.accepted_preconditions = list(args.assume) + report.accepted_preconditions
 
@@ -1935,11 +1944,6 @@ def _make_llm(args) -> tuple[object, str | None]:
     return llm, None
 
 
-DOCKER_HINT = (
-    'docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan FILE.c'
-)
-
-
 def _missing_source_hint() -> str | None:
     """The single most likely reason a path is missing inside the image.
 
@@ -1977,61 +1981,6 @@ def _missing_source_hint() -> str | None:
     )
 
 
-def _esbmc_install_hint() -> str:
-    """The exact command for *this* machine, not a link to go read.
-
-    Architecture matters more than it looks. ESBMC publishes one Linux binary
-    and it is x86_64; handing an aarch64 user that URL gets them a download
-    that will not execute. The only prebuilt arm64 Linux ESBMC anywhere is the
-    Homebrew bottle, pinned to 8.4, which is the release that silently misses
-    out-of-bounds writes (esbmc#6508) -- so recommending it would trade a
-    clear failure for a quiet one. On that platform the image is the answer.
-    """
-    import platform
-
-    from .checker import source_for
-
-    # Where veripp can fetch and probe a checker itself, that is the whole
-    # instruction: one command, and it refuses to keep an unsound build.
-    if source_for().available:
-        return "veripp install-checker"
-
-    system = platform.system()
-    machine = platform.machine().lower()
-
-    if system == "Darwin":
-        # The macOS release zip links against Homebrew's z3/gmp/mpfr by
-        # absolute path, so it is not relocatable; brew is the only sane route.
-        return "brew install --HEAD esbmc"
-
-    if system == "Linux" and machine in ("x86_64", "amd64"):
-        return (
-            "curl -fsSL -o /tmp/esbmc.zip "
-            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip "
-            "&& unzip -q /tmp/esbmc.zip -d ~/.local/esbmc "
-            "&& chmod +x ~/.local/esbmc/*/bin/esbmc"
-        )
-
-    if system == "Windows":
-        # esbmc-windows.zip is published on every release; the CLI itself is
-        # pure Python and portable, so this is the whole install.
-        return (
-            "curl.exe -L -o esbmc.zip "
-            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-windows.zip "
-            "&& tar -xf esbmc.zip "
-            "&& (add the folder containing esbmc.exe to PATH)"
-        )
-
-    if system == "Linux":
-        return (
-            f"{DOCKER_HINT}\n"
-            f"      (no prebuilt ESBMC is published for Linux/{machine}; the image "
-            "carries one built from source)"
-        )
-
-    return DOCKER_HINT
-
-
 def _install_checker(dest=None) -> int:
     """Fetch a checker and keep it only if it passes the soundness probes."""
     from .checker import install, managed_dir
@@ -2055,7 +2004,7 @@ def _doctor(allow_unsound: bool = False) -> int:
         print(f"esbmc: {esbmc}")
     else:
         print("esbmc: NOT FOUND — veripp cannot verify anything without it.")
-        print(f"  install it with:  {_esbmc_install_hint()}")
+        print(f"  install it with:  {install_hint()}")
     if esbmc:
         import subprocess
 
@@ -2105,7 +2054,7 @@ def _doctor(allow_unsound: bool = False) -> int:
             + ", ".join(unsound)
             + ".\n'verified' results covering that pattern are NOT trustworthy "
             "(esbmc/esbmc#6508 is fixed upstream but in no release yet).\n"
-            f"  upgrade with:  {_esbmc_install_hint()}",
+            f"  upgrade with:  {install_hint()}",
             file=sys.stderr,
         )
         return EXIT_INCONCLUSIVE
