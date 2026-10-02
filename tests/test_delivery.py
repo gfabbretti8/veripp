@@ -1047,6 +1047,24 @@ class TestCommandListComesFromTheParser:
             )
 
 
+def _assert_trusted_publishing(workflow: Path) -> None:
+    yaml = pytest.importorskip("yaml")
+    jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+    publishing = [
+        job for job in jobs.values()
+        if any("gh-action-pypi-publish" in str(step.get("uses", ""))
+               for step in job.get("steps", []))
+    ]
+    assert publishing, f"{workflow.name} no longer publishes to PyPI"
+    for job in publishing:
+        assert job.get("permissions", {}).get("id-token") == "write"
+        assert job.get("environment") == "pypi"
+        for step in job["steps"]:
+            if "gh-action-pypi-publish" in str(step.get("uses", "")):
+                assert "password" not in (step.get("with") or {})
+    assert "PYPI_TOKEN" not in workflow.read_text(encoding="utf-8")
+
+
 class TestReleaseWorkflow:
     """Tagging vX.Y.Z is the release. These pin the properties that make
     that safe, since nothing exercises the workflow until a real tag."""
@@ -1060,8 +1078,14 @@ class TestReleaseWorkflow:
             "bad commit publishes before anything fails"
         )
 
-    def test_it_uses_the_repository_secret(self) -> None:
-        assert "secrets.PYPI_TOKEN" in self.WF.read_text(encoding="utf-8")
+    def test_it_publishes_with_trusted_publishing(self) -> None:
+        """PyPI trusts the workflow's OIDC token, so no API token exists to
+        leak from a secret. A `password:` left in would quietly go back to
+        one."""
+        _assert_trusted_publishing(self.WF)
+
+    def test_so_does_the_checker_wheel(self) -> None:
+        _assert_trusted_publishing(ROOT / ".github/workflows/checker-wheels.yml")
 
     def test_a_mislabelled_build_is_refused(self) -> None:
         # The tag and pyproject version must be compared before upload.

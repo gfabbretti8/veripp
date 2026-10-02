@@ -59,6 +59,15 @@ jobs:
     runs-on: ubuntu-latest
     # Publishing is the one irreversible step, so it gets its own job: a
     # failure above stops before anything leaves the machine.
+    #
+    # PyPI Trusted Publishing: PyPI accepts this job's short-lived OIDC
+    # token because it is configured to trust this repository, this
+    # workflow and this environment. There is no long-lived API token to
+    # leak from a secret, or to outlive the maintainer who made it.
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -91,7 +100,6 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_TOKEN }}
           skip-existing: true
 
       # Confirm the thing users will actually do works, against the real
