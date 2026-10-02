@@ -459,14 +459,12 @@ def _is_local(base_url: str) -> bool:
 
 
 def detect_provider() -> str | None:
-    """The first provider this machine actually has credentials for.
+    """The first provider this machine has credentials for, if any.
 
-    Guessing a vendor the user never mentioned produces a confusing first run
-    ("no API key for api.openai.com" when they never said OpenAI), so the
-    default is whatever is configured -- and nothing, if nothing is.
+    Reported, never acted on: a key in the environment was put there for
+    whatever else runs here, and sending source code to that provider is a
+    decision nobody made for veripp. See `make_llm`.
     """
-    if os.environ.get("VERIPP_LLM_BASE_URL"):
-        return "custom"
     for name, entry in PROVIDERS.items():
         env = entry.get("api_key_env", "ANTHROPIC_API_KEY")
         if os.environ.get(env):
@@ -487,17 +485,25 @@ def make_llm(spec: str | None = None, base_url: str | None = None) -> LLMClient:
     A bare model name uses VERIPP_LLM_PROVIDER, else openai. Raises
     RuntimeError when the provider cannot be used, so callers can fall back to
     offline mode with a note.
+
+    Only an explicit choice turns triage on: a spec, $VERIPP_LLM_MODEL, or an
+    endpoint ($VERIPP_LLM_BASE_URL or `base_url`, which is how a local model
+    is named). A provider's API key in the environment is not one. It was
+    set for some other tool, and taking it as consent would send source code
+    to a vendor the user never named here.
     """
     spec = spec or os.environ.get("VERIPP_LLM_MODEL") or ""
+    base_url = base_url or os.environ.get("VERIPP_LLM_BASE_URL") or None
     if not spec and base_url is None:
-        detected = detect_provider()
-        if detected is None:
-            raise RuntimeError(
-                "no LLM configured, so counterexamples will not be triaged. "
-                "Set one with --model (e.g. ollama:llama3.1 for a local model, "
-                "needing no account), or pass --no-llm to say so explicitly"
-            )
-        spec = detected
+        found = detect_provider()
+        key = found and PROVIDERS[found].get("api_key_env", "ANTHROPIC_API_KEY")
+        raise RuntimeError(
+            "no LLM configured, so counterexamples will not be triaged. "
+            + (f"${key} is set, but veripp sends code to a model only when "
+               "told to. " if found else "")
+            + "Set one with --model (e.g. ollama:llama3.1 for a local model, "
+            "needing no account), or pass --no-llm to say so explicitly"
+        )
     provider, _, model = spec.partition(":")
     if not model:  # bare provider or bare model name
         if provider.lower() in PROVIDERS:

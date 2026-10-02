@@ -98,6 +98,59 @@ class TestProviderSelection:
         assert llm._base_url == "http://127.0.0.1:9/v1"
 
 
+#: Every variable that can name a provider, a model or an endpoint.
+_LLM_ENV = (
+    "VERIPP_LLM_MODEL", "VERIPP_LLM_BASE_URL", "VERIPP_LLM_PROVIDER",
+    "VERIPP_LLM_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+    *(entry["api_key_env"] for entry in PROVIDERS.values() if "api_key_env" in entry),
+)
+
+
+class TestTriageIsAskedFor:
+    """README: scan triages "with an LLM configured (--model, or
+    $VERIPP_LLM_MODEL)". It also triaged whenever any provider's API key was
+    in the environment -- set for some other tool, typically -- and sent the
+    code under test to that provider, which nobody had chosen for veripp."""
+
+    @pytest.fixture(autouse=True)
+    def clean(self, monkeypatch):
+        for var in _LLM_ENV:
+            monkeypatch.delenv(var, raising=False)
+
+    @pytest.mark.parametrize("variable", ["OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY"])
+    def test_a_provider_key_alone_does_not_turn_triage_on(self, monkeypatch, variable):
+        monkeypatch.setenv(variable, "sk-for-something-else")
+        with pytest.raises(RuntimeError, match="no LLM configured") as raised:
+            make_llm()
+        # Said, so nobody wonders why the key they have is not used.
+        assert f"${variable} is set" in str(raised.value)
+
+    def test_the_cli_falls_back_to_no_triage_with_the_reason(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from veripp.cli import _make_llm
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-for-something-else")
+        llm, note = _make_llm(SimpleNamespace(model=None, llm_base_url=None))
+        assert isinstance(llm, NullLLM)
+        assert "no LLM configured" in note
+
+    def test_a_model_named_in_the_environment_is_an_opt_in(self, monkeypatch):
+        monkeypatch.setenv("VERIPP_LLM_MODEL", "ollama:llama3.1")
+        assert make_llm()._model == "llama3.1"
+
+    def test_a_local_endpoint_named_in_the_environment_is_an_opt_in(self, monkeypatch):
+        """It used to resolve to model "custom" on api.openai.com, and then
+        fail for want of an OpenAI key."""
+        monkeypatch.setenv("VERIPP_LLM_BASE_URL", "http://localhost:11434/v1")
+        assert make_llm()._base_url == "http://localhost:11434/v1"
+
+    def test_an_explicit_spec_still_works_alongside_a_key(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-real")
+        llm = make_llm("openai:gpt-4o-mini")
+        assert llm._model == "gpt-4o-mini" and llm._api_key == "sk-real"
+
+
 class TestOpenAICompatibleTransport:
     def _client(self, server):
         return OpenAICompatibleLLM(model="m", base_url=server.url, provider="test")

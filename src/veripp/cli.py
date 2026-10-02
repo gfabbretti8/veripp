@@ -1154,9 +1154,9 @@ def _collect_reports(args):
 def _scan_llm(args):
     """The scan's triage client (or None), plus the note explaining why not.
 
-    Same default as `verify`: whatever provider has credentials, nothing if
-    none do. The note is held back and shown only when counterexamples exist
-    -- triage advice is useless for a scan where everything proved.
+    Same rule as `verify`: a model only when one was asked for. The note is
+    held back and shown only when counterexamples exist -- triage advice is
+    useless for a scan where everything proved.
     """
     if getattr(args, "no_llm", False):
         return None, None
@@ -2097,8 +2097,9 @@ def _doctor(allow_unsound: bool = False) -> int:
     if os.environ.get("VERIPP_LLM_BASE_URL"):
         configured.append("custom ($VERIPP_LLM_BASE_URL)")
     print("llm providers with credentials: " + (", ".join(configured) or "none"))
-    print("  any OpenAI-compatible endpoint works: --model provider:model "
-          "[--llm-base-url URL]")
+    print("  triage uses one only when asked: --model provider:model or "
+          "$VERIPP_LLM_MODEL, or --llm-base-url URL for any OpenAI-compatible "
+          "endpoint")
     if unsound and not allow_unsound:
         print(
             "\nWARNING: this esbmc silently misses "
