@@ -8,10 +8,12 @@ env:
   # container idiom and exactly the code veripp is pointed at.
   #
   # `weekly` is newer than 8.4 and passes our soundness probe, but do not read
-  # it as "master": despite the name it is cut infrequently. As of 2026-08-24
-  # it points at a commit from 2026-05-27, with master ~1900 commits ahead.
-  # That is why `veripp doctor` re-checks the checker behaviourally on every
-  # run instead of trusting a version string.
+  # it as "master": despite the name it is cut infrequently, and re-cut in
+  # place under the same name. So which build CI runs is pinned by digest,
+  # in one place, checker/esbmc-linux.zip.sha256 -- at present the build of
+  # esbmc 4e619b97 made on 2026-09-08 -- and taking a newer one is a reviewed
+  # bump of that file. `veripp doctor` still re-checks the checker
+  # behaviourally on every run instead of trusting a version string.
   ESBMC_VERSION: weekly
 
 jobs:
@@ -30,12 +32,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/esbmc
-          # Keyed on this file's hash, not a date: bumping ESBMC_VERSION or
-          # editing this workflow rotates the cache. A silently re-cut `weekly`
-          # under the same name would keep the old binary -- acceptable because
-          # `veripp doctor` re-probes the checker's soundness on every run, so
-          # a regressed build fails the run rather than passing on a stale hit.
-          key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml') }}
+          # Keyed on this file and the pinned digest, not a date: bumping
+          # either rotates the cache. `veripp doctor` still re-probes the
+          # checker's soundness on every run, cached or not.
+          key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml', 'checker/esbmc-linux.zip.sha256') }}
 
       # zsh is not on the runner image, and without it the zsh completion is
       # generated but never checked for validity -- a broken one would ship.
@@ -48,6 +48,11 @@ jobs:
           mkdir -p ~/.local/esbmc
           curl -fsSL -o /tmp/esbmc.zip \
             "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/esbmc-linux.zip"
+          # `weekly` is re-cut in place under the same name, so the tag says
+          # nothing about which build arrived. The digest does, and a new
+          # build is a one-line reviewed bump of checker/esbmc-linux.zip.sha256
+          # instead of something every workflow silently picks up.
+          echo "$(cat checker/esbmc-linux.zip.sha256)  /tmp/esbmc.zip" | sha256sum -c -
           unzip -q /tmp/esbmc.zip -d ~/.local/esbmc
           chmod +x "$(find ~/.local/esbmc -name esbmc -type f | head -1)"
 

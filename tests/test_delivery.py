@@ -98,6 +98,34 @@ class TestAction:
         assert "default: 'weekly'" in text or 'default: "weekly"' in text
 
 
+class TestPinnedChecker:
+    """`weekly` is re-cut in place under one name, so nothing but a digest
+    says which ESBMC build CI, a release and the image actually ran -- and
+    the image is where the checker wheels take their binary from."""
+
+    PIN = ROOT / "checker" / "esbmc-linux.zip.sha256"
+    CONSUMERS = (".github/workflows/ci.yml", ".github/workflows/release.yml",
+                 "Dockerfile")
+
+    def test_the_pin_is_one_sha256(self) -> None:
+        assert re.fullmatch(r"[0-9a-f]{64}\n?", self.PIN.read_text(encoding="utf-8"))
+
+    @pytest.mark.parametrize("name", CONSUMERS)
+    def test_every_download_is_checked_before_it_is_unpacked(self, name) -> None:
+        text = read(name)
+        download = text.index("esbmc-linux.zip")
+        check = text.index("sha256sum -c", download)
+        assert check < text.index("unzip", download), (
+            f"{name} unpacks esbmc-linux.zip before checking its digest"
+        )
+        assert "esbmc-linux.zip.sha256" in text
+
+    @pytest.mark.parametrize("name", CONSUMERS[:2])
+    def test_bumping_the_pin_rotates_the_cache(self, name) -> None:
+        key = next(line for line in read(name).splitlines() if "key: esbmc-" in line)
+        assert "checker/esbmc-linux.zip.sha256" in key
+
+
 class TestDockerfile:
     def test_builds_both_architectures(self) -> None:
         text = read("Dockerfile")
