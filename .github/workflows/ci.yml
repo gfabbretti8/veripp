@@ -17,6 +17,16 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # requires-python says 3.10, and CI ran only the runner's default --
+    # which is how an f-string that needs 3.12 took down the whole CLI on
+    # 3.10 and 3.11 unnoticed. The floor, the runner's default and the
+    # newest release, so the promise is tested at both ends.
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12', '3.14']
+    env:
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +72,16 @@ jobs:
       # No --allow-unsound: the tracked build must pass the soundness probes.
       - run: uv run veripp doctor
       - run: uv run pytest -q -rs
+
+  # Errors, not style: syntax the oldest supported Python cannot parse, and
+  # undefined names. The rule set and the target are [tool.ruff] in
+  # pyproject.toml; ruff is pinned so a new release cannot turn this red.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.0.1  # no floating v10 tag is published
+      - run: uvx ruff@0.15.8 check .
 
   # The tests run from a source checkout; this proves the published artifact
   # works too. The contracts header must ship inside the wheel or every

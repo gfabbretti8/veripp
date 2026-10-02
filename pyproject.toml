@@ -69,3 +69,15 @@ veripp = ["include/veripp/*.hpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The requires-python floor. Syntax newer than this -- a PEP 701 f-string
+# reusing its own quote, say -- is a syntax error here rather than a
+# traceback on the oldest Python veripp claims to support.
+target-version = "py310"
+
+[tool.ruff.lint]
+# Errors only: syntax errors, invalid comparisons, misplaced statements and
+# undefined names. ruff's style rules would ask for thirty edits across the
+# tree, which belong in a change of their own.
+select = ["E9", "F63", "F7", "F82"]

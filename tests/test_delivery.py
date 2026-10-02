@@ -1088,3 +1088,29 @@ class TestReleaseWorkflow:
         assert any("examples/off_by_one.cpp" in n for n in names), (
             "sdist no longer carries the examples the README promises"
         )
+
+
+class TestSupportedPythons:
+    """pyproject promises Python 3.10, and CI tested only the runner's
+    default, 3.12: an f-string only 3.12 can parse made every command fail on
+    3.10 and 3.11, and nothing saw it."""
+
+    @staticmethod
+    def _floor() -> str:
+        return re.search(r'^requires-python = ">=(\d+\.\d+)', read("pyproject.toml"), re.M).group(1)
+
+    def test_ci_tests_the_oldest_supported_python(self) -> None:
+        yaml = pytest.importorskip("yaml")
+        test = yaml.safe_load(read(".github/workflows/ci.yml"))["jobs"]["test"]
+        versions = [str(v) for v in test["strategy"]["matrix"]["python"]]
+        assert self._floor() in versions, f"CI tests {versions}, not the floor"
+        assert "matrix.python" in test["env"]["UV_PYTHON"]
+
+    def test_ruff_targets_the_same_floor(self) -> None:
+        pyproject = read("pyproject.toml")
+        target = re.search(r'^target-version = "py(\d)(\d+)"', pyproject, re.M)
+        assert target, "ruff has no target-version"
+        assert f"{target.group(1)}.{target.group(2)}" == self._floor()
+
+    def test_ci_runs_ruff(self) -> None:
+        assert re.search(r"ruff(@[\d.]+)? check", read(".github/workflows/ci.yml"))
