@@ -96,3 +96,90 @@ class TestPyPIPage:
         pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
         assert "CHANGELOG.md" in pyproject
         assert (root / "CHANGELOG.md").is_file()
+
+
+class TestRequiresPython:
+    """pyproject promises Python 3.10, so every module has to parse there.
+
+    PEP 701 (Python 3.12) relaxed f-strings: an expression inside the braces
+    may now reuse the enclosing quote or contain a backslash. On 3.10 and 3.11
+    either one is a SyntaxError, and because it sits in llm.py -- imported by
+    the CLI at start-up -- it took down every command, `veripp --version`
+    included. CI runs 3.12, where nothing looks wrong. So on 3.12+ this reads
+    each f-string back through the new tokenizer and checks that the old one
+    would have accepted it too; on an older interpreter it simply compiles.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+    DIRS = ("src", "checker", "tests", "scripts", "benchmarks", ".github")
+
+    @staticmethod
+    def _floor() -> tuple[int, int]:
+        import re
+
+        pyproject = (TestRequiresPython.ROOT / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+        major, minor = re.search(
+            r'^requires-python = ">=(\d+)\.(\d+)', pyproject, re.M
+        ).groups()
+        return int(major), int(minor)
+
+    @staticmethod
+    def _needs_pep701(text: str) -> list[int]:
+        """Lines holding an f-string that only Python 3.12+ can parse."""
+        import io
+        import tokenize
+
+        lines: list[int] = []
+        depth, quote = 0, ""
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if depth == 0:
+                if tok.type == tokenize.FSTRING_START:
+                    quote = tok.string.lstrip("rRfFbBuU")
+                    depth = 1
+                continue
+            if tok.type == tokenize.FSTRING_END and depth == 1:
+                depth = 0
+                continue
+            # The literal text of the outer f-string may hold anything a
+            # plain string can. Everything else -- the expressions, and
+            # any string nested inside them -- was once part of a single
+            # string token, so it could not contain the closing quote, and
+            # could not contain a backslash at all.
+            literal = tok.type == tokenize.FSTRING_MIDDLE and depth == 1
+            if not literal and (quote in tok.string or "\\" in tok.string):
+                lines.append(tok.start[0])
+            if tok.type == tokenize.FSTRING_START:
+                depth += 1
+            elif tok.type == tokenize.FSTRING_END:
+                depth -= 1
+        return lines
+
+    def test_every_module_parses_on_the_oldest_supported_python(self):
+        import sys
+
+        import pytest
+
+        if self._floor() >= (3, 12):
+            pytest.skip("requires-python no longer reaches below PEP 701")
+        paths = [
+            path
+            for top in self.DIRS
+            for path in sorted((self.ROOT / top).rglob("*.py"))
+        ]
+        assert paths
+        offenders: dict[str, list[int]] = {}
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            if sys.version_info < (3, 12):
+                compile(text, str(path), "exec")  # the old grammar itself
+                continue
+            lines = self._needs_pep701(text)
+            if lines:
+                offenders[str(path.relative_to(self.ROOT))] = lines
+        assert not offenders, (
+            "these f-strings need Python 3.12 (PEP 701) but requires-python "
+            f"is >={'.'.join(map(str, self._floor()))}: {offenders}. Hoist "
+            "the expression into a variable."
+        )

@@ -17,6 +17,7 @@ from .cppsig import SignatureError, find_function, scrub
 from .esbmc import VerifyResult, ViolatedProperty
 from .harness import HarnessOptions
 from .llm import LLMClient, LLMError, TriageContext
+from .paths import read_source
 
 MAX_CALL_SITES = 20
 
@@ -248,7 +249,7 @@ def build_context(
     call_sites: list[str] = []
 
     if target is not None:
-        text = target.source.read_text(encoding="utf-8")
+        text = read_source(target.source)
         try:
             sig = find_function(text, target.function)
             function = sig.qualified_name
@@ -261,7 +262,7 @@ def build_context(
             function = target.function
 
     try:
-        harness_code = harness_path.read_text(encoding="utf-8")
+        harness_code = read_source(harness_path)
     except OSError:
         harness_code = ""
 

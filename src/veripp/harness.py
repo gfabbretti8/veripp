@@ -46,6 +46,7 @@ from .cppsig import (
     normalize_type,
     scrub,
 )
+from .paths import read_source
 
 #: Default bound on the length of a generated buffer. Small on purpose: BMC
 #: cost grows fast, and off-by-one bugs show up at any length.
@@ -246,7 +247,7 @@ def generate(
     "verified" under them is conditional on real callers satisfying them.
     """
     options = options or HarnessOptions()
-    text = source.read_text(encoding="utf-8")
+    text = read_source(source)
     # Struct definitions usually live in the library's own header, not the .cpp
     # being targeted, so resolve types against both.
     preprocessed = preprocess_source(source, options) if options.preprocess else None
@@ -1911,7 +1912,7 @@ def generate_sequence(
     is explored, not just the initial one.
     """
     options = options or HarnessOptions()
-    text = source.read_text(encoding="utf-8")
+    text = read_source(source)
     info = find_class(text, class_name)
     expanded = _with_local_includes(source, text, options.include_dirs)
     # Linked TUs resolve callees, so their definitions must be visible
@@ -2040,7 +2041,7 @@ def generate_c_sequence(
     library's own double-free and leak bugs are.
     """
     options = options or HarnessOptions()
-    text = source.read_text(encoding="utf-8")
+    text = read_source(source)
     expanded = (
         (preprocess_source(source, options) if options.preprocess else None)
         or _with_local_includes(source, text, options.include_dirs)

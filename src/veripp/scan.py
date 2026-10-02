@@ -450,6 +450,19 @@ def scan(
     harness_paths: dict[str, Path] = {}
 
     def one(name: str) -> FunctionResult:
+        # One function veripp trips over must not cost the rest of the file:
+        # pool.map re-raises the first exception, which ended a single-file
+        # scan in a traceback and made a tree scan skip the file whole.
+        try:
+            return attempt(name)
+        except Exception as exc:
+            return FunctionResult(
+                name=name, outcome="tool_error",
+                detail=f"veripp failed on this function: "
+                       f"{type(exc).__name__}: {exc}",
+            )
+
+    def attempt(name: str) -> FunctionResult:
         try:
             harness = generate(source, name, options)
         except (HarnessError, SignatureError) as exc:

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .esbmc import VerifyResult
+from .paths import read_source
 
 KINDS = ("real_bug", "missing_assumption", "harness_issue")
 
@@ -192,6 +193,9 @@ class PromptedLLM:
     # -- file-level proposals --------------------------------------------
 
     def propose_invariants(self, source: Path, result: VerifyResult) -> Path | None:
+        # Read outside the f-string: reusing its quote inside a replacement
+        # field needs Python 3.12 (PEP 701), and requires-python says 3.10.
+        text = read_source(source)
         reply = self._ask(
             system=(
                 "You are a verification engineer operating the ESBMC model "
@@ -202,12 +206,13 @@ class PromptedLLM:
                 "file in one code block. Do not change program semantics."
             ),
             user=f"Verifier output (truncated):\n{result.raw_output[-4000:]}\n\n"
-            f"Source:\n```cpp\n{source.read_text(encoding="utf-8")}\n```",
+            f"Source:\n```cpp\n{text}\n```",
         )
         code = self._extract_code(reply)
         return self._write_variant(source, code, "inv") if code else None
 
     def propose_frontend_fix(self, source: Path, result: VerifyResult) -> Path | None:
+        text = read_source(source)
         reply = self._ask(
             system=(
                 "The ESBMC C++ frontend rejected this file. Produce a "
@@ -216,7 +221,7 @@ class PromptedLLM:
                 "file in one code block."
             ),
             user=f"Frontend errors:\n{result.raw_output[-4000:]}\n\n"
-            f"Source:\n```cpp\n{source.read_text(encoding="utf-8")}\n```",
+            f"Source:\n```cpp\n{text}\n```",
         )
         code = self._extract_code(reply)
         return self._write_variant(source, code, "fix") if code else None
