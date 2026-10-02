@@ -247,3 +247,83 @@ jobs:
           assert found == {"mean"}, found
           print("per_file:", files, "proved:", report["proved"])
           PY
+
+  a-vacuous-proof-fails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The function's own precondition cannot hold, so the call is never
+      # reached and every property "holds". veripp exits 3 for that, like
+      # any inconclusive result -- and the action let every exit 3 pass,
+      # though the README promises a vacuous proof can never pass CI.
+      - name: A function whose precondition contradicts itself
+        run: |
+          mkdir -p vacuous
+          cat > vacuous/div.c <<'EOF'
+          #include "veripp/contracts.hpp"
+          int div_it(int a, int b) {
+            VERIPP_REQUIRES(b > 0 && b < 0);
+            return a / b;
+          }
+          EOF
+
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          source: vacuous/div.c
+          function: div_it
+
+      - name: The vacuous proof must have failed the job
+        run: |
+          if [ "${{ steps.run.outcome }}" != "failure" ]; then
+            echo "::error::a vacuous proof passed the job"
+            exit 1
+          fi
+          got="${{ steps.run.outputs.vacuous }}"
+          [ "$got" = "true" ] || { echo "::error::expected vacuous=true, got '$got'"; exit 1; }
+          echo "correctly failed on a vacuous proof"
+
+  fail-on-inconclusive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A header that is not on the include path: the checker's frontend
+      # refuses the file, which settles nothing -- inconclusive, not vacuous.
+      - name: A source that cannot be parsed without its include path
+        run: |
+          mkdir -p fixture/include
+          echo '#define CFG_MAX 4' > fixture/include/limits_cfg.h
+          cat > fixture/bounded.c <<'EOF'
+          #include "limits_cfg.h"
+          int at(const int *a, int i) {
+            if (i < 0 || i >= CFG_MAX) return 0;
+            return a[i];
+          }
+          EOF
+
+      - id: default
+        uses: ./
+        with:
+          source: fixture/bounded.c
+          function: at
+
+      - id: strict
+        continue-on-error: true
+        uses: ./
+        with:
+          source: fixture/bounded.c
+          function: at
+          fail-on: inconclusive
+
+      - name: Only fail-on inconclusive fails on it
+        run: |
+          got="${{ steps.default.outputs.outcome }}"
+          [ "$got" = "inconclusive" ] || { echo "::error::expected inconclusive, got '$got'"; exit 1; }
+          [ "${{ steps.default.outputs.vacuous }}" = "false" ] || {
+            echo "::error::an unparsable file was reported as vacuous"; exit 1; }
+          [ "${{ steps.strict.outcome }}" = "failure" ] || {
+            echo "::error::fail-on: inconclusive let an inconclusive result pass"; exit 1; }
+          echo "the default warned; fail-on: inconclusive failed"

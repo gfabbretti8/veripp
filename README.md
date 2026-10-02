@@ -241,6 +241,11 @@ jobs:
 
 Findings covered by the baseline are uploaded as *suppressed*, not dropped.
 
+The job fails on a counterexample and on a vacuous proof. Other inconclusive
+results (a bound, a timeout, a file the checker's frontend refused) only
+warn; `fail-on: inconclusive` fails on those too, and `fail-on: never` is for
+a first look.
+
 ## As a skill for coding agents
 
 ```bash

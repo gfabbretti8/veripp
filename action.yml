@@ -34,9 +34,12 @@ inputs:
     default: ''
   fail-on:
     description: >-
-      When to fail the job. "counterexample" (default) fails only on findings;
-      "never" reports without failing, which is the honest setting for a first
-      run, since a generated harness produces leads that still need triage.
+      When to fail the job. "counterexample" (default) fails on findings and
+      on a vacuous proof -- one whose assumptions left nothing to check --
+      and only warns when a result is inconclusive because of a bound or a
+      timeout. "inconclusive" fails on anything short of a proof. "never"
+      reports without failing, which is the honest setting for a first run,
+      since a generated harness produces leads that still need triage.
     required: false
     default: 'counterexample'
   esbmc-version:
@@ -58,6 +61,11 @@ outputs:
   exit-code:
     description: 'veripp exit code: 0 verified, 1 counterexample, 2 usage, 3 inconclusive.'
     value: ${{ steps.run.outputs.exit-code }}
+  vacuous:
+    description: >-
+      "true" when the result was a vacuous proof: it verified only because
+      its assumptions made the code unreachable.
+    value: ${{ steps.run.outputs.vacuous }}
   report:
     description: 'Path to the JSON report, for a step that wants the detail.'
     value: ${{ steps.run.outputs.report }}
@@ -219,16 +227,52 @@ runs:
         VERIPP_STATUS="$status" VERIPP_REPORT="$report" \
         python3 "$GITHUB_ACTION_PATH/.github/summary.py" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
+        # A vacuous proof exits 3 like any inconclusive result, but it is not
+        # one: the assumptions left nothing to check, so every property held
+        # trivially, and the README promises it can never pass CI. The report
+        # says which it was -- `verify` sets "vacuous", and a scan lists it
+        # among its inconclusive functions.
+        vacuous=false
+        if [ "$status" -eq 3 ] && python3 -c '
+        import json, sys
+        try:
+            report = json.load(open(sys.argv[1], encoding="utf-8"))
+        except Exception:
+            sys.exit(1)
+        entries = report.get("inconclusive")
+        sys.exit(0 if report.get("vacuous") is True or (
+            isinstance(entries, list)
+            and any(isinstance(e, dict) and e.get("outcome") == "vacuous"
+                    for e in entries)) else 1)
+        ' "$report" 2>/dev/null; then
+          vacuous=true
+        fi
+        echo "vacuous=$vacuous" >> "$GITHUB_OUTPUT"
+
         # 0 verified, 1 counterexample, 2 usage, 3 inconclusive/vacuous.
         case "$status" in
           0) echo "::notice::veripp: verified within the stated bounds" ;;
           1) echo "::error::veripp: counterexample found" ;;
           2) echo "::error::veripp: bad invocation (see the log above)" ;;
-          3) echo "::warning::veripp: inconclusive -- a bound, a timeout, or a vacuous proof. This is not a pass." ;;
+          *)
+            if [ "$vacuous" = true ]; then
+              echo "::error::veripp: vacuous proof -- the assumptions leave nothing to check. This is not a pass."
+            else
+              echo "::warning::veripp: inconclusive -- a bound, a timeout, or a refused input. This is not a pass."
+            fi ;;
         esac
 
-        if [ "$VERIPP_FAIL_ON" = "never" ]; then exit 0; fi
-        # A usage error is always worth failing on: it means the step never
-        # actually checked anything.
-        if [ "$status" -eq 3 ]; then exit 0; fi
-        exit "$status"
+        case "$VERIPP_FAIL_ON" in
+          never) exit 0 ;;
+          # Anything short of a proof fails.
+          inconclusive) exit "$status" ;;
+          counterexample)
+            # An ordinary inconclusive warns. A vacuous proof does not: it
+            # is a claim about nothing, not a question left open. A usage
+            # error always fails, because the step never checked anything.
+            if [ "$status" -eq 3 ] && [ "$vacuous" != true ]; then exit 0; fi
+            exit "$status" ;;
+          *)
+            echo "::error::fail-on must be counterexample, inconclusive or never, not '$VERIPP_FAIL_ON'"
+            exit 2 ;;
+        esac
