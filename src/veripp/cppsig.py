@@ -6,7 +6,9 @@ signature, which is all the M1 harness generator needs. Anything it cannot
 recognise it refuses to guess about: it raises `SignatureError` so the caller
 can report an honest failure instead of emitting a wrong harness.
 
-M2 replaces this with a libclang-based slicer.
+M2 was to replace this with a libclang-based slicer. That was dropped (see
+ROADMAP.md, M2): what blocked real code was type visibility and frontend gaps,
+not finding the code, so this scanner is the one veripp uses.
 """
 
 from __future__ import annotations

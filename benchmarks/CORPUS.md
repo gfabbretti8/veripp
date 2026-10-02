@@ -12,6 +12,22 @@ them is bounded by the assumptions each result states.
 | [libpng](https://github.com/pnggroup/libpng) `png.c` | the PNG reference implementation | 70 | **40** | 12 | 86% |
 | [lodepng](https://github.com/lvandeve/lodepng) | single-file PNG codec | 260 | **99** | 61 | 82% |
 | [cJSON](https://github.com/DaveGamble/cJSON) | ubiquitous C JSON parser | 117 | 32 | 19 | 89% |
+| [parson](https://github.com/kgabis/parson) | C JSON parser | 144 | 28 | 33 | 91% |
+| [lz4](https://github.com/lz4/lz4) `lz4.c` | compression, everywhere | 94 | 19 | 18 | 57% |
+| [tinyexpr](https://github.com/codeplea/tinyexpr) | expression evaluator | 47 | 17 | 5 | 96% |
+| [zlib](https://github.com/madler/zlib) (6 modules) | the most deployed C library | 46 | 17 | 0 | 63% |
+| [giflib](https://github.com/mirrorer/giflib) `dgif_lib.c` | GIF decoding | 23 | 2 | 12 | 78% |
+| [jansson](https://github.com/akheron/jansson) `value.c` | C JSON, widely embedded | 88 | 20 | 31 | 90% |
+| [libyaml](https://github.com/yaml/libyaml) `api.c` | YAML, behind PyYAML | 53 | — | — | 74% |
+
+```bash
+veripp scan path/to/libpng/png.c -I path/to/libpng --timeout 10 -j 4
+```
+
+jansson needs `-D HAVE_STDINT_H` and its generated `jansson_config.h`.
+libyaml needs its build run once first: it generates `config.h`, and veripp
+says so rather than surfacing the compiler's complaint about an undefined
+macro.
 
 ## How many findings are real? (cJSON, triaged)
 
@@ -94,23 +110,6 @@ those 117 functions: it was missing clang's resource headers, so anything that
 reached a system header failed, and nothing in a suite of self-contained
 fixtures could see it. Aggregate numbers from a real library are what caught
 it.
-
-| [parson](https://github.com/kgabis/parson) | C JSON parser | 144 | 28 | 33 | 91% |
-| [lz4](https://github.com/lz4/lz4) `lz4.c` | compression, everywhere | 94 | 19 | 18 | 57% |
-| [tinyexpr](https://github.com/codeplea/tinyexpr) | expression evaluator | 47 | 17 | 5 | 96% |
-| [zlib](https://github.com/madler/zlib) (6 modules) | the most deployed C library | 46 | 17 | 0 | 63% |
-| [giflib](https://github.com/mirrorer/giflib) `dgif_lib.c` | GIF decoding | 23 | 2 | 12 | 78% |
-| [jansson](https://github.com/akheron/jansson) `value.c` | C JSON, widely embedded | 88 | 20 | 31 | 90% |
-| [libyaml](https://github.com/yaml/libyaml) `api.c` | YAML, behind PyYAML | 53 | — | — | 74% |
-
-```bash
-veripp scan path/to/libpng/png.c -I path/to/libpng --timeout 10 -j 4
-```
-
-jansson needs `-D HAVE_STDINT_H` and its generated `jansson_config.h`.
-libyaml needs its build run once first: it generates `config.h`, and veripp
-says so rather than surfacing the compiler's complaint about an undefined
-macro.
 
 ## Reading this honestly
 
