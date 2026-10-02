@@ -252,8 +252,9 @@ def main(argv: list[str] | None = None) -> int:
         help=_adv(
             f"reuse verdicts for files that have not changed (default: "
             f"{DEFAULT_CACHE_DIR}; --no-cache to disable). The key covers the "
-            "file, its local headers, linked sources, the bounds and the "
-            "checker version, so a stale verdict cannot be served"
+            "file, every project header it reaches, linked sources and "
+            "force-included headers, the bounds, and the exact checker and "
+            "veripp builds, so a stale verdict cannot be served"
         ),
     )
     s.add_argument("--no-cache", action="store_true",
@@ -911,29 +912,49 @@ def _cache_for(args):
     return Cache(Path(getattr(args, "cache", None) or DEFAULT_CACHE_DIR))
 
 
-def _cache_key(args, source: Path, config, options) -> str:
-    from .cache import esbmc_version, key_for
-    from .cppsig import included_names
-    from .esbmc import find_esbmc
+#: How deep to follow #include for the cache key. The harness generator stops
+#: at a few levels because it only wants types; the checker compiles every
+#: header at any depth, so the key has to follow them all.
+_KEY_INCLUDE_DEPTH = 64
 
-    # Local headers and linked sources are inputs: a change in either can flip
-    # this file's verdict without touching it.
-    extra: list[Path] = [Path(p).resolve() for p in getattr(args, "link", [])]
-    try:
-        for name in included_names(source.read_text(encoding="utf-8", errors="replace")):
-            for directory in [source.parent, *getattr(args, "include", [])]:
-                candidate = Path(directory) / name
-                if candidate.is_file():
-                    extra.append(candidate.resolve())
-                    break
-    except OSError:
-        pass
+
+def _cache_key(source: Path, config, options, cache=None) -> str:
+    from .cache import CHECKER_MEMO, checker_digest, key_for, package_digest
+    from .esbmc import find_esbmc
+    from .harness import local_include_closure
+
+    # Everything the checker compiles is an input: linked sources and
+    # force-included headers as well as the file itself, and every project
+    # header any of them reaches, at any depth, along the include path the
+    # run actually uses -- compile_commands' directories included. A change
+    # in any of them can flip this file's verdict without touching it.
+    forced = [
+        Path(value)
+        for flag, value in zip(config.extra_args, config.extra_args[1:])
+        if flag == "--include-file"
+    ]
+    extra: set[Path] = set()
+    for root in [source, *config.link_sources, *forced]:
+        try:
+            text = root.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if root != source:
+            extra.add(root.resolve())
+        extra.update(
+            path for path, _ in local_include_closure(
+                root, text, config.include_dirs, depth=_KEY_INCLUDE_DEPTH
+            )
+        )
 
     return key_for(
         source, config=config, options=options,
-        veripp_version=__version__,
-        checker_version=esbmc_version(find_esbmc()),
-        extra_files=extra,
+        veripp_version=f"{__version__}+{package_digest()}",
+        checker_version=checker_digest(
+            find_esbmc(),
+            memo=cache.directory / CHECKER_MEMO if cache is not None else None,
+        ),
+        extra_files=sorted(extra),
     )
 
 
@@ -1320,7 +1341,7 @@ def _scan_tree(args) -> int:
             # --only asks for a subset, so its result is not this file's
             # verdict and must not be cached as one.
             cache = _cache_for(args) if selected is None else None
-            key = _cache_key(args, source, config, options) if cache else ""
+            key = _cache_key(source, config, options, cache) if cache else ""
             cached = cache.get(key) if cache else None
             if cached is not None and not _cache_serves(
                 cached, llm, args.retry_budget
@@ -1472,7 +1493,7 @@ def _scan(args) -> int:
 
     llm, llm_note = _scan_llm(args)
     cache = _cache_for(args) if selected is None else None
-    key = _cache_key(args, args.source, config, options) if cache else ""
+    key = _cache_key(args.source, config, options, cache) if cache else ""
     cached = cache.get(key) if cache else None
     if cached is not None and not _cache_serves(cached, llm, args.retry_budget):
         cached = None
