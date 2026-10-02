@@ -123,6 +123,13 @@ class HarnessOptions:
     #: points at with -I, so without these the generator cannot see the types
     #: it has to construct.
     include_dirs: list[Path] = field(default_factory=list)
+    #: The rest of what the build tells the preprocessor: -D, -U and
+    #: -include. With `preprocess` on, the generator reads the source as the
+    #: compiler sees it, and a configuration missing these is a different
+    #: build -- one in which the target may not exist.
+    defines: list[str] = field(default_factory=list)
+    undefines: list[str] = field(default_factory=list)
+    force_includes: list[Path] = field(default_factory=list)
     assume_pointers_nonnull: bool = True
     #: How far to follow pointer fields when building an object. Value fields
     #: terminate on their own; pointers do not, so the chain is cut here and
@@ -402,9 +409,15 @@ def preprocess_source(source: Path, options: HarnessOptions) -> str | None:
     are far harder to read back in a counterexample -- and the point of the
     preprocessor here is the structs, not the code.
     """
+    # In the order the checker is given them: defines, then undefines, then
+    # the force-included headers, which see both.
     args = [
         "-E", "-P", "-D__ESBMC__",
         *(f"-I{d}" for d in options.include_dirs),
+        *(f"-D{d}" for d in options.defines),
+        *(f"-U{u}" for u in options.undefines),
+        *(arg for header in options.force_includes
+          for arg in ("-include", str(header))),
         str(source),
     ]
     for compiler in _PREPROCESSORS:

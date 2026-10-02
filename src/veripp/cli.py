@@ -671,6 +671,7 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
 
 
 def _harness_options(args) -> HarnessOptions:
+    entry = _compile_entry(args, quiet=True)
     return HarnessOptions(
         max_array_len=args.max_array_len,
         max_calls=getattr(args, "max_calls", HarnessOptions.max_calls),
@@ -678,6 +679,13 @@ def _harness_options(args) -> HarnessOptions:
             args, "max_struct_depth", HarnessOptions.max_struct_depth
         ),
         include_dirs=_include_dirs(args),
+        # The same configuration the checker gets: the build's own flags
+        # first, then the command line's, as _config_for orders them.
+        defines=[*(entry.defines if entry else []),
+                 *getattr(args, "define", [])],
+        undefines=list(entry.undefines) if entry else [],
+        force_includes=[*(entry.force_includes if entry else []),
+                        *(Path(h) for h in getattr(args, "include_file", []))],
         link_sources=[s.resolve() for s in getattr(args, "link", [])],
         use_initializers=not getattr(args, "no_initializers", False),
         use_constructors=getattr(args, "constructors", False),
