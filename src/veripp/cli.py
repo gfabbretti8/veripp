@@ -1860,6 +1860,9 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "accepted_preconditions": report.accepted_preconditions,
         "unsound_probes": report.unsound_probes,
         "harness": str(report.harness) if report.harness else None,
+        # Assertions an LLM inserted into that harness as invariants; each
+        # was proved with the rest, none was assumed.
+        "llm_invariants": report.llm_invariants,
         "stubbed_calls": report.final.stubbed_calls,
         "function": harness.signature.qualified_name if harness else None,
         "sequence": bool(harness and harness.class_info),

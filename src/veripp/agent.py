@@ -11,12 +11,14 @@ Design invariants:
 
 from __future__ import annotations
 
+import difflib
 import re
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import term
+from .cppsig import scrub
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
 from .harness import HarnessError, generate, reachability_variant
 from .llm import LLMClient, LLMError, NullLLM
@@ -41,6 +43,11 @@ class AgentReport:
     narrative: str = ""
     assumptions: list[str] = field(default_factory=list)
     harness: Path | None = None
+    #: Assertions an LLM inserted into the harness as loop invariants. Set
+    #: only when the result was obtained on that modified harness, which
+    #: `harness` then names. They were checked with everything else, never
+    #: assumed -- see `_not_just_assertions`.
+    llm_invariants: list[str] = field(default_factory=list)
     accepted_preconditions: list[str] = field(default_factory=list)
     #: Bug classes the checker that produced this result is known to miss.
     #: A "verified" is only as sound as the checker behind it.
@@ -105,6 +112,13 @@ class AgentReport:
             )
         if self.harness:
             lines.append(f"  harness: {self.harness}")
+        if self.llm_invariants:
+            lines.append(
+                "  harness modified by LLM: it inserted these assertions, and "
+                "the solver checked them with every other property (nothing "
+                "was assumed, edited or removed):"
+            )
+            lines += [f"    {a}" for a in self.llm_invariants]
         if self.assumptions:
             lines.append("Assumptions (a result is only as good as these):")
             lines += [f"  - {a}" for a in self.assumptions]
@@ -253,6 +267,149 @@ def _check_termination(harness: Path, config: VerifyConfig) -> bool | None:
     return result.outcome is Outcome.VERIFIED
 
 
+#: The one statement an LLM may add to a file it proposes: an assertion.
+_ASSERTION_RE = re.compile(
+    r"(?:__ESBMC_assert|VERIPP_ASSERT|assert)\s*\((?P<args>.*)\)\s*;\s*(?://.*)?"
+)
+_LITERAL_RE = re.compile(r'"(?:[^"\\\n]|\\.)*"|' r"'(?:[^'\\\n]|\\.)*'")
+#: Anything in a condition that could change state rather than read it:
+#: assignment (compound included), increment, a statement break, or a call.
+_SIDE_EFFECT_RE = re.compile(
+    r"(?<![=!<>])=(?!=)|<<=|>>=|\+\+|--|;|\b(?!sizeof\b)[A-Za-z_]\w*\s*\("
+)
+#: A file that redefines an assertion can make one check nothing -- or
+#: assume its condition instead.
+_ASSERT_MACRO_RE = re.compile(
+    r"^\s*#\s*(?:define|undef)\s+(?:__ESBMC_assert|VERIPP_ASSERT|assert)\b", re.M
+)
+#: C++ raw strings span lines without a backslash; `scrub` cannot see into
+#: them, so an insertion could land inside one unnoticed.
+_RAW_STRING_RE = re.compile(r'\b(?:u8|[LuU])?R"')
+
+
+def _lines(text: str) -> list[str]:
+    # "\n" only: splitlines() also breaks on form feeds and the like, which
+    # scrub() blanks inside comments -- the two views would stop lining up.
+    return [line.rstrip() for line in text.split("\n")]
+
+
+def _diff(before: str, after: str) -> list[tuple[str, int, int, int, int]]:
+    return difflib.SequenceMatcher(
+        None, _lines(before), _lines(after), autojunk=False
+    ).get_opcodes()
+
+
+def _added_assertions(before: str, after: str) -> list[str]:
+    """The assertion lines `after` inserts into `before`, as written."""
+    new = _lines(after)
+    return [
+        new[j].strip()
+        for tag, _i1, _i2, j1, j2 in _diff(before, after)
+        if tag == "insert"
+        for j in range(j1, j2)
+        if _ASSERTION_RE.fullmatch(_LITERAL_RE.sub('""', new[j].strip()))
+    ]
+
+
+def _not_just_assertions(before: str, after: str) -> str | None:
+    """Why `after` is not `before` plus side-effect-free assertions, or None.
+
+    An LLM proposes invariants as a whole rewritten file, and a verdict on
+    that file is only a verdict on the original if the two are the same
+    program. They are when the rewrite only inserts assertions that change
+    no state: an assertion is checked, never trusted, so it can only remove
+    executions by failing -- and a failure is reported. If such a variant
+    verifies, every execution of the original was checked too.
+
+    Everything else is refused: an assume (which is trusted, and can make the
+    property unreachable), an edited, moved or deleted line, an assertion
+    with a side effect, and an assertion placed where it changes what the
+    code around it means -- as the body of an unbraced `if` or loop, inside a
+    macro continuation, or opening a comment that swallows real code.
+    """
+    opcodes = _diff(before, after)
+    if any(tag not in ("equal", "insert") for tag, *_ in opcodes):
+        return "it edits, moves or deletes existing lines instead of only adding assertions"
+    if _RAW_STRING_RE.search(before):
+        return "the file has a raw string literal, which this check cannot see into"
+    if _ASSERT_MACRO_RE.search(after):
+        return "the file redefines an assertion macro, so an assertion may not check anything"
+
+    new = _lines(after)
+    scrubbed_old, scrubbed_new = _lines(scrub(before)), _lines(scrub(after))
+    added = 0
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "equal":
+            # An unterminated comment or literal in an inserted line would
+            # swallow the real code after it, which the line-by-line diff
+            # cannot see. Read without comments and literals, the original
+            # lines must still say exactly what they said.
+            if scrubbed_old[i1:i2] != scrubbed_new[j1:j2]:
+                return (
+                    f"an inserted line changes how line {j1 + 1} onwards is "
+                    "read (an unterminated comment or literal)"
+                )
+            continue
+        for j in range(j1, j2):
+            refusal = _refuse_insertion(new, scrubbed_new, j)
+            if refusal is not None:
+                return f"inserted line {j + 1} {refusal}"
+            if scrubbed_new[j].strip():
+                added += 1
+    if not added:
+        return "it adds no assertion"
+    return None
+
+
+def _refuse_insertion(new: list[str], scrubbed: list[str], j: int) -> str | None:
+    """Why inserted line `j` could change the program, or None."""
+    line = new[j].strip()
+    if j > 0 and new[j - 1].endswith("\\"):
+        return "follows a line continuation, so it would join the line above"
+    # A trailing backslash splices the next line on, and `??/` is the
+    # trigraph for one.
+    if line.endswith("\\") or "??" in line:
+        return f"would splice itself onto the line below: `{line}`"
+    if not line or line.startswith("//"):
+        return None  # blank lines and line comments change nothing
+    if "assume" in line.lower():
+        return f"assumes rather than asserts: `{line}`"
+    code = _LITERAL_RE.sub('""', line)
+    match = _ASSERTION_RE.fullmatch(code)
+    if match is None:
+        return f"is not an assertion: `{line}`"
+    args = match.group("args")
+    if any(mark in args for mark in ("/*", "*/", "//")):
+        return f"has a comment delimiter inside its condition: `{line}`"
+    if '"' in args.replace('""', "") or "'" in args:
+        return f"has a literal this check cannot read: `{line}`"
+    effect = _SIDE_EFFECT_RE.search(args)
+    if effect is not None:
+        return (
+            f"could change state rather than check it "
+            f"(`{effect.group(0).strip()}`): `{line}`"
+        )
+    if not scrubbed[j].strip():
+        return f"lands inside a comment or a literal: `{line}`"
+    # The nearest line of code above has to end a statement or open or
+    # close a block. After an unbraced `if (x)`, `else` or loop header, the
+    # assertion would become the body and push the real one out of it.
+    above = next(
+        (
+            prior.rstrip()
+            for prior in reversed(scrubbed[:j])
+            if prior.strip() and not prior.lstrip().startswith("#")
+        ),
+        "",
+    )
+    if not above.endswith((";", "{", "}")):
+        return (
+            "does not follow a complete statement, so it could become the "
+            f"body of the construct above it: `{line}`"
+        )
+    return None
+
+
 def verify_with_agent(
     source: Path,
     base_config: VerifyConfig | None = None,
@@ -273,7 +430,9 @@ def verify_with_agent(
     budget = budget or Budget()
     config = base_config or VerifyConfig()
     started = time.monotonic()
-    context = dict(assumptions=list(assumptions or []), harness=harness)
+    context = dict(
+        assumptions=list(assumptions or []), harness=harness, llm_invariants=[]
+    )
     preconditions: list[str] = []
     last_diagnosis: Diagnosis | None = None
 
@@ -406,7 +565,31 @@ def verify_with_agent(
             except LLMError:
                 proposal = None
             if proposal is not None:
+                # The proposal is a whole file, and a verdict on it is only a
+                # verdict on this code if it differs by checked assertions
+                # alone. Anything else -- an assume, an edited line -- could
+                # prove a different program, so it is refused, not run.
+                try:
+                    before = source.read_text(encoding="utf-8", errors="replace")
+                    after = proposal.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    return _inconclusive(
+                        attempts, f"the LLM's proposal could not be read: {exc}",
+                        **context,
+                    )
+                refusal = _not_just_assertions(before, after)
+                if refusal is not None:
+                    return _inconclusive(
+                        attempts,
+                        f"escalation ladder exhausted, and the LLM's invariant "
+                        f"proposal was refused: {refusal}",
+                        **context,
+                    )
+                context["llm_invariants"] = context["llm_invariants"] + (
+                    _added_assertions(before, after)
+                )
                 source = proposal
+                context["harness"] = proposal
                 config = replace(config, k_induction=True)
                 continue
             return _inconclusive(
@@ -414,18 +597,27 @@ def verify_with_agent(
             )
 
         if result.outcome is Outcome.PARSE_ERROR:
+            rejected = (
+                f"ESBMC frontend rejected the input: "
+                f"{result.error or 'see raw output'}"
+            )
             try:
                 fixed = llm.propose_frontend_fix(source, result)
             except LLMError:
                 fixed = None
             if fixed is not None:
-                source = fixed
-                continue
-            return _inconclusive(
-                attempts,
-                f"ESBMC frontend rejected the input: {result.error or 'see raw output'}",
-                **context,
-            )
+                # A rewrite the frontend accepts is a different program, and
+                # nothing here can check it means the same thing. Verifying it
+                # would report a proof of the rewrite as a proof of this code,
+                # so it is handed to the user instead of to the solver.
+                return _inconclusive(
+                    attempts,
+                    f"{rejected}. An LLM rewrote it for the frontend at "
+                    f"{fixed}, which was not checked for equivalence; review "
+                    "it and verify it directly",
+                    **context,
+                )
+            return _inconclusive(attempts, rejected, **context)
 
 
 def _is_vacuous(harness: Path, config: VerifyConfig) -> bool:
@@ -454,15 +646,11 @@ def _is_vacuous(harness: Path, config: VerifyConfig) -> bool:
 
 
 def _inconclusive(
-    attempts: list[VerifyResult],
-    reason: str,
-    assumptions: list[str],
-    harness: Path | None,
+    attempts: list[VerifyResult], reason: str, **context
 ) -> AgentReport:
     return AgentReport(
         final=attempts[-1],
         attempts=attempts,
         narrative=f"Inconclusive: {reason}. No claim is made about this code.",
-        assumptions=assumptions,
-        harness=harness,
+        **context,
     )

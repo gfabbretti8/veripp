@@ -196,10 +196,16 @@ class PromptedLLM:
             system=(
                 "You are a verification engineer operating the ESBMC model "
                 "checker on C++ code. Given a program the checker could not "
-                "conclude on, add loop invariants as __ESBMC_assert/"
-                "__ESBMC_assume annotations, or strengthening assertions, that "
-                "could make k-induction succeed. Return the complete modified "
-                "file in one code block. Do not change program semantics."
+                "conclude on, add loop invariants or strengthening assertions "
+                "that could make k-induction succeed. Write each one as "
+                "`__ESBMC_assert(condition, \"why it holds\");` on a line of "
+                "its own, inserted between existing lines, with a condition "
+                "that only reads state: no assignment, increment or function "
+                "call. Never use __ESBMC_assume or any other assumption, and "
+                "do not edit, move or delete any existing line -- every "
+                "assertion is proved along with the rest of the program, and "
+                "a file that changes anything else is discarded. Return the "
+                "complete file in one code block."
             ),
             user=f"Verifier output (truncated):\n{result.raw_output[-4000:]}\n\n"
             f"Source:\n```cpp\n{source.read_text(encoding="utf-8")}\n```",
