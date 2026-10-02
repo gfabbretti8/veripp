@@ -32,7 +32,7 @@ import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 DEFAULT_DIR = ".veripp-cache"
 
 

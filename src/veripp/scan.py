@@ -423,7 +423,8 @@ def scan(
 
     - Inconclusives are re-tried on the full escalation ladder (wider
       unwind, k-induction, incremental BMC for timeouts), cheapest first,
-      until `retry_budget` seconds are spent. This needs no LLM.
+      until `retry_budget` seconds are spent. This never consults `llm`,
+      even when one is given.
     - With `llm`, counterexamples are then triaged: the model classifies
       each one and may propose a precondition, which the solver re-checks
       (vacuity probe included) before anything in the report changes.
@@ -513,9 +514,8 @@ def scan(
                 progress(done, len(names), result)
     report.results.sort(key=lambda r: r.name)
     if retry_budget > 0:
-        _retry_pass(report, config, options, llm or NullLLM(),
-                    harness_paths, retry_budget, retry_progress,
-                    escalations=escalations)
+        _retry_pass(report, config, options, harness_paths, retry_budget,
+                    retry_progress, escalations=escalations)
     if llm is not None and not isinstance(llm, NullLLM):
         _triage_pass(report, config, options, llm, harness_paths,
                      triage_progress)
@@ -534,7 +534,6 @@ def _retry_pass(
     report: ScanReport,
     config: VerifyConfig,
     options: HarnessOptions,
-    llm: LLMClient,
     harness_paths: dict[str, Path],
     budget_s: int,
     progress=None,
@@ -551,6 +550,11 @@ def _retry_pass(
     tried. On a large translation unit one checker run costs tens of
     seconds, and measured on lodepng the polite restart-from-base spent the
     whole default budget re-deriving known non-answers.
+
+    No LLM takes part, by construction. Given one, the agent loop triages
+    every counterexample a wider bound reaches and may settle it under a
+    model-proposed precondition -- which is `_triage_pass`'s job, done there
+    with the result labelled as conditional.
     """
     from .agent import Budget, verify_with_agent
 
@@ -586,7 +590,7 @@ def _retry_pass(
         report.retried += 1
         try:
             agent = verify_with_agent(
-                harness_paths[r.name], seed, llm=llm,
+                harness_paths[r.name], seed, llm=NullLLM(),
                 budget=Budget(max_attempts=6,
                               wall_time_s=int(min(remaining, 240))),
                 assumptions=r.assumptions, harness=harness_paths[r.name],
@@ -602,6 +606,11 @@ def _retry_pass(
         if settled:
             prop = final.violated_property
             r.outcome = final.outcome.value
+            if final.outcome is Outcome.VERIFIED and agent.accepted_preconditions:
+                # Safe only if callers meet the precondition: never PROVED,
+                # by the same rule `_triage_pass` applies.
+                r.outcome = "preconditioned"
+                r.preconditions = list(agent.accepted_preconditions)
             r.detail = prop.description if prop else (final.error or "")
             r.stubbed_calls = final.stubbed_calls
             r.artifact = mechanical_artifact(final, harness_paths[r.name])

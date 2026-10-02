@@ -157,3 +157,72 @@ class TestRetryPass:
         report = _scan(p, llm=NullLLM())
         assert report.settled == 1
         assert not report.triaged
+
+
+# The retry pass reaches this function's counterexample only after widening
+# past the mechanical pass's bound, the same way deep_loop settles above. With
+# a model in hand it used to triage the counterexample on the spot, accept
+# `d != 0`, and file the result as PROVED.
+DIVIDE_SOURCE = """\
+int deep_div(int d) {
+    int s = 0;
+    for (int i = 0; i < 200; i++) s += 1;
+    return s / d;
+}
+"""
+
+
+@pytest.mark.esbmc
+class TestRetryPassStaysMechanical:
+    """README: the retry pass runs "with no LLM involved", and a
+    solver-accepted precondition is "never folded into PROVED"."""
+
+    def test_a_precondition_never_lands_in_proved(self, tmp_path):
+        p = tmp_path / "q.c"
+        p.write_text(DIVIDE_SOURCE, encoding="utf-8")
+        report = _scan(p, llm=ScriptedLLM(precondition="d != 0"))
+        assert "deep_div" not in {r.name for r in report.proved}
+        # Triage may still offer the precondition afterwards -- as one.
+        (pre,) = report.preconditioned
+        assert pre.name == "deep_div"
+        assert pre.preconditions == ["d != 0"]
+
+    def test_the_retry_pass_never_consults_the_llm(self, tmp_path, monkeypatch):
+        from veripp import scan as scan_module
+
+        monkeypatch.setattr(scan_module, "_triage_pass", lambda *a, **k: None)
+        p = tmp_path / "q.c"
+        p.write_text(DIVIDE_SOURCE, encoding="utf-8")
+        llm = ScriptedLLM(precondition="d != 0")
+        report = _scan(p, llm=llm)
+        assert llm.classified == []
+        assert report.settled == 1
+        assert "deep_div" in {r.name for r in report.counterexamples}
+
+
+def test_a_retry_verified_under_a_precondition_is_not_proved(monkeypatch, src):
+    """Whatever the agent loop hands back, a conditional proof stays one."""
+    from veripp import agent as agent_module
+    from veripp import scan as scan_module
+    from veripp.agent import AgentReport
+    from veripp.esbmc import Outcome, VerifyResult
+
+    def stuck(path, config, esbmc_bin=None):
+        return VerifyResult(outcome=Outcome.UNWIND_LIMIT, config=config,
+                            duration_s=0.0)
+
+    def conditional(*args, **kwargs):
+        verified = VerifyResult(outcome=Outcome.VERIFIED, config=VerifyConfig())
+        report = AgentReport(final=verified, attempts=[verified],
+                             accepted_preconditions=["d != 0"])
+        # A proof the reachability probe confirmed, where the report records
+        # one; setting it is harmless where it does not.
+        report.reachability = "reachable"
+        return report
+
+    monkeypatch.setattr(scan_module, "run", stuck)
+    monkeypatch.setattr(agent_module, "verify_with_agent", conditional)
+    report = _scan(src, llm=NullLLM())
+    assert "div10" not in {r.name for r in report.proved}
+    (pre,) = [r for r in report.preconditioned if r.name == "div10"]
+    assert pre.preconditions == ["d != 0"]

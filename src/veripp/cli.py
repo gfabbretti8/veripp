@@ -1188,6 +1188,7 @@ def _retry_progress(args):
         mark, paint = {
             "verified": ("PROVED", ("green",)),
             "counterexample": ("COUNTEREX", ("red", "bold")),
+            "preconditioned": ("PRECOND", ("green",)),
         }.get(r.outcome, ("unsettled", ("dim",)))
         print(f"  [retry  {done:2d}/{total}] "
               f"{term.style(f'{mark:>10}', *paint, stream=sys.stderr)}  "
