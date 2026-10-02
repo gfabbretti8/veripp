@@ -142,8 +142,12 @@ class VerifyConfig:
         args += self.extra_args
         return args
 
-    def describe(self) -> str:
-        """One-line statement of the bounds this result was obtained under."""
+    def describe(self, source: Path | None = None) -> str:
+        """One-line statement of the bounds this result was obtained under.
+
+        `source` is the file that was checked, which decides whether the C or
+        the C++ standard applied; without it the C++ one is named.
+        """
         if self.k_induction:
             mode = "k-induction (unbounded if it converges)"
         elif self.incremental_bmc:
@@ -166,7 +170,8 @@ class VerifyConfig:
             )
             if on
         ]
-        line = f"{mode}; checks: {', '.join(checks) or 'none'}; std={self.cpp_std}"
+        std = self.std_for(source) if source is not None else self.cpp_std
+        line = f"{mode}; checks: {', '.join(checks) or 'none'}; std={std}"
         # Raw ESBMC flags can silently weaken a result (--no-bounds-check is
         # one word), so a verdict obtained under them has to say so. Only the
         # checker flags are named; -I/-D and the harness plumbing are noise
@@ -269,6 +274,9 @@ class VerifyResult:
     duration_s: float | None = None
     exit_code: int | None = None
     error: str | None = None  # frontend/tool error message, when there is one
+    #: The file the checker was run on, which fixes the language -- and so
+    #: which of the config's two standards applied.
+    source: Path | None = None
 
     @property
     def stubbed_calls(self) -> list[str]:
@@ -408,12 +416,14 @@ def run(source: Path, config: VerifyConfig, esbmc_bin: str | None = None) -> Ver
             raw_output=_as_text(exc.stdout) + _as_text(exc.stderr),
             duration_s=time.monotonic() - started,
             error=f"esbmc exceeded the {config.timeout_s}s per-attempt timeout",
+            source=source,
         )
 
     duration = time.monotonic() - started
     output = proc.stdout + ("\n" if proc.stdout and proc.stderr else "") + proc.stderr
     result = parse_output(output, config, exit_code=proc.returncode)
     result.duration_s = duration
+    result.source = source
     return result
 
 

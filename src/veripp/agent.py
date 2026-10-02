@@ -96,7 +96,10 @@ class AgentReport:
             )
         else:
             headline = term.verdict(self.final.outcome.value)
-        lines = [f"Result: {headline}", f"  {self.final.config.describe()}"]
+        lines = [
+            f"Result: {headline}",
+            f"  {self.final.config.describe(self.final.source)}",
+        ]
         if self.vacuous:
             lines.append(
                 "  The assumptions made the call unreachable, so every property "

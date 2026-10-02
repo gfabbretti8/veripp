@@ -1662,28 +1662,38 @@ compdef _veripp veripp"""
 
 
 def _config_for(args) -> VerifyConfig:
+    """The checker configuration for `args.source`. The only one: `verify`,
+    `scan` and the SARIF writer all build it here, so they cannot drift."""
+    cpp_std, c_std = _DEFAULT_STD, VerifyConfig().c_std
+    defines = list(args.define)
     extra_args: list[str] = []
+    entry = _compile_entry(args)
+    if entry is not None:
+        defines = entry.defines + defines
+        for macro in entry.undefines:
+            extra_args += ["-U", macro]
+        for header in entry.force_includes:
+            extra_args += ["--include-file", str(header)]
     for header in args.include_file:
         extra_args += ["--include-file", str(header)]
     # Last, so a deliberate passthrough flag wins over anything veripp
     # inferred from the compilation database.
     extra_args += list(getattr(args, "esbmc_arg", []) or [])
-    std = args.std
-    defines = list(args.define)
-    include_dirs = _include_dirs(args)
-    entry = _compile_entry(args)
-    if entry is not None:
-        defines = entry.defines + defines
-        extra_args += [a for a in entry.esbmc_args() if a == "--include-file"] and []
-        for header in entry.force_includes:
-            extra_args += ["--include-file", str(header)]
-        if entry.std and args.std == _DEFAULT_STD and _is_cxx_std(entry.std):
-            std = entry.std
+    # An explicit --std wins; otherwise the build's. Either goes to the
+    # language it names, since the harness is C for a C source and C++ for
+    # a C++ one, and each rejects the other's standard outright.
+    std = args.std if args.std != _DEFAULT_STD else (entry.std if entry else None)
+    if std:
+        if _is_cxx_std(std):
+            cpp_std = std
+        else:
+            c_std = std
     return VerifyConfig(
         unwind=args.unwind,
         timeout_s=args.timeout,
-        cpp_std=std,
-        include_dirs=include_dirs,
+        cpp_std=cpp_std,
+        c_std=c_std,
+        include_dirs=_include_dirs(args),
         defines=defines,
         link_sources=[s.resolve() for s in getattr(args, "link", [])],
         overflow_check=not args.no_overflow_check,
@@ -1704,34 +1714,7 @@ def _verify(args) -> int:
             return EXIT_USAGE
         target = harness.write(scratch_dir())
 
-    extra_args: list[str] = []
-    for header in args.include_file:
-        extra_args += ["--include-file", str(header)]
-    # Last, so a deliberate passthrough flag wins over anything veripp
-    # inferred from the compilation database.
-    extra_args += list(getattr(args, "esbmc_arg", []) or [])
-
-    std = args.std
-    defines = list(args.define)
-    include_dirs = _include_dirs(args)
-    entry = _compile_entry(args)
-    if entry is not None:
-        include_dirs = list(entry.include_dirs) + include_dirs
-        defines = entry.defines + defines
-        extra_args += entry.esbmc_args()[len(entry.include_dirs) * 2 + len(entry.defines) * 2 :]
-        if entry.std and args.std == _DEFAULT_STD and _is_cxx_std(entry.std):
-            std = entry.std
-
-    config = VerifyConfig(
-        unwind=args.unwind,
-        timeout_s=args.timeout,
-        cpp_std=std,
-        include_dirs=include_dirs,
-        defines=defines,
-        link_sources=[s.resolve() for s in args.link],
-        overflow_check=not args.no_overflow_check,
-        extra_args=extra_args,
-    )
+    config = _config_for(args)
     llm, deferred_note = (NullLLM(), None) if args.no_llm else _make_llm(args)
     target_info = (
         TargetInfo(
@@ -1784,9 +1767,11 @@ def _verify(args) -> int:
 
 
 def _is_cxx_std(std: str) -> bool:
-    """veripp's harness is always C++ (it needs `extern "C"` and references),
-    and it #includes the target. A C project's -std=c11 would be rejected on a
-    .cpp file, so the build system's C standard is deliberately not forwarded.
+    """Whether `std` names a C++ standard rather than a C one.
+
+    The harness is written in the language of the file under test -- C for a
+    .c, because C that assigns malloc's void* without a cast is not C++ -- so
+    a standard goes to whichever of the two it names.
     """
     return "++" in std or std.startswith(("gnu++", "c++"))
 
