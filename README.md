@@ -271,10 +271,13 @@ Shell completions: `eval "$(veripp completion bash)"` (or `zsh`, or
   printed: a bounded length, a non-null pointer, an unlinked callee, an
   undefined extern array. Where a parameter can't be modelled soundly, veripp
   refuses to generate a harness rather than guess.
-- **Vacuous proofs are rejected.** If a precondition makes the function
-  unreachable, every property holds trivially. veripp re-runs any proof that
-  rests on assumptions with an assertion that must fail. If that assertion
-  doesn't fail, it reports `VACUOUS` and exits non-zero.
+- **Vacuous proofs are rejected.** If the assumptions make the function
+  unreachable, every property holds trivially. veripp re-runs every proof, in
+  `verify` and `scan` alike, with an assertion that must fail: the assumption
+  that empties a harness can sit in the code under test, or be a bound the
+  harness adds itself. If that assertion doesn't fail, the result is
+  `VACUOUS`; if the re-run can't settle (a timeout, a checker error), it is
+  `UNCONFIRMED`. Neither is a proof, and both exit 3.
 - **The LLM only proposes.** Harnesses and preconditions a model suggests
   are checked by ESBMC. A result that holds only under a proposed
   precondition is reported as `PRECONDITIONED`, never folded into `PROVED`.

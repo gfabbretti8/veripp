@@ -73,16 +73,18 @@ the tuning knobs kept out of the default help.
 | 0 | VERIFIED | Proved **within the stated bounds**. Quote the bounds. |
 | 1 | COUNTEREXAMPLE | A concrete input reaches the fault. This is a real lead. |
 | 2 | Usage error | Your invocation was wrong. |
-| 3 | Inconclusive / vacuous | Proved nothing. Do not report it as a pass. |
+| 3 | Inconclusive / vacuous / unconfirmed | Proved nothing. Do not report it as a pass. |
 
 Three failure modes to name out loud rather than paper over:
 
 - **Bounded, not total.** A pass means "no counterexample within N loop
   unwindings and arrays of length M". Say the numbers. `--unwind` and
   `--max-array-len` change them.
-- **Vacuous proofs.** If preconditions contradict each other, everything is
-  provable. veripp re-runs the harness with a deliberately false assertion to
-  catch this and reports VACUOUS. Never report a vacuous run as verified.
+- **Vacuous proofs.** If preconditions contradict each other -- or a
+  precondition contradicts a bound the harness adds, like `--max-array-len` --
+  everything is provable. veripp re-runs every proof with a deliberately false
+  assertion to catch this and reports VACUOUS; if that re-run cannot settle,
+  it reports UNCONFIRMED. Never report either as verified.
 - **Stubbed callees.** If a called function has no body in the translation
   unit, the checker invents a return value. veripp lists those calls. Pass
   `--link other.c` to give it the real ones, or say which were stubbed.

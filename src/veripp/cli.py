@@ -1851,6 +1851,9 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "outcome": report.final.outcome.value,
         "bounded": not report.final.config.k_induction,
         "vacuous": report.vacuous,
+        # "reachable", "vacuous" or "unconfirmed" for a result that verified;
+        # only "reachable" makes it a proof.
+        "reachability": report.reachability,
         # null = not asked (no loop, or safety did not hold). false =
         # not proved, which is never the same claim as "loops forever":
         # ESBMC proves termination but does not refute it.
@@ -1911,10 +1914,10 @@ def _write_repro(args, report, harness) -> str | None:
 
 def _exit_code(report: AgentReport) -> int:
     outcome = report.final.outcome
-    if report.vacuous:
-        return EXIT_INCONCLUSIVE  # a vacuous proof is not a pass
     if outcome is Outcome.VERIFIED:
-        return EXIT_VERIFIED
+        # A vacuous proof is not a pass, and neither is one the reachability
+        # probe could not confirm.
+        return EXIT_VERIFIED if report.verified else EXIT_INCONCLUSIVE
     if outcome is Outcome.COUNTEREXAMPLE:
         return EXIT_COUNTEREXAMPLE
     return EXIT_INCONCLUSIVE

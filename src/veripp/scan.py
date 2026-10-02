@@ -22,6 +22,7 @@ from .cppsig import (
 )
 from dataclasses import replace as _replace
 
+from .agent import REACHABLE, VACUOUS, probe_reachability
 from .esbmc import Outcome, VerifyConfig, run
 from .harness import (
     HarnessError, HarnessOptions, generate, unused_length_parameters,
@@ -136,6 +137,15 @@ class ScanReport:
         return [r for r in self.results if r.outcome == "refused"]
 
     @property
+    def unproved(self) -> list[FunctionResult]:
+        """Verified, but the reachability probe did not show that anything
+        was checked. Counted as inconclusive, and listed apart, because the
+        fix is different: a vacuous harness needs a weaker assumption, not
+        more time."""
+        return [r for r in self.results
+                if r.outcome in (VACUOUS, "unconfirmed")]
+
+    @property
     def inconclusive(self) -> list[FunctionResult]:
         done = {Outcome.VERIFIED.value, Outcome.COUNTEREXAMPLE.value,
                 "refused", "preconditioned"}
@@ -194,7 +204,8 @@ class ScanReport:
             f"  HARNESS ARTIFACT {len(self.artifacts):4d}  "
             "failed because of how the harness was built, not the code",
             f"  INCONCLUSIVE     {len(self.inconclusive):4d}  "
-            "timed out, hit the unwind bound, or the frontend refused it"
+            "timed out, hit the unwind bound, the frontend refused it, or a "
+            "proof reached nothing"
             + (f" ({self.settled} settled on a second, harder attempt)"
                if self.settled else ""),
             f"  NOT HARNESSABLE  {len(self.refused):4d}  "
@@ -204,6 +215,11 @@ class ScanReport:
             lines += ["", "  why functions were not harnessable:"]
             for reason, count in self.refusal_reasons().items():
                 lines.append(f"    {count:4d}  {reason}")
+        if self.unproved:
+            lines += ["", "  verified, but not shown to have checked anything "
+                          "(not proofs):"]
+            for r in sorted(self.unproved, key=lambda r: r.name):
+                lines.append(f"    {r.name}: {r.detail}")
         if self.preconditioned:
             lines += ["", "  preconditions the solver accepted (each excludes "
                           "the failing input and is satisfiable):"]
@@ -474,13 +490,18 @@ def scan(
                 widened = _replace(widened, unwind=widened.unwind * 4)
                 result = run(path, widened)
                 attempt += 1
+            # The probe `verify` runs: a proof whose harness reached nothing
+            # checked nothing. The harness bounds a buffer length at
+            # --max-array-len, and a VERIPP_REQUIRES asking for more used to
+            # read PROVED here and VACUOUS under `verify`.
+            reachability, note = None, ""
+            if result.outcome is Outcome.VERIFIED:
+                reachability, note = probe_reachability(path, widened)
             # Same policy as `verify`: only for a function that proved, and
             # only when there is a loop that could fail to terminate. Costs
             # one extra run on those, and nothing on the rest.
             terminates = None
-            if result.outcome is Outcome.VERIFIED and _body_has_loop(
-                scrubbed, name
-            ):
+            if reachability == REACHABLE and _body_has_loop(scrubbed, name):
                 terminates = (
                     run(path, _replace(widened, termination=True)).outcome
                     is Outcome.VERIFIED
@@ -489,12 +510,26 @@ def scan(
             return FunctionResult(name=name, outcome="tool_error",
                                   signature=printable, detail=str(exc))
         prop = result.violated_property
+        outcome = result.outcome.value
+        detail = prop.description if prop else (result.error or "")
+        if reachability == VACUOUS:
+            outcome, detail = VACUOUS, (
+                "its assumptions cannot all hold, so the call is never "
+                "reached -- a precondition may conflict with a bound the "
+                "harness adds itself, such as a buffer length of at most "
+                f"{options.max_array_len} (--max-array-len)"
+            )
+        elif reachability not in (None, REACHABLE):
+            outcome, detail = "unconfirmed", (
+                "no violation, but the reachability probe did not settle"
+                + (f" ({note})" if note else "")
+            )
         return FunctionResult(
             name=name,
             terminates=terminates,
-            outcome=result.outcome.value,
+            outcome=outcome,
             signature=printable,
-            detail=(prop.description if prop else (result.error or "")),
+            detail=detail,
             assumptions=harness.assumptions,
             stubbed_calls=result.stubbed_calls,
             duration_s=result.duration_s,
@@ -597,8 +632,8 @@ def _retry_pass(
             continue
         final = agent.final
         settled = final.outcome in (Outcome.VERIFIED, Outcome.COUNTEREXAMPLE)
-        if final.outcome is Outcome.VERIFIED and agent.vacuous:
-            settled = False  # nothing was actually checked
+        if final.outcome is Outcome.VERIFIED and not agent.verified:
+            settled = False  # nothing was shown to have been checked
         if settled:
             prop = final.violated_property
             r.outcome = final.outcome.value
@@ -665,7 +700,7 @@ def _triage_pass(
         if (
             agent.final.outcome is Outcome.VERIFIED
             and agent.accepted_preconditions
-            and not agent.vacuous
+            and agent.verified
         ):
             r.outcome = "preconditioned"
             r.preconditions = list(agent.accepted_preconditions)

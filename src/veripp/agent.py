@@ -12,13 +12,22 @@ Design invariants:
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import term
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
-from .harness import HarnessError, generate, reachability_variant
+from .harness import (
+    REACHABILITY_MESSAGE,
+    REACHABILITY_PROBE_MACRO,
+    HarnessError,
+    generate,
+    has_reachability_marker,
+    reachability_variant,
+)
 from .llm import LLMClient, LLMError, NullLLM
 from .triage import (
     Diagnosis, TargetInfo, real_failures, triage_counterexample,
@@ -33,6 +42,12 @@ class Budget:
     wall_time_s: int = 600
 
 
+#: What the reachability probe can say about a result that verified.
+REACHABLE = "reachable"      # the harness runs to its end: something was checked
+VACUOUS = "vacuous"          # it cannot: every property held trivially
+UNCONFIRMED = "unconfirmed"  # the probe did not settle, so neither is shown
+
+
 @dataclass
 class AgentReport:
     final: VerifyResult
@@ -45,9 +60,13 @@ class AgentReport:
     #: Bug classes the checker that produced this result is known to miss.
     #: A "verified" is only as sound as the checker behind it.
     unsound_probes: list[str] = field(default_factory=list)
-    #: True when the harness could not actually be reached under its own
-    #: assumptions, which makes any "verified" meaningless.
-    vacuous: bool = False
+    #: The reachability probe's answer for a result that verified (None when
+    #: it did not). Only REACHABLE makes a "verified" a proof: VACUOUS means
+    #: the assumptions left no execution to check, and UNCONFIRMED means the
+    #: probe could not tell -- which fails closed rather than open.
+    reachability: str | None = None
+    #: Why the probe did not settle, when it is UNCONFIRMED.
+    reachability_note: str = ""
 
     #: Termination, kept separate from the safety verdict on purpose. It is a
     #: liveness property, and a safety proof says nothing about it: ESBMC
@@ -58,8 +77,25 @@ class AgentReport:
     terminates: bool | None = None
 
     @property
+    def vacuous(self) -> bool:
+        """The harness could not be reached under its own assumptions, which
+        makes any "verified" meaningless."""
+        return self.reachability == VACUOUS
+
+    @property
+    def unconfirmed(self) -> bool:
+        return (
+            self.final.outcome is Outcome.VERIFIED
+            and self.reachability != REACHABLE
+            and not self.vacuous
+        )
+
+    @property
     def verified(self) -> bool:
-        return self.final.outcome is Outcome.VERIFIED and not self.vacuous
+        return (
+            self.final.outcome is Outcome.VERIFIED
+            and self.reachability == REACHABLE
+        )
 
     def _depth_bound_hint(self) -> str | None:
         """Flag a null the harness itself introduced.
@@ -94,14 +130,30 @@ class AgentReport:
             headline = term.style(
                 "VACUOUS (nothing was actually checked)", "yellow", "bold"
             )
+        elif self.unconfirmed:
+            headline = term.style(
+                "UNCONFIRMED (no violation found, but not shown to have "
+                "checked anything)", "yellow", "bold",
+            )
         else:
             headline = term.verdict(self.final.outcome.value)
         lines = [f"Result: {headline}", f"  {self.final.config.describe()}"]
         if self.vacuous:
             lines.append(
                 "  The assumptions made the call unreachable, so every property "
-                "held trivially. This is NOT a proof. Weaken the precondition(s) "
-                "below until the harness can run."
+                "held trivially. This is NOT a proof. The conflict may be "
+                "between the precondition(s) below, or with a bound veripp's "
+                "harness adds itself (a buffer length of at most "
+                "--max-array-len, say). Weaken the precondition, or raise that "
+                "bound, until the harness can run."
+            )
+        elif self.unconfirmed:
+            lines.append(
+                "  The solver found no violation, but the reachability probe "
+                "could not show that the harness runs at all"
+                + (f" ({self.reachability_note})" if self.reachability_note else "")
+                + ", and an unreachable harness satisfies every property. This "
+                "is NOT a proof. A longer --timeout usually settles it."
             )
         if self.harness:
             lines.append(f"  harness: {self.harness}")
@@ -296,15 +348,19 @@ def verify_with_agent(
             # asks it rather than making the user find a flag: only when there
             # is a loop to worry about, and only once safety succeeded, since
             # proving that buggy code terminates helps nobody.
+            # Reachability first: termination of a harness that runs nothing
+            # is not worth asking, or printing.
+            reachability, note = probe_reachability(source, config)
             terminates = None
-            if _might_not_terminate(target):
+            if reachability == REACHABLE and _might_not_terminate(target):
                 terminates = _check_termination(source, config)
             return AgentReport(
                 final=result,
                 attempts=attempts,
                 diagnosis=last_diagnosis,
                 accepted_preconditions=preconditions,
-                vacuous=_is_vacuous(source, config),
+                reachability=reachability,
+                reachability_note=note,
                 terminates=terminates,
                 **context,
             )
@@ -336,12 +392,14 @@ def verify_with_agent(
                             wider, outcome=Outcome.VERIFIED, properties=[]
                         )
                         attempts.append(result)
+                        reachability, note = probe_reachability(source, config)
                         return AgentReport(
                             final=result,
                             attempts=attempts,
                             diagnosis=diagnosis,
                             accepted_preconditions=preconditions,
-                            vacuous=_is_vacuous(source, config),
+                            reachability=reachability,
+                            reachability_note=note,
                             **context,
                         )
             if (
@@ -428,29 +486,74 @@ def verify_with_agent(
             )
 
 
-def _is_vacuous(harness: Path, config: VerifyConfig) -> bool:
-    """Did the harness's own assumptions make the call unreachable?
+def _reached(result: VerifyResult) -> bool:
+    """Whether the counterexample is the probe's own assertion failing."""
+    return any(REACHABILITY_MESSAGE in p.description for p in result.properties)
+
+
+def probe_reachability(harness: Path, config: VerifyConfig) -> tuple[str, str]:
+    """Can the harness that just verified actually run? And if not, why not.
 
     An unreachable program satisfies everything, so a "verified" from one is
-    worthless -- and neither ESBMC nor the LLM that proposed the precondition
-    can notice. Only a harness carrying assumptions can be vacuous, so the
-    extra run is skipped when there are none.
+    worthless -- and neither ESBMC nor the LLM that proposed a precondition
+    can notice. So every proof is re-run with an assertion at its end that
+    always fails: a harness that can get there must fail it (REACHABLE), and
+    one that verifies again reached nothing (VACUOUS).
+
+    Anything else -- a timeout, a tool error, a counterexample for some other
+    property -- settles nothing, and is UNCONFIRMED rather than taken as
+    reachable: a proof not shown to have checked anything is not a proof.
+    The run is asked even when the harness text holds no assumption, because
+    the assumption that empties it can live anywhere -- a VERIPP_REQUIRES in
+    the code under test, an __ESBMC_assume in a header, a bound veripp added.
     """
     try:
-        code = harness.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    if "VERIPP_ASSUME" not in code and "VERIPP_REQUIRES" not in code:
-        return False
-    probe = harness.with_name(f"{harness.stem}.reachable{harness.suffix}")
+        code = harness.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return UNCONFIRMED, f"could not read {harness}: {exc}"
+    probe_config = replace(
+        config, defines=[*config.defines, REACHABILITY_PROBE_MACRO]
+    )
+    workdir: Path | None = None
+    if has_reachability_marker(code):
+        # A generated harness: the same file, with the marker switched on.
+        target = harness
+    else:
+        # A file checked through its own main. The probe is written into a
+        # scratch directory rather than beside it, so it never lands in the
+        # user's tree; its directory goes first on the include path, where a
+        # quoted include in the original would have looked first.
+        variant = reachability_variant(code)
+        if variant is None:
+            return UNCONFIRMED, "there is no main() to probe"
+        workdir = Path(tempfile.mkdtemp(prefix="veripp-probe-"))
+        target = workdir / harness.name
+        target.write_text(variant, encoding="utf-8")
+        probe_config = replace(
+            probe_config,
+            include_dirs=[harness.resolve().parent, *probe_config.include_dirs],
+        )
     try:
-        probe.write_text(reachability_variant(code), encoding="utf-8")
-        result = run(probe, config)
-    except (OSError, RuntimeError):
-        return False
-    # The probe's trailing assertion is always false, so a reachable harness
-    # must fail it. Verifying means nothing could reach it.
-    return result.outcome is Outcome.VERIFIED
+        result = run(target, probe_config)
+        if result.outcome is Outcome.COUNTEREXAMPLE and not _reached(result):
+            # Something else failed first. That happens when every failure
+            # was the harness's own and the proof is what is left after
+            # them: the checker stopped at an artifact before it got to the
+            # probe. Ask about every property instead.
+            result = run(target, replace(probe_config, multi_property=True))
+    except (OSError, RuntimeError) as exc:
+        return UNCONFIRMED, f"the probe could not run: {exc}"
+    finally:
+        if workdir is not None:
+            shutil.rmtree(workdir, ignore_errors=True)
+    if result.outcome is Outcome.VERIFIED:
+        return VACUOUS, ""
+    if result.outcome is Outcome.COUNTEREXAMPLE and _reached(result):
+        return REACHABLE, ""
+    return UNCONFIRMED, (
+        f"the probe ended in {result.outcome.value}"
+        + (f": {result.error}" if result.error else "")
+    )
 
 
 def _inconclusive(
