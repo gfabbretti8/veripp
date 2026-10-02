@@ -46,6 +46,27 @@ class TestRuleClassification:
         for description in ("overflow", "bounds", "null", "divide", "???"):
             assert rule_for(description) in RULES
 
+    # Worded as ESBMC 8.5 reports them, with the CWEs it gives each. The
+    # heap failures all begin "dereference failure", and every one of them
+    # was filed under the null-pointer rule; the rest fell to "other".
+    @pytest.mark.parametrize("description,expected,cwe", [
+        ("dereference failure: forgotten memory: dynamic_1_array", "leak", "CWE-401"),
+        ("dereference failure: invalidated dynamic object", "use-after-free", "CWE-416"),
+        ("dereference failure: invalidated dynamic object freed", "invalid-free", "CWE-415"),
+        ("dereference failure: free() of non-dynamic memory", "invalid-free", "CWE-590"),
+        ("Operand of free must have zero pointer offset", "invalid-free", "CWE-761"),
+        ("use of uninitialized variable: x", "uninitialised", "CWE-457"),
+        ("undefined behavior on shift operation shl", "shift", "CWE-1335"),
+        ("NaN on ieee_div", "nan", "CWE-681"),
+        ("dereference failure: NULL pointer", "pointer", "CWE-476"),
+        ("arithmetic overflow on floating-point ieee_div", "overflow", "CWE-190"),
+    ])
+    def test_each_default_check_has_its_own_rule(self, description, expected, cwe) -> None:
+        from veripp.sarif import RULES, rule_for
+
+        assert rule_for(description) == expected
+        assert cwe in RULES[expected][2]
+
 
 class TestDocumentShape:
     @staticmethod
@@ -87,6 +108,32 @@ class TestDocumentShape:
         result for a total one."""
         log = self._log(bounds="bounded, unwind=8")
         assert "unwind=8" in log["runs"][0]["results"][0]["message"]["text"]
+
+    def test_each_result_carries_its_own_bounds(self) -> None:
+        """A tree scan has no single config to state, and a retry can widen
+        a result past the one the scan started from."""
+        from veripp.sarif import build
+
+        findings = [
+            {"file": "a.c", "line": 1, "function": "f", "property": "overflow",
+             "cwes": [], "bounds": "bounded, unwind=512"},
+            {"file": "b.c", "line": 1, "function": "g", "property": "overflow",
+             "cwes": [], "bounds": "incremental BMC"},
+        ]
+        log = build(findings, root=Path("."), version="0", bounds="bounded, unwind=32")
+        first, second = (r["message"]["text"] for r in log["runs"][0]["results"])
+        assert "unwind=512" in first and "unwind=32" not in first
+        assert "incremental BMC" in second
+
+    def test_each_result_carries_the_cwes_esbmc_gave_it(self) -> None:
+        """The rule names the class; ESBMC names the weakness, and a write
+        (CWE-787) is not a read (CWE-125)."""
+        from veripp.sarif import build
+
+        log = build([{"file": "a.c", "line": 1, "function": "f",
+                      "property": "dereference failure: invalidated dynamic object",
+                      "cwes": ["CWE-416", "CWE-825"]}], root=Path("."), version="0")
+        assert log["runs"][0]["results"][0]["properties"]["cwe"] == ["CWE-416", "CWE-825"]
 
     def test_the_message_says_a_finding_needs_triage(self) -> None:
         text = self._log()["runs"][0]["results"][0]["message"]["text"]
@@ -139,6 +186,30 @@ class TestEndToEnd:
         veripp("scan", "m.c", "--sarif", str(out), cwd=tmp_path)
         log = json.loads(out.read_text(encoding="utf-8"))
         assert log["runs"][0]["results"], "no results written"
+
+    def test_a_tree_scan_states_its_bounds(self, tmp_path) -> None:
+        """It stated none: _write_sarif had no config for a directory."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "m.c").write_text(BUGGY, encoding="utf-8")
+        out = tmp_path / "r.sarif"
+        veripp("scan", "src", "--sarif", str(out), "--no-cache", cwd=tmp_path)
+        log = json.loads(out.read_text(encoding="utf-8"))
+        (result,) = log["runs"][0]["results"]
+        assert "unwind=32" in result["message"]["text"]
+
+    def test_a_result_settled_on_retry_states_the_bound_it_needed(self, tmp_path) -> None:
+        """The division is past a 200-iteration loop: the first pass runs out
+        at unwind 32 * 4, and the retry reaches it at 32 * 16."""
+        (tmp_path / "d.c").write_text(
+            "int deep_div(int d) {\n"
+            "    int s = 0;\n"
+            "    for (int i = 0; i < 200; i++) s += 1;\n"
+            "    return s / d;\n"
+            "}\n", encoding="utf-8")
+        out = tmp_path / "r.sarif"
+        veripp("scan", "d.c", "--sarif", str(out), "--no-cache", "--no-llm", cwd=tmp_path)
+        (result,) = json.loads(out.read_text(encoding="utf-8"))["runs"][0]["results"]
+        assert "unwind=512" in result["message"]["text"], result["message"]["text"]
 
     def test_sarif_failure_does_not_lose_the_verification(self, tmp_path) -> None:
         """A reporting format must not cost someone a result they paid for."""

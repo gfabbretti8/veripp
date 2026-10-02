@@ -19,6 +19,7 @@ result has to travel inside the message.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 #: The oasis-tcs raw URL that most tools quote is a 404 today; this one
@@ -51,6 +52,39 @@ RULES = {
         "A divisor can be zero.",
         ["CWE-369"],
     ),
+    "leak": (
+        "Memory leak",
+        "Memory allocated on some path is never freed, and nothing refers to "
+        "it any more.",
+        ["CWE-401"],
+    ),
+    "use-after-free": (
+        "Use after free",
+        "Memory is read or written after it has been freed.",
+        ["CWE-416"],
+    ),
+    "invalid-free": (
+        "Double or invalid free",
+        "Memory is freed twice, or free() is given a pointer that is not the "
+        "start of a heap block.",
+        ["CWE-415", "CWE-590", "CWE-761"],
+    ),
+    "uninitialised": (
+        "Use of an uninitialised value",
+        "A variable is read before anything has been written to it.",
+        ["CWE-457", "CWE-908"],
+    ),
+    "shift": (
+        "Undefined shift",
+        "A shift amount can be negative, or at least the width of the value "
+        "shifted. In C and C++ that is undefined behaviour.",
+        ["CWE-1335"],
+    ),
+    "nan": (
+        "NaN result",
+        "A floating-point operation can produce NaN from finite inputs.",
+        ["CWE-681"],
+    ),
     "other": (
         "Property violation",
         "A checked property does not hold for some input.",
@@ -60,7 +94,25 @@ RULES = {
 
 
 def rule_for(description: str) -> str:
+    """The rule for one of ESBMC's property descriptions.
+
+    Most specific first. Every heap failure ESBMC reports begins
+    "dereference failure" -- a leak is "dereference failure: forgotten
+    memory" -- and all of them used to land in the null-pointer rule.
+    """
     text = (description or "").lower()
+    if "forgotten memory" in text:
+        return "leak"
+    if "freed" in text or "free()" in text or "free must" in text:
+        return "invalid-free"
+    if "invalidated dynamic object" in text:
+        return "use-after-free"
+    if "uninitiali" in text:
+        return "uninitialised"
+    if "shift" in text:
+        return "shift"
+    if re.search(r"\bnan\b", text):
+        return "nan"
     if "overflow" in text:
         return "overflow"
     if "bound" in text or "array" in text or "index" in text:
@@ -89,7 +141,9 @@ def build(findings: list[dict], *, root: Path, version: str,
     """A SARIF log for `findings`.
 
     Each finding is a dict with file, line, column, function, property and
-    cwes -- the shape `veripp scan --json` already emits.
+    cwes -- the shape `veripp scan --json` already emits -- and optionally
+    the bounds it was obtained under, which `bounds` stands in for when
+    absent.
     """
     suppressed = suppressed or set()
     used: dict[str, dict] = {}
@@ -119,10 +173,13 @@ def build(findings: list[dict], *, root: Path, version: str,
         message = description
         if function:
             message = f"{description} in `{function}`"
-        if bounds:
+        # The bounds this finding was obtained under, which a retry may have
+        # widened past the ones the scan started from.
+        obtained = finding.get("bounds") or bounds
+        if obtained:
             # The consumer shows only this text, so the bound has to be in it:
             # a reader must not take a bounded result for a total one.
-            message += f" ({bounds})"
+            message += f" ({obtained})"
         message += (
             ". A counterexample holds in the generated harness; confirm a "
             "caller can reach it."
@@ -149,6 +206,10 @@ def build(findings: list[dict], *, root: Path, version: str,
                 "veripp/v1": f"{uri}:{function}:{description}",
             },
         }
+        # ESBMC names the weaknesses of each violation more precisely than a
+        # rule can -- an out-of-bounds write is CWE-787, a read CWE-125.
+        if finding.get("cwes"):
+            result["properties"] = {"cwe": list(finding["cwes"])}
         if (uri, function, description) in suppressed:
             result["suppressions"] = [{
                 "kind": "external",

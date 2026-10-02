@@ -1006,13 +1006,14 @@ def _write_sarif(args, reports) -> None:
                 "line": result.line, "column": result.column,
                 "function": result.name, "property": result.detail,
                 "cwes": result.cwes,
+                # Each result's own, not the scan's starting config: a tree
+                # scan has no single config, and a retry may have widened it.
+                "bounds": result.bounds,
             })
 
-    config = _config_for(args) if not args.source.is_dir() else None
-    bounds = config.describe() if config is not None else ""
     try:
         sarif_mod.write(destination, sarif_mod.build(
-            findings, root=Path.cwd(), version=__version__, bounds=bounds,
+            findings, root=Path.cwd(), version=__version__,
             suppressed=suppressed,
         ))
         if not args.quiet and not args.json:

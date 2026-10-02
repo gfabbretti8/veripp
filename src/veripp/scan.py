@@ -49,6 +49,10 @@ class FunctionResult:
     line: int = 0
     column: int = 0
     cwes: list[str] = field(default_factory=list)
+    #: The bounds and checks the outcome was obtained under -- the config's
+    #: describe() -- which widening and the retry pass move past the ones
+    #: the scan was started with.
+    bounds: str = ""
     #: Termination, asked only for proved functions that contain a loop.
     #: None = not asked. Kept out of `outcome` on purpose: it is a liveness
     #: property, and `verify` reports it the same way. The two commands
@@ -504,6 +508,7 @@ def scan(
             column=(prop.loc.column if prop and prop.loc else 0),
             cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
             access=access_kind(prop) if prop else None,
+            bounds=result.config.describe(),
         )
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
@@ -610,6 +615,7 @@ def _retry_pass(
             r.line = prop.loc.line if prop and prop.loc else 0
             r.column = prop.loc.column if prop and prop.loc else 0
             r.cwes = list(getattr(prop, "cwes", []) or []) if prop else []
+            r.bounds = final.config.describe()
             # Derived from the property, so it has to be recomputed here with
             # everything else. Leaving it behind labelled a read as a write,
             # which is the one thing this field must not do.
