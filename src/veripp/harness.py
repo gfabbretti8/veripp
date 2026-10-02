@@ -203,14 +203,50 @@ _LENGTH_NAMES = {
 }
 
 
-#: Enum types seen in the translation unit being harnessed. An enum is an
-#: integer, so filling one is a cast; without this the field is a hole.
-_ENUMS: set[str] = set()
+class TypeInfo(dict):
+    """A translation unit's scalar typedefs, with its enums and pointer aliases.
+
+    The mapping is the scalar typedefs, so this travels everywhere they
+    already go. An enum is an integer, so filling one is a cast; without the
+    enum names the field is a hole.
+
+    Computed once per source and handed to each harness built from it. The
+    enums used to live in a module-level set that every generate() cleared
+    and refilled -- through a pure-Python scrub() of the source and its
+    headers -- while other `scan` threads were reading it, so whether an enum
+    parameter was modelled or refused depended on timing.
+    """
+
+    def __init__(self, typedefs=None, enums=(), pointer_aliases=None):
+        super().__init__(typedefs or {})
+        self.enums = frozenset(enums)
+        self.pointer_aliases = dict(pointer_aliases or {})
+
+
+def type_info(text: str) -> TypeInfo:
+    return TypeInfo(
+        collect_scalar_typedefs(text),
+        collect_enum_types(text),
+        collect_pointer_typedefs(text),
+    )
+
+
+def source_types(source: Path, options: HarnessOptions | None = None) -> TypeInfo:
+    """The types `generate` would find for `source` under `options`.
+
+    For harnessing many functions of one file, as `scan` does: compute this
+    once and pass it to each generate() as `types`.
+    """
+    options = options or HarnessOptions()
+    text = source.read_text(encoding="utf-8", errors="replace")
+    preprocessed = preprocess_source(source, options) if options.preprocess else None
+    expanded = preprocessed or _with_local_includes(source, text, options.include_dirs)
+    return type_info("\n".join([expanded, *_linked_text(options)]))
 
 
 def nondet_for(type_: str, typedefs: dict[str, str] | None = None) -> str | None:
     canonical = normalize_type(type_, typedefs)
-    if canonical in _ENUMS:
+    if canonical in getattr(typedefs, "enums", ()):
         # Any representable value, not only the declared enumerators -- which
         # is what a caller can actually pass through an integer conversion.
         #
@@ -237,6 +273,7 @@ def generate(
     function: str,
     options: HarnessOptions | None = None,
     extra_preconditions: list[str] | None = None,
+    types: TypeInfo | None = None,
 ) -> Harness:
     """Build a harness for `function` as defined in `source`.
 
@@ -244,6 +281,9 @@ def generate(
     parameters, proposed by triage and to be CHECKED BY THE SOLVER in the run
     that follows. They are labelled as proposals in the assumptions list; a
     "verified" under them is conditional on real callers satisfying them.
+
+    `types` is `source_types(source, options)`, when the caller already has
+    it; otherwise it is worked out here.
     """
     options = options or HarnessOptions()
     text = source.read_text(encoding="utf-8")
@@ -282,12 +322,10 @@ def generate(
     # Linked TUs resolve callees, so their definitions must be visible
     # here too, or veripp reports stubs the run does not actually have.
     expanded = "\n".join([expanded, *_linked_text(options)])
-    typedefs = collect_scalar_typedefs(expanded)
-    _ENUMS.clear()
-    _ENUMS.update(collect_enum_types(expanded))
+    typedefs = types if types is not None else type_info(expanded)
     # Rewrite `z_streamp p` to `z_stream* p` once, so everything downstream
     # sees an ordinary pointer.
-    _expand_pointer_aliases(signature, collect_pointer_typedefs(expanded))
+    _expand_pointer_aliases(signature, typedefs.pointer_aliases)
     _reject_conflicting_main(text, source)
 
     body: list[str] = []
@@ -1917,12 +1955,9 @@ def generate_sequence(
     # Linked TUs resolve callees, so their definitions must be visible
     # here too, or veripp reports stubs the run does not actually have.
     expanded = "\n".join([expanded, *_linked_text(options)])
-    typedefs = collect_scalar_typedefs(expanded)
-    _ENUMS.clear()
-    _ENUMS.update(collect_enum_types(expanded))
-    pointer_aliases = collect_pointer_typedefs(expanded)
+    typedefs = type_info(expanded)
     for method in info.methods:
-        _expand_pointer_aliases(method, pointer_aliases)
+        _expand_pointer_aliases(method, typedefs.pointer_aliases)
     _reject_conflicting_main(text, source)
 
     callable_methods: list[Signature] = []
@@ -2046,9 +2081,7 @@ def generate_c_sequence(
         or _with_local_includes(source, text, options.include_dirs)
     )
     expanded = "\n".join([expanded, *_linked_text(options)])
-    typedefs = collect_scalar_typedefs(expanded)
-    _ENUMS.clear()
-    _ENUMS.update(collect_enum_types(expanded))
+    typedefs = type_info(expanded)
     _reject_conflicting_main(text, source)
 
     bare = re.sub(

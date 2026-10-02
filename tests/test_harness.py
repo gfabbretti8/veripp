@@ -880,3 +880,127 @@ class TestForwardedBufferSize:
             "void two(unsigned char *p) { *p++ = 1; *p++ = 2; p[0] = 3; }\n"
         )
         assert self._extent(tmp_path, src, "two") == 3
+
+
+# Twelve functions, each taking enums: one declared bare, one through a
+# typedef. Either is a hole in the harness unless the generator knows it is
+# an enum.
+ENUM_SOURCE = (
+    "enum mode { OFF, ON };\n"
+    "typedef enum level { LOW, HIGH } level_t;\n"
+    + "".join(
+        f"int f{i}(enum mode m, level_t l) {{ return (int)m + (int)l + {i}; }}\n"
+        for i in range(12)
+    )
+)
+
+
+class TestEnumsUnderThreads:
+    """`scan` harnesses a file's functions on a thread pool.
+
+    The enum names lived in one module-level set that every generate()
+    cleared and refilled -- through a pure-Python scrub() of the source and
+    its headers, slow on a real header set -- while the other threads were
+    reading it. Whether an enum parameter was modelled or refused came down
+    to timing. The scrub is slowed here to what a real header set costs, so
+    the window is wide enough to hit every time.
+    """
+
+    @pytest.fixture
+    def slow_enum_scan(self, monkeypatch):
+        """Both halves take the time they take on a real header set: finding
+        the enums, and then building the parameters that use them."""
+        import time
+
+        from veripp import harness as harness_module
+
+        find, use = harness_module.collect_enum_types, harness_module.nondet_for
+
+        def slow_find(text):
+            time.sleep(0.02)
+            return find(text)
+
+        def slow_use(*args, **kwargs):
+            time.sleep(0.003)
+            return use(*args, **kwargs)
+
+        monkeypatch.setattr(harness_module, "collect_enum_types", slow_find)
+        monkeypatch.setattr(harness_module, "nondet_for", slow_use)
+
+    def test_concurrent_generation_gives_identical_results(self, tmp_path, slow_enum_scan):
+        import concurrent.futures as cf
+        import time
+
+        from veripp.harness import HarnessError, generate
+
+        src = tmp_path / "e.c"
+        src.write_text(ENUM_SOURCE, encoding="utf-8")
+        names = [f"f{i}" for i in range(12)]
+        expected = {name: generate(src, name).code for name in names}
+
+        def build(name):
+            # Staggered, as `scan` staggers them: each worker reaches the
+            # generator when its previous checker run ends.
+            time.sleep(int(name[1:]) % 8 * 0.004)
+            try:
+                return name, generate(src, name).code
+            except HarnessError as exc:
+                return name, f"refused: {exc}"
+
+        for _ in range(3):
+            with cf.ThreadPoolExecutor(max_workers=8) as pool:
+                assert dict(pool.map(build, names)) == expected
+
+    def test_one_harness_is_not_changed_by_building_another(self, tmp_path, monkeypatch):
+        """The interleaving `scan` produces, made deterministic: another
+        file's harness is built while this one is half done."""
+        from veripp import harness as harness_module
+        from veripp.harness import generate
+
+        src = tmp_path / "e.c"
+        src.write_text(ENUM_SOURCE, encoding="utf-8")
+        other = tmp_path / "plain.c"
+        other.write_text("int g(int x) { return x; }\n", encoding="utf-8")
+        expected = generate(src, "f0").code
+
+        real = harness_module._emit_scalar
+        interposed: list[bool] = []
+
+        def meanwhile(*args, **kwargs):
+            if not interposed:
+                interposed.append(True)
+                generate(other, "g")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(harness_module, "_emit_scalar", meanwhile)
+        assert generate(src, "f0").code == expected
+
+    def test_a_parallel_scan_refuses_no_enum(self, tmp_path, monkeypatch, slow_enum_scan):
+        from veripp import agent as agent_module
+        from veripp import scan as scan_module
+        from veripp.esbmc import (
+            Outcome, SourceLoc, VerifyConfig, VerifyResult, ViolatedProperty,
+        )
+
+        src = tmp_path / "e.c"
+        src.write_text(ENUM_SOURCE, encoding="utf-8")
+        def proves(path, config, esbmc_bin=None):
+            # Every function verifies. A reachability probe, where veripp runs
+            # one (VERIPP_REACHABILITY_PROBE defined), fails its own assertion,
+            # as it does on a harness that can run.
+            if "VERIPP_REACHABILITY_PROBE" in config.defines:
+                reached = ViolatedProperty(
+                    SourceLoc(str(path), 1),
+                    "veripp: harness is reachable under its assumptions",
+                )
+                return VerifyResult(outcome=Outcome.COUNTEREXAMPLE, config=config,
+                                    properties=[reached])
+            return VerifyResult(outcome=Outcome.VERIFIED, config=config)
+
+        # Wherever veripp calls the checker from: scan runs it directly, and
+        # anything scan asks of the agent module runs it from there.
+        monkeypatch.setattr(scan_module, "run", proves)
+        monkeypatch.setattr(agent_module, "run", proves)
+        report = scan_module.scan(src, VerifyConfig(), jobs=8, retry_budget=0)
+        assert not report.refused, [r.detail for r in report.refused]
+        assert len(report.proved) == 12
