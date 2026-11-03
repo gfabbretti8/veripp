@@ -2,7 +2,20 @@
 
 A release is a tag. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`,
 which re-tests everything on that exact commit and then publishes to PyPI
-with the repository's `PYPI_TOKEN` secret. Nothing is uploaded by hand.
+through [Trusted Publishing](https://docs.pypi.org/trusted-publishers/): PyPI
+accepts the job's short-lived OIDC token, so no API token is stored in the
+repository. Nothing is uploaded by hand.
+
+Trusted Publishing is configured once, on PyPI, for each project (Manage →
+Publishing → Add a publisher → GitHub):
+
+| PyPI project     | Owner/repository       | Workflow            | Environment |
+|------------------|------------------------|---------------------|-------------|
+| `veripp`         | `gfabbretti8/veripp`   | `release.yml`       | `pypi`      |
+| `veripp-checker` | `gfabbretti8/veripp`   | `checker-wheels.yml`| `pypi`      |
+
+Once both are in place the old `PYPI_TOKEN` secret can be deleted, and the
+token revoked on PyPI.
 
 ```bash
 # 1. bump the version
