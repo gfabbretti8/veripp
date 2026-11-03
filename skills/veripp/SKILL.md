@@ -170,6 +170,48 @@ veripp harness src/parser.c --function parse
 `veripp harness` is the honesty check. If a result surprises you, read the
 harness before believing either the proof or the counterexample.
 
+```bash
+# only what changed: alone, what you are about to commit; with a ref, what
+# this branch changed since it left that ref -- the pull-request shape
+veripp scan . --changed
+veripp scan . --changed origin/main
+
+# a counterexample as a program that crashes under the sanitizers
+veripp verify src/parser.c --function parse --repro repro.c
+
+# more wall-clock for re-trying inconclusives on a file with slow runs
+veripp scan src/parser.c --retry-budget 900
+```
+
+## When the default harness asks the wrong question
+
+Reach for these when a result is about the harness rather than the code --
+a counterexample no caller can produce, or a proof resting on an input the
+real code never sees. All but `--preprocess` change what is verified, so
+say which you used when you report a result.
+
+- `--sequence TYPE` (with `--sequence-call GLOB` to pick functions): for a C
+  API that hands out a handle. veripp builds the object with the library's
+  own constructor, drives up to `--max-calls` of its functions on it, then
+  frees it. A use-after-free or double free found this way is the library's.
+- `--constructors`: build object parameters with the library's own
+  constructors instead of filling every field, which admits states the type's
+  invariants forbid.
+- `--setup 'init()'`: call a linked module's initialiser first. Linking a
+  source without it can leave its state null and blame the target for that.
+- `--unterminated`: for a parser handed bytes, not strings. The default gives
+  every `char *` a terminator, which hides the walk-to-NUL over-read.
+- `--preprocess`: read the source as the compiler sees it when structs are
+  refused for members inside `#if`. "not in this build" then means the
+  configuration compiles the function out -- check its defines, not veripp.
+
+```bash
+veripp verify src/list.c --sequence list_t --sequence-call 'list_push*'
+veripp verify src/httpd.c --function parse_request --link src/mem.c --setup 'mem_init()'
+veripp verify src/netbiosns.c --function name_decode --unterminated
+veripp verify src/ppp/lcp.c --function lcp_input --preprocess --constructors
+```
+
 ## Where it works and where it does not
 
 ESBMC handles C and C-like C++ well. Heavy STL and template metaprogramming

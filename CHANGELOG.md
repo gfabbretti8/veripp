@@ -286,8 +286,6 @@ Usable on a codebase that already has findings.
   scores 0/2 and over-reports real bugs, and no hosted model has been graded
   because nothing here has an API key. That last gap sits under the half of
   the product the name advertises, and one command closes it.
-- `npx veripp-skill` installs the agent skill with nothing but Node.
-
 - `npx veripp-skill` installs the agent skill with nothing but Node — into
   `./.claude/skills/veripp`, or `--global` for every project. It installs the
   skill, not the verifier, and says so: the verifier is a Python program

@@ -47,6 +47,71 @@ def check(result: subprocess.CompletedProcess, what: str) -> None:
     )
 
 
+#: A C API that hands out a handle -- what --sequence and --constructors are for.
+LIST_C = """\
+#include <stdlib.h>
+
+typedef struct list { int items[4]; unsigned len; } list_t;
+
+list_t *list_new(void) {
+    list_t *l = malloc(sizeof *l);
+    if (l) l->len = 0;
+    return l;
+}
+void list_free(list_t *l) { free(l); }
+int list_push(list_t *l, int v) {
+    if (l->len >= 4) return -1;
+    l->items[l->len++] = v;
+    return 0;
+}
+int list_pop(list_t *l) { return l->len > 0 ? l->items[--l->len] : -1; }
+"""
+
+#: A module whose state only its own init() sets up, and a caller of it.
+MEM_C = """\
+static char *heap;
+static char arena[64];
+void mem_init(void) { heap = arena; }
+char *mem_malloc(unsigned n) { return n <= sizeof arena ? heap : 0; }
+"""
+HTTPD_C = """\
+char *mem_malloc(unsigned n);
+int parse_request(unsigned n) {
+    if (n == 0 || n > 64) return -1;
+    char *buf = mem_malloc(n);
+    buf[0] = 'G';
+    return buf[n - 1];
+}
+"""
+
+#: A walk to NUL, which is only safe if the caller hands over a C string.
+NAME_C = """\
+int name_decode(const char *name) {
+    int n = 0;
+    while (name[n]) n++;
+    return n;
+}
+"""
+
+#: A struct with a member inside #if, which veripp refuses to fill as text.
+LCP_C = """\
+#include <stdlib.h>
+#define LCP_OPTS 1
+typedef struct lcp {
+    int state;
+#if LCP_OPTS
+    int opts[4];
+#endif
+} lcp_t;
+lcp_t *lcp_new(void) { return calloc(1, sizeof(lcp_t)); }
+void lcp_free(lcp_t *l) { free(l); }
+int lcp_input(lcp_t *l, unsigned i) {
+    if (i >= 4) return -1;
+    return l->opts[i] + l->state;
+}
+"""
+
+
 class TestDocumentedInvocations:
     """Each of these mirrors a command block in SKILL.md, with the
     illustrative paths swapped for fixtures that exist."""
@@ -121,6 +186,76 @@ class TestDocumentedInvocations:
             veripp("verify", "src/a.c", "--function", "scale",
                    "--compile-commands", "build/compile_commands.json", cwd=tmp_path),
             "veripp verify FILE --compile-commands DB",
+        )
+
+
+    def test_scan_only_what_changed(self, tmp_path) -> None:
+        def git(*args: str) -> None:
+            subprocess.run(
+                ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", *args],
+                cwd=tmp_path, check=True, capture_output=True,
+            )
+
+        git("init", "-q", "-b", "main")
+        (tmp_path / "old.c").write_text("int f(int x){ return x; }\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        git("checkout", "-qb", "feature")
+        (tmp_path / "new.c").write_text("int g(int x){ return x; }\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "change")
+        result = veripp("scan", ".", "--changed", "main", cwd=tmp_path)
+        check(result, "veripp scan . --changed REF")
+        assert "Scanned 1 file" in result.stdout, result.stdout[-500:]
+
+        (tmp_path / "wip.c").write_text("int h(int x){ return x; }\n", encoding="utf-8")
+        result = veripp("scan", ".", "--changed", cwd=tmp_path)
+        check(result, "veripp scan . --changed")
+        assert "Scanned 1 file" in result.stdout, result.stdout[-500:]
+
+    def test_repro_of_a_counterexample(self, tmp_path) -> None:
+        out = tmp_path / "repro.cpp"
+        check(
+            veripp("verify", "examples/off_by_one.cpp", "--function", "sum_array",
+                   "--repro", str(out)),
+            "veripp verify FILE --function F --repro PATH",
+        )
+        assert out.is_file(), "a counterexample, and no reproducer written"
+
+    def test_scan_with_a_retry_budget(self, tmp_path) -> None:
+        (tmp_path / "m.c").write_text("int f(int x){ return x; }\n", encoding="utf-8")
+        check(veripp("scan", "m.c", "--retry-budget", "900", cwd=tmp_path),
+              "veripp scan FILE --retry-budget SECONDS")
+
+    def test_sequence_over_a_c_api(self, tmp_path) -> None:
+        (tmp_path / "list.c").write_text(LIST_C, encoding="utf-8")
+        result = veripp("verify", "list.c", "--sequence", "list_t",
+                        "--sequence-call", "list_push*", cwd=tmp_path)
+        check(result, "veripp verify FILE --sequence TYPE --sequence-call GLOB")
+        assert "list_new returns" in result.stdout, "not built by the library"
+
+    def test_setup_before_a_linked_module(self, tmp_path) -> None:
+        (tmp_path / "mem.c").write_text(MEM_C, encoding="utf-8")
+        (tmp_path / "httpd.c").write_text(HTTPD_C, encoding="utf-8")
+        result = veripp("verify", "httpd.c", "--function", "parse_request",
+                        "--link", "mem.c", "--setup", "mem_init()", cwd=tmp_path)
+        check(result, "veripp verify FILE --function F --link SRC --setup CALL")
+        assert "runs mem_init() first" in result.stdout, "the setup went unsaid"
+
+    def test_unterminated_bytes(self, tmp_path) -> None:
+        (tmp_path / "name.c").write_text(NAME_C, encoding="utf-8")
+        result = veripp("verify", "name.c", "--function", "name_decode",
+                        "--unterminated", cwd=tmp_path)
+        check(result, "veripp verify FILE --function F --unterminated")
+        assert "NO terminator" in result.stdout, "the model went unsaid"
+
+    def test_preprocess_and_constructors(self, tmp_path) -> None:
+        """Without either flag this struct is refused, which is exit 2."""
+        (tmp_path / "lcp.c").write_text(LCP_C, encoding="utf-8")
+        check(
+            veripp("verify", "lcp.c", "--function", "lcp_input",
+                   "--preprocess", "--constructors", cwd=tmp_path),
+            "veripp verify FILE --function F --preprocess --constructors",
         )
 
 
@@ -201,26 +336,48 @@ class TestSkillStaysTrue:
             f"the CLI offers {missing} and SKILL.md never mentions them"
         )
 
-    #: Flags an agent has no reason to drive: output plumbing and escape
-    #: hatches, documented in --help where someone looking for them will be.
+    #: Flags an agent has no reason to drive: output plumbing, escape
+    #: hatches, and build settings compile_commands.json already carries --
+    #: documented in --help where someone looking for them will be.
     NOT_FOR_AGENTS = {
         "--help", "--version", "--quiet", "--no-llm", "--llm-base-url",
         "--no-cache", "--no-compile-commands", "--no-initializers",
         "--no-overflow-check", "--allow-unsound", "--keep-harness", "--dir",
         "--reason", "--escalations", "--max-struct-depth", "--include-file",
-        "--std", "--define", "--force", "--dry-run", "--global", "--yes",
+        "--std", "--define", "--include", "--force", "--dry-run", "--global",
+        "--yes",
     }
 
     def test_the_skill_covers_the_flags_worth_driving(self) -> None:
-        """Not every flag belongs in a skill, but the ones that change what a
-        team can do with the tool are worth naming explicitly."""
+        """Every flag the CLI has is in SKILL.md, or listed above as not for
+        agents. A hand-picked list of "important" flags was the check
+        before, and six flags that change what veripp verifies -- --sequence,
+        --sequence-call, --setup, --unterminated, --preprocess and
+        --constructors -- shipped past it without a word in the skill. A new
+        flag now has to be placed on one side or the other."""
+        import subprocess
+        import sys as _sys
+
         text = SKILL.read_text(encoding="utf-8")
-        important = {"--baseline", "--sarif", "--only", "--json-out", "--cache",
-                     "--function", "--class", "--assume", "--assert", "--link",
-                     "--compile-commands", "--unwind", "--timeout", "--jobs",
-                     "--json", "--model", "--max-calls", "--max-array-len"}
-        missing = sorted(f for f in important if f not in text)
-        assert not missing, f"SKILL.md omits flags worth driving: {missing}"
+        # The completion script is generated from the parser itself, hidden
+        # flags included, so it is the full list rather than --help's.
+        result = subprocess.run(
+            [_sys.executable, "-m", "veripp.cli", "completion", "bash"],
+            capture_output=True, text=True, cwd=ROOT, timeout=300,
+        )
+        assert result.returncode == 0, result.stderr
+        flags = set(re.findall(r"--[a-z][\w-]*", " ".join(
+            re.findall(r'opts="([^"]*)"', result.stdout))))
+        assert "--sequence" in flags, "the flag list came back incomplete"
+        missing = sorted(
+            flag for flag in flags - self.NOT_FOR_AGENTS
+            if not re.search(re.escape(flag) + r"(?![\w-])", text)
+        )
+        assert not missing, (
+            f"SKILL.md never mentions {missing}. Document each where an agent "
+            "would reach for it, or add it to NOT_FOR_AGENTS if it has no "
+            "reason to."
+        )
 
 
 @pytest.mark.esbmc
