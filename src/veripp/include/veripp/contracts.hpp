@@ -79,6 +79,19 @@ static inline double veripp_finite_double(void) {
     return value;
 }
 
+// The reachability probe. Every generated harness ends with VERIPP_REACHED(),
+// which is nothing in an ordinary run. A harness that verified is run once
+// more with -DVERIPP_REACHABILITY_PROBE, where it becomes an assertion that
+// always fails: a harness that can get there must produce a counterexample,
+// and one that verifies instead reached nothing -- every property held
+// because no execution satisfied the assumptions.
+#if defined(VERIPP_REACHABILITY_PROBE)
+#define VERIPP_REACHED() \
+    __ESBMC_assert(0, "veripp: harness is reachable under its assumptions")
+#else
+#define VERIPP_REACHED() ((void)0)
+#endif
+
 // Guard for a demo/self-test main() living inside a verified source file.
 // veripp defines VERIPP_GENERATED_HARNESS in the harness it generates for a
 // specific function and #includes the source from it, so the file's own main
@@ -94,6 +107,7 @@ static inline double veripp_finite_double(void) {
 #define VERIPP_ENSURES(cond) assert((cond) && "postcondition")
 #define VERIPP_ASSERT(cond) assert(cond)
 #define VERIPP_ASSUME(cond) ((void)0)
+#define VERIPP_REACHED() ((void)0)
 
 #else
 
@@ -101,5 +115,6 @@ static inline double veripp_finite_double(void) {
 #define VERIPP_ENSURES(cond) ((void)0)
 #define VERIPP_ASSERT(cond) ((void)0)
 #define VERIPP_ASSUME(cond) ((void)0)
+#define VERIPP_REACHED() ((void)0)
 
 #endif

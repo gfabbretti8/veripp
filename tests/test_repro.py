@@ -31,6 +31,7 @@ int main() {
     const int* a = a_buf;
 
     (void)sum_array(a, n);
+    VERIPP_REACHED();
     return 0;
 }
 '''
@@ -63,6 +64,13 @@ class TestRendering:
     def test_the_assume_is_dropped(self):
         """It constrained a nondeterministic value that is now a literal."""
         assert "VERIPP_ASSUME" not in _render()
+
+    def test_the_reachability_probe_point_is_dropped(self):
+        """It means nothing outside ESBMC, and the repro includes the source
+        under test, which need not include contracts.hpp to define it."""
+        out = _render()
+        assert "VERIPP_REACHED" not in out
+        assert "(void)sum_array(a, n);" in out
 
     def test_an_aggregate_becomes_a_comment_not_a_statement(self):
         """`a_buf = { 0, 0, 0, 0 }` is an initial state, not legal C as an

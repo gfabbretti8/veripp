@@ -38,7 +38,7 @@ def test_the_header_defines_what_generated_harnesses_use():
         "VERIPP_NONDET_INT", "VERIPP_NONDET_UINT", "VERIPP_NONDET_LONG",
         "VERIPP_NONDET_ULONG", "VERIPP_NONDET_CHAR", "VERIPP_NONDET_BOOL",
         "VERIPP_NONDET_FLOAT", "VERIPP_NONDET_DOUBLE", "VERIPP_NONDET_SIZE",
-        "VERIPP_HAS_OWN_MAIN",
+        "VERIPP_HAS_OWN_MAIN", "VERIPP_REACHED",
     ):
         assert f"#define {macro}" in header, f"{macro} is used by generated harnesses"
 

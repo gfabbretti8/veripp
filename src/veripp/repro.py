@@ -21,6 +21,9 @@ from pathlib import Path
 
 _NONDET_INIT_RE = re.compile(r"\s*=\s*VERIPP_NONDET_\w*\s*\([^)]*\)\s*;")
 _ASSUME_RE = re.compile(r"^\s*VERIPP_ASSUME\s*\(")
+#: The reachability probe point: nothing outside ESBMC, and a repro includes
+#: the source under test, which need not include contracts.hpp at all.
+_REACHED_RE = re.compile(r"^\s*VERIPP_REACHED\s*\(\s*\)\s*;")
 _NONDET_ANY_RE = re.compile(r"VERIPP_NONDET_\w*\s*\(")
 
 
@@ -53,7 +56,7 @@ def _strip_nondeterminism(lines: list[str]) -> list[str]:
             # element instead.
             skip_next = False
             continue
-        if _ASSUME_RE.match(line):
+        if _ASSUME_RE.match(line) or _REACHED_RE.match(line):
             continue
         if line.lstrip().startswith("for (") and "VERIPP_NONDET" not in line:
             skip_next = True
