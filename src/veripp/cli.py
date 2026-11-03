@@ -1558,7 +1558,10 @@ def _scan(args) -> int:
                  "assumptions": r.assumptions, "stubbed_calls": r.stubbed_calls,
                  "file": r.file, "line": r.line, "column": r.column, "cwes": r.cwes,
                  "triage": r.triage_kind, "triage_note": r.triage_note,
-                 "triage_error": r.triage_error}
+                 "triage_error": r.triage_error,
+                 # Who can reach it: an entry point, or a helper with this
+                 # many call sites in the scanned unit(s).
+                 "linkage": r.linkage, "callers": r.callers}
                 for r in report.counterexamples
             ],
             "preconditioned": [

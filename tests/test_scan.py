@@ -448,3 +448,108 @@ class TestRetryKeepsDerivedFieldsInSync:
                 "path does not refresh it; a settled retry would keep a "
                 "value describing a property it no longer has"
             )
+
+
+class TestWhoCanReachIt:
+    """The first question a triager asks of a counterexample is who can get
+    there. An external function is an entry point for every other
+    translation unit; a static helper is reached only through the call sites
+    in this one, each of which may guard the input the solver found. scan
+    now says which, counts the callers it can see, and lists entry points
+    first."""
+
+    def _result(self, name, **kw):
+        from veripp.scan import FunctionResult
+
+        return FunctionResult(name=name, outcome="counterexample", detail="d", **kw)
+
+    def test_external_functions_are_listed_before_static_helpers(self):
+        from veripp.scan import ScanReport
+
+        report = ScanReport(source=Path("f.c"), candidates=3)
+        report.results = [
+            self._result("helper", linkage="static", callers=2, access="write"),
+            self._result("api_fn", linkage="external", callers=0, access="read"),
+            self._result("other_helper", linkage="static", callers=0),
+        ]
+        summary = report.summary()
+        listed = [line.strip().split(":")[0] for line in summary.splitlines()
+                  if line.startswith("    ") and ":" in line and "d  [" in line]
+        assert listed[0] == "api_fn", summary
+        assert "api_fn: d  [read; external, no callers found in this unit]" in summary
+        assert "helper: d  [write; static, 2 callers here]" in summary
+        assert "other_helper: d  [static, no callers found here]" in summary
+
+    def test_triage_still_outranks_linkage(self):
+        """A model's label ranks, and only ranks -- but it ranks above who
+        can reach the function, since a real_bug verdict on a static helper
+        came from reading its callers."""
+        from veripp.scan import ScanReport
+
+        report = ScanReport(source=Path("f.c"), candidates=2)
+        report.results = [
+            self._result("api_fn", linkage="external", callers=3, triage_kind="harness_issue"),
+            self._result("helper", linkage="static", callers=1, triage_kind="real_bug"),
+        ]
+        summary = report.summary()
+        assert summary.index("helper: d") < summary.index("api_fn: d")
+
+    def test_callers_are_counted_in_the_unit_and_in_linked_sources(self, tmp_path):
+        from veripp.cppsig import scrub
+        from veripp.scan import _caller_count
+
+        # Call sites are lines: two calls on one line are one site.
+        text = ("static int helper(int x) { return x; }\n"
+                "int api(int y) { int a = helper(y) + helper(y);\n"
+                "                 return a + helper(1); }\n"
+                "int helper_two(int z) { return z; }\n"   # a different name
+                "/* helper(0) in a comment does not count */\n")
+        linked = ["int elsewhere(void) { return helper(5); }\n"]
+        assert _caller_count("helper", text, scrub(text), []) == 2
+        assert _caller_count("helper", text, scrub(text), linked) == 3
+        assert _caller_count("api", text, scrub(text), linked) == 0
+
+    def test_the_count_is_not_capped_at_what_a_prompt_is_shown(self):
+        from veripp.cppsig import scrub
+        from veripp.scan import _caller_count
+        from veripp.triage import MAX_CALL_SITES
+
+        calls = "\n".join(f"int c{i}(void) {{ return helper({i}); }}" for i in range(MAX_CALL_SITES + 5))
+        text = "static int helper(int x) { return x; }\n" + calls + "\n"
+        assert _caller_count("helper", text, scrub(text), []) == MAX_CALL_SITES + 5
+
+    def test_the_json_report_carries_both(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        from veripp import cli
+        from veripp.esbmc import Outcome, VerifyConfig, VerifyResult
+
+        monkeypatch.setattr("veripp.scan.run",
+                            lambda path, config, esbmc_bin=None:
+                            VerifyResult(Outcome.COUNTEREXAMPLE, config))
+        src = tmp_path / "f.c"
+        src.write_text("static int helper(int x) { return x; }\n"
+                       "int api(int y) { return helper(y); }\n", encoding="utf-8")
+        cli.main(["scan", str(src), "--json", "--no-llm", "--no-cache", "--retry-budget", "0"])
+        report = json.loads(capsys.readouterr().out)
+        by_name = {c["function"]: c for c in report["counterexamples"]}
+        assert by_name["helper"]["linkage"] == "static" and by_name["helper"]["callers"] == 1
+        assert by_name["api"]["linkage"] == "external" and by_name["api"]["callers"] == 0
+
+    @pytest.mark.esbmc
+    def test_end_to_end_on_a_real_scan(self, tmp_path):
+        src = tmp_path / "reach.c"
+        src.write_text(
+            "static int helper(int d) { return 10 / d; }\n"
+            "int api(int d) { return 10 / d; }\n"
+            "int uses_helper(int d) { return d == 0 ? 0 : helper(d); }\n",
+            encoding="utf-8",
+        )
+        config = VerifyConfig(timeout_s=90, include_dirs=[contracts_include_dir()])
+        report = scan(src, config, HarnessOptions(), jobs=2, retry_budget=0)
+        found = {r.name: r for r in report.counterexamples}
+        assert {"helper", "api"} <= set(found), report.summary()
+        assert found["api"].linkage == "external" and found["api"].callers == 0
+        assert found["helper"].linkage == "static" and found["helper"].callers == 1
+        summary = report.summary()
+        assert summary.index("api: ") < summary.index("helper: ")

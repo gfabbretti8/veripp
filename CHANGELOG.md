@@ -9,6 +9,14 @@ run, and refuses to back results from one that cannot detect a planted bug.
 
 ## Unreleased
 
+### Changed
+- **`scan` says who can reach each counterexample.** Every finding carries
+  its linkage (`external`, an entry point for any other translation unit, or
+  `static`, reached only through this file) and the number of call sites
+  found in the scanned unit and anything linked with it. Entry points are
+  listed before static helpers; a static helper with no callers found is
+  flagged as such. In the summary, the JSON report and the MCP result.
+
 ### Added
 - **`veripp mcp`**: the CLI's `verify`, `scan`, `harness` and `doctor` as
   Model Context Protocol tools over stdio, for Claude Code and any other MCP

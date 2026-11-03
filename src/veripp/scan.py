@@ -26,12 +26,12 @@ from dataclasses import replace as _replace
 from .agent import REACHABLE, VACUOUS, probe_reachability
 from .esbmc import Outcome, VerifyConfig, run
 from .harness import (
-    HarnessError, HarnessOptions, generate, source_types,
+    HarnessError, HarnessOptions, _linked_text, generate, source_types,
     unused_length_parameters,
 )
 from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
-from .triage import TargetInfo, access_kind, mechanical_artifact
+from .triage import TargetInfo, access_kind, find_call_sites, mechanical_artifact
 
 
 @dataclass
@@ -71,8 +71,30 @@ class FunctionResult:
     #: same property to a solver and very different afterwards, so writes
     #: are listed first.
     access: str | None = None
+    #: "external" for a function another translation unit can call,
+    #: "static" for a helper only this file reaches. The first fact a
+    #: triager wants about a counterexample is who can get there: a public
+    #: entry point is reachable by definition, a static helper only through
+    #: the callers counted below, which may guard every input it rejects.
+    linkage: str = ""
+    #: Call sites of the function found in the scanned translation unit and
+    #: any linked sources, by text. None when not counted. "No callers found"
+    #: for a static function means dead code, a function pointer, or a
+    #: macro; for an external one it means its callers live elsewhere.
+    callers: int | None = None
 
     triage_kind: str | None = None
+
+    def reach_note(self) -> str | None:
+        """Who can reach this function, in a few words, or None if unknown."""
+        if not self.linkage:
+            return None
+        if self.callers is None:
+            return self.linkage
+        where = "here" if self.linkage == "static" else "in this unit"
+        if self.callers == 0:
+            return f"{self.linkage}, no callers found {where}"
+        return f"{self.linkage}, {self.callers} caller{'s' if self.callers != 1 else ''} {where}"
     triage_note: str = ""
     triage_error: str | None = None
     preconditions: list[str] = field(default_factory=list)
@@ -256,6 +278,11 @@ class ScanReport:
             # the heap's own metadata. Same property to the solver, different
             # thing afterwards.
             access_rank = {"write": 0, None: 1, "read": 2}
+            # Then who can reach it. An external function is an entry point
+            # for every caller in every other translation unit; a static one
+            # is reached only through the call sites counted here, each of
+            # which may guard the input the counterexample needs.
+            linkage_rank = {"external": 0, "": 1, "static": 2}
             tags = {"real_bug": "triage: real bug",
                     "missing_assumption":
                         "triage: needs a precondition, none accepted yet",
@@ -263,14 +290,14 @@ class ScanReport:
             ordered = sorted(
                 self.counterexamples,
                 key=lambda r: (rank.get(r.triage_kind, 1),
+                               linkage_rank.get(r.linkage, 1),
                                access_rank.get(r.access, 1), r.name),
             )
             for r in ordered[:20]:
-                tag = tags.get(r.triage_kind)
-                if r.access:
-                    tag = f"{r.access}{'' if tag is None else '; ' + tag}"
+                parts = [part for part in (r.access, r.reach_note(),
+                                           tags.get(r.triage_kind)) if part]
                 lines.append(f"    {r.name}: {r.detail}"
-                             + (f"  [{tag}]" if tag else ""))
+                             + (f"  [{'; '.join(parts)}]" if parts else ""))
             if len(self.counterexamples) > 20:
                 lines.append(f"    ... and {len(self.counterexamples) - 20} more")
             failed = [r for r in self.counterexamples if r.triage_error]
@@ -460,6 +487,9 @@ def scan(
     # the program's own main in another one.
     names = only or [n for n in function_definitions(text) if n != "main"]
     scrubbed = scrub(text)   # once: comments and string literals removed
+    # Callers are counted in the unit and in anything linked with it: the
+    # same text the checker sees, so a static helper's callers are all here.
+    linked = _linked_text(options)
     report = ScanReport(source=source, candidates=len(names))
     # Independent of harnessing, and of the solver: a length-shaped parameter
     # the body never reads is the shape that produced three of this
@@ -563,6 +593,8 @@ def scan(
             cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
             access=access_kind(prop) if prop else None,
             bounds=result.config.describe(),
+            linkage="static" if sig.is_static else "external",
+            callers=_caller_count(name, text, scrubbed, linked),
         )
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
@@ -589,6 +621,20 @@ def scan(
 #: that. TOOL_ERROR is a broken invocation; retrying it retries the break.
 _RETRYABLE = (Outcome.TIMEOUT.value, Outcome.UNWIND_LIMIT.value,
               Outcome.UNKNOWN.value)
+
+
+def _caller_count(name: str, text: str, scrubbed: str, linked: list[str]) -> int:
+    """Call sites of `name` in the unit and its linked sources, by text.
+
+    A count, not a verdict: a call through a function pointer or a macro is
+    missed, and a call site found says nothing about what it passes. It is
+    the first question a triager asks of a static helper's counterexample,
+    answered before they open the file.
+    """
+    count = len(find_call_sites(text, name, scrubbed=scrubbed, limit=None))
+    for other in linked:
+        count += len(find_call_sites(other, name, limit=None))
+    return count
 
 
 def _retry_pass(

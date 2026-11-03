@@ -280,13 +280,19 @@ def build_context(
     )
 
 
-def find_call_sites(source: str, name: str) -> list[str]:
+def find_call_sites(
+    source: str, name: str, scrubbed: str | None = None,
+    limit: int | None = MAX_CALL_SITES,
+) -> list[str]:
     """Lines in `source` that call `name`, excluding its own definition.
 
     What real callers pass is the evidence that separates a real bug from a
-    missing precondition; without it triage is guessing.
+    missing precondition; without it triage is guessing. `scrubbed` is
+    `scrub(source)` when the caller already has it, as `scan` does once per
+    file rather than once per function. `limit` caps what a prompt is shown;
+    None counts them all.
     """
-    scrubbed = scrub(source)
+    scrubbed = scrub(source) if scrubbed is None else scrubbed
     lines = source.splitlines()
     sites: list[str] = []
     seen: set[int] = set()
@@ -298,7 +304,7 @@ def find_call_sites(source: str, name: str) -> list[str]:
             continue
         seen.add(line_no)
         sites.append(f"line {line_no}: {lines[line_no - 1].strip()}")
-        if len(sites) >= MAX_CALL_SITES:
+        if limit is not None and len(sites) >= limit:
             break
     return sites
 
