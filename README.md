@@ -196,6 +196,11 @@ that speaks the OpenAI-compatible API works with `--llm-base-url`. Every
 provider except Anthropic is called through the standard library, so they
 need no extra packages.
 
+Triage runs only when asked for: `--model`, `$VERIPP_LLM_MODEL`, or an
+endpoint (`--llm-base-url` or `$VERIPP_LLM_BASE_URL`). A provider's API key
+in the environment, set for some other tool perhaps, does not send your code
+anywhere on its own.
+
 How good the triage is has only partly been measured. The path works end to
 end, a 7B local model scored 0 of 2 on the benchmark, and no hosted model has
 been graded yet. [benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md)
