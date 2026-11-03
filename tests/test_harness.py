@@ -573,12 +573,12 @@ class TestCompiledOutCode:
         "int always(int x) { return x + 1; }\n"
     )
 
-    def _generate(self, tmp_path, fn, **defines):
+    def _generate(self, tmp_path, fn, **options):
         from veripp.harness import HarnessOptions, generate
 
         p = tmp_path / "s.c"
         p.write_text(self.SRC, encoding="utf-8")
-        return generate(p, fn, HarnessOptions(preprocess=True))
+        return generate(p, fn, HarnessOptions(preprocess=True, **options))
 
     def test_a_function_behind_a_dead_if_says_so(self, tmp_path):
         from veripp.harness import HarnessError
@@ -602,6 +602,63 @@ class TestCompiledOutCode:
         p = tmp_path / "s.c"
         p.write_text(self.SRC, encoding="utf-8")
         assert "scaled(x)" in generate(p, "scaled", HarnessOptions()).code
+
+    # The preprocessor used to be given -I and nothing else, so a function
+    # the build enables with -D, or a header it force-includes, was refused
+    # as "not in this build" -- by a message telling the user to check the
+    # very -D flags they had passed.
+
+    def test_a_define_brings_it_back(self, tmp_path):
+        assert "scaled(x)" in self._generate(
+            tmp_path, "scaled", defines=["FEATURE_ON=1"]
+        ).code
+
+    def test_an_undefine_takes_it_away_again(self, tmp_path):
+        from veripp.harness import HarnessError
+
+        with pytest.raises(HarnessError, match="not in this build"):
+            self._generate(tmp_path, "scaled", defines=["FEATURE_ON=1"],
+                           undefines=["FEATURE_ON"])
+
+    def test_a_force_included_header_counts(self, tmp_path):
+        config = tmp_path / "config.h"
+        config.write_text("#define FEATURE_ON 1\n", encoding="utf-8")
+        assert "scaled(x)" in self._generate(
+            tmp_path, "scaled", force_includes=[config]
+        ).code
+
+    def _cli(self, tmp_path, capsys, *argv):
+        from veripp.cli import main
+
+        p = tmp_path / "s.c"
+        p.write_text(self.SRC, encoding="utf-8")
+        code = main(["harness", str(p), "--function", "scaled", "--preprocess", *argv])
+        return code, capsys.readouterr()
+
+    def test_define_on_the_command_line(self, tmp_path, capsys):
+        code, out = self._cli(tmp_path, capsys, "--no-compile-commands",
+                              "-D", "FEATURE_ON=1")
+        assert code == 0, out.err
+        assert "scaled(x)" in out.out
+
+    def test_include_file_on_the_command_line(self, tmp_path, capsys):
+        config = tmp_path / "config.h"
+        config.write_text("#define FEATURE_ON 1\n", encoding="utf-8")
+        code, out = self._cli(tmp_path, capsys, "--no-compile-commands",
+                              "--include-file", str(config))
+        assert code == 0, out.err
+        assert "scaled(x)" in out.out
+
+    def test_flags_from_compile_commands(self, tmp_path, capsys):
+        import json
+
+        (tmp_path / "compile_commands.json").write_text(json.dumps([{
+            "directory": str(tmp_path), "file": "s.c",
+            "arguments": ["cc", "-DFEATURE_ON=1", "-c", "s.c"],
+        }]), encoding="utf-8")
+        code, out = self._cli(tmp_path, capsys)
+        assert code == 0, out.err
+        assert "scaled(x)" in out.out
 
 
 class TestBracesSplitAcrossAnIf:
