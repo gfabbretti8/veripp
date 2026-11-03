@@ -182,3 +182,58 @@ class TestDiscoveryPrecedence:
                             lambda: "/wheel/esbmc")
         monkeypatch.setattr("shutil.which", lambda name: None)
         assert find_esbmc() == "/wheel/esbmc"
+
+
+class TestNoChecker:
+    """What veripp says when it has no checker to run.
+
+    `esbmc.run()` said "esbmc not found on PATH ... or `brew install esbmc`":
+    PATH is one of four places veripp looks, and brew's esbmc is the 8.4
+    release that misses member-array writes (esbmc#6508) -- the one build the
+    rest of veripp works to keep people off. `doctor` already gave the right
+    command for the platform; the two now share it. And `verify` delivered
+    the message as the last line of a traceback.
+    """
+
+    @pytest.fixture
+    def nothing(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("VERIPP_ESBMC", raising=False)
+        monkeypatch.setenv("VERIPP_CHECKER_DIR", str(tmp_path / "none"))
+        monkeypatch.setattr("veripp.checker.bundled_esbmc", lambda: None)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+
+    def _says(self, message: str) -> None:
+        from veripp.checker import install_hint
+
+        assert "brew install esbmc" not in message, message
+        assert "not found on PATH" not in message, message
+        assert install_hint() in message, message
+
+    def test_running_the_checker_says_how_to_get_a_sound_one(self, nothing, tmp_path):
+        from veripp.esbmc import VerifyConfig, run
+
+        with pytest.raises(RuntimeError) as raised:
+            run(tmp_path / "f.c", VerifyConfig())
+        self._says(str(raised.value))
+
+    def test_the_soundness_probe_says_the_same(self, nothing):
+        from veripp.esbmc import check_soundness
+
+        with pytest.raises(RuntimeError) as raised:
+            check_soundness()
+        self._says(str(raised.value))
+
+    def test_verify_says_it_without_a_traceback(self, nothing, capsys, tmp_path):
+        from veripp.cli import EXIT_USAGE, main
+
+        src = tmp_path / "f.c"
+        src.write_text("int f(int x) { return x; }\n", encoding="utf-8")
+        assert main(["verify", str(src), "--function", "f", "--no-llm"]) == EXIT_USAGE
+        self._says(capsys.readouterr().err)
+
+    def test_macos_is_sent_to_the_head_build(self, monkeypatch):
+        from veripp import checker
+
+        monkeypatch.setattr(checker.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(checker.platform, "machine", lambda: "arm64")
+        assert checker.install_hint() == "brew install --HEAD esbmc"

@@ -368,6 +368,10 @@ _ERROR_RE = re.compile(r"^ERROR: (?P<message>.+)$", re.M)
 _CLANG_ERROR_RE = re.compile(r"^(?P<message>.*?:\d+:\d+: (?:error|fatal error): .+)$", re.M)
 
 
+class CheckerNotFound(RuntimeError):
+    """There is no checker to run, and the message says how to get one."""
+
+
 def find_esbmc() -> str | None:
     """The checker to use, most explicit choice first.
 
@@ -392,10 +396,11 @@ def run(source: Path, config: VerifyConfig, esbmc_bin: str | None = None) -> Ver
     """Run one ESBMC invocation on a self-contained source file."""
     binary = esbmc_bin or find_esbmc()
     if binary is None:
-        raise RuntimeError(
-            "esbmc not found on PATH. Install from "
-            "https://github.com/esbmc/esbmc/releases, or `brew install esbmc`"
-        )
+        # Not "install from the releases page, or brew": brew's esbmc is
+        # the 8.4 release, which misses member-array writes (esbmc#6508).
+        from .checker import missing_checker
+
+        raise CheckerNotFound(missing_checker())
     cmd = [binary, str(source), *(str(s) for s in config.link_sources),
            *config.to_args(source)]
     started = time.monotonic()
@@ -679,7 +684,9 @@ def check_soundness(esbmc_bin: str | None = None, timeout_s: int = 60) -> dict[s
 
     binary = esbmc_bin or find_esbmc()
     if binary is None:
-        raise RuntimeError("esbmc not found on PATH")
+        from .checker import missing_checker
+
+        raise CheckerNotFound(missing_checker())
 
     results: dict[str, bool] = {}
     with tempfile.TemporaryDirectory() as tmp:

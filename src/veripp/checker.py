@@ -259,6 +259,76 @@ def install(
     return InstallResult(path=str(final_bin), sha256=digest, probes=probes)
 
 
+DOCKER_HINT = (
+    'docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp scan FILE.c'
+)
+
+
+def install_hint() -> str:
+    """The exact command for *this* machine, not a link to go read.
+
+    Architecture matters more than it looks. ESBMC publishes one Linux binary
+    and it is x86_64; handing an aarch64 user that URL gets them a download
+    that will not execute. The only prebuilt arm64 Linux ESBMC anywhere is the
+    Homebrew bottle, pinned to 8.4, which is the release that silently misses
+    out-of-bounds writes (esbmc#6508) -- so recommending it would trade a
+    clear failure for a quiet one. On that platform the image is the answer.
+    """
+    # Where veripp can fetch and probe a checker itself, that is the whole
+    # instruction: one command, and it refuses to keep an unsound build.
+    if source_for().available:
+        return "veripp install-checker"
+
+    system = platform.system()
+    machine = platform.machine().lower()
+
+    if system == "Darwin":
+        # The macOS release zip links against Homebrew's z3/gmp/mpfr by
+        # absolute path, so it is not relocatable; brew is the only sane route.
+        return "brew install --HEAD esbmc"
+
+    if system == "Linux" and machine in ("x86_64", "amd64"):
+        return (
+            "curl -fsSL -o /tmp/esbmc.zip "
+            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip "
+            "&& unzip -q /tmp/esbmc.zip -d ~/.local/esbmc "
+            "&& chmod +x ~/.local/esbmc/*/bin/esbmc"
+        )
+
+    if system == "Windows":
+        # esbmc-windows.zip is published on every release; the CLI itself is
+        # pure Python and portable, so this is the whole install.
+        return (
+            "curl.exe -L -o esbmc.zip "
+            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-windows.zip "
+            "&& tar -xf esbmc.zip "
+            "&& (add the folder containing esbmc.exe to PATH)"
+        )
+
+    if system == "Linux":
+        return (
+            f"{DOCKER_HINT}\n"
+            f"      (no prebuilt ESBMC is published for Linux/{machine}; the image "
+            "carries one built from source)"
+        )
+
+    return DOCKER_HINT
+
+
+def missing_checker() -> str:
+    """What to say when there is no checker at all, and how to get one.
+
+    veripp looks in four places, not only on PATH, and saying "not found on
+    PATH" sends people to fix the one place that may already be fine.
+    """
+    return (
+        "no ESBMC checker found: $VERIPP_ESBMC is not set, none was installed "
+        "by `veripp install-checker`, there is none on PATH, and this veripp "
+        "has none bundled.\n"
+        f"  install one with:  {install_hint()}"
+    )
+
+
 def bundled_esbmc() -> str | None:
     """The checker from `pip install veripp[checker]`, if that extra is here.
 
