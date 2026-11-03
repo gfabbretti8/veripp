@@ -4,9 +4,20 @@ name: release
 # thing being published works. A green ci run on the same commit is not enough
 # of a gate: workflows race, and a tag pushed seconds after a bad commit would
 # publish before ci finished failing.
+#
+# Three wheels and an sdist go up together: the pure py3-none-any wheel, and
+# a manylinux wheel for x86_64 and for arm64 that carries ESBMC's static
+# release binary at veripp/bin/esbmc. pip takes the platform wheel where one
+# matches, so `pip install veripp` is the whole installation on Linux, and the
+# pure wheel everywhere else. Each platform wheel is pip-installed in a clean
+# container and put through `veripp doctor` before anything is uploaded.
+#
+# A workflow_dispatch runs everything but the upload: the way to rehearse a
+# release without a tag.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
   # Kept in lockstep with ci.yml -- see the comment there for why this
@@ -56,11 +67,67 @@ jobs:
 
       - run: uv run pytest -q -rs
 
+  # One platform wheel per architecture, on a native runner: `strip` has to
+  # understand the binary, and the install test runs it.
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Build the pure wheel
+        run: uv build --wheel --out-dir pure
+
+      - name: Fetch the pinned release binary, check its digest, strip it
+        run: ./checker/build_linux_payload.sh ${{ matrix.arch }} payload
+
+      # The binary is static, so it needs nothing from the host; manylinux_2_17
+      # is the oldest tag pip accepts everywhere, and the honest one.
+      - name: Bundle it into the wheel
+        run: python3 checker/bundle_wheel.py --wheel pure/veripp-*-py3-none-any.whl
+             --payload payload --plat manylinux_2_17_${{ matrix.arch }} --outdir dist
+
+      - name: Install the wheel in a clean container and probe its checker
+        run: |
+          mkdir -p itest && cp dist/*.whl itest/ && cp -r examples itest/examples
+          cat > itest/Dockerfile <<'DOCKER'
+          FROM python:3.12-slim
+          COPY *.whl /tmp/
+          COPY examples /tmp/examples
+          RUN pip install -q /tmp/*.whl
+          DOCKER
+          docker build -q -t veripp-wheel-itest itest
+          docker run --rm veripp-wheel-itest sh -c '
+            found="$(python -c "from veripp.checker import bundled_esbmc; print(bundled_esbmc() or \"\")")"
+            test -n "$found" || { echo "::error::the wheel carries no runnable checker"; exit 1; }
+            echo "bundled checker: $found"
+            veripp doctor || exit 1
+            veripp verify /tmp/examples/off_by_one.cpp --function sum_array --no-llm; status=$?
+            test "$status" -eq 1 || { echo "::error::expected exit 1 (counterexample) from the example, got $status"; exit 1; }'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.arch }}
+          path: dist/*.whl
+          if-no-files-found: error
+
   publish:
-    needs: test
-    runs-on: ubuntu-latest
+    needs: [test, wheels]
     # Publishing is the one irreversible step, so it gets its own job: a
-    # failure above stops before anything leaves the machine.
+    # failure above stops before anything leaves the machine -- and a
+    # workflow_dispatch stops here, having built and tested everything.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -77,6 +144,27 @@ jobs:
           fi
 
       - run: uv build
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      # A platform wheel without the pure one, or the pure one without both
+      # platform wheels, leaves some users worse off than publishing nothing:
+      # pip would either fail to resolve or silently hand them no checker.
+      - name: Refuse to publish an incomplete set
+        run: |
+          ls -la dist
+          test -n "$(ls dist/*-py3-none-any.whl 2>/dev/null)" \
+            || { echo "::error::missing the pure py3-none-any wheel"; exit 1; }
+          test -n "$(ls dist/*.tar.gz 2>/dev/null)" \
+            || { echo "::error::missing the sdist"; exit 1; }
+          for arch in x86_64 aarch64; do
+            test -n "$(ls dist/*manylinux*_${arch}.whl 2>/dev/null)" \
+              || { echo "::error::missing the ${arch} wheel"; exit 1; }
+          done
 
       # Catches the failure that is otherwise invisible until the project
       # page is live: a README that does not render on PyPI.

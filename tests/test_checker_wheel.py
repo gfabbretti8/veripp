@@ -1,10 +1,16 @@
-"""Building the bundled-checker wheel.
+"""Bundling the checker into veripp's own platform wheel.
 
-The wheel exists so that `pip install veripp[checker]` is the whole install.
-Two things about it are easy to get wrong and silent when wrong: the
-executable bit, and the licence notices.
+`uv build` makes a pure wheel; checker/bundle_wheel.py adds ESBMC's release
+binary to a copy of it and retags it for the platform. Two things about that
+are easy to get wrong and silent when wrong: the executable bit, and the
+licence notices. A third is RECORD: pip refuses a wheel whose RECORD does not
+cover every file.
 """
 
+import base64
+import hashlib
+import os
+import stat
 import subprocess
 import sys
 import zipfile
@@ -13,32 +19,50 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILDER = ROOT / "checker" / "build_wheel.py"
+BUNDLER = ROOT / "checker" / "bundle_wheel.py"
+
+
+@pytest.fixture
+def pure_wheel(tmp_path):
+    """A stand-in for what `uv build` produces: the package, and a dist-info
+    with METADATA, WHEEL and RECORD."""
+    path = tmp_path / "veripp-9.9.9-py3-none-any.whl"
+    files = {
+        "veripp/__init__.py": b'__version__ = "9.9.9"\n',
+        "veripp/cli.py": b"def main(): return 0\n",
+        "veripp/include/veripp/contracts.hpp": b"// header\n",
+        "veripp-9.9.9.dist-info/METADATA": b"Metadata-Version: 2.4\nName: veripp\nVersion: 9.9.9\n",
+        "veripp-9.9.9.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+    }
+    with zipfile.ZipFile(path, "w") as z:
+        records = []
+        for name, data in files.items():
+            z.writestr(name, data)
+            digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=")
+            records.append(f"{name},sha256={digest.decode()},{len(data)}")
+        records.append("veripp-9.9.9.dist-info/RECORD,,")
+        z.writestr("veripp-9.9.9.dist-info/RECORD", "\n".join(records) + "\n")
+    return path
 
 
 @pytest.fixture
 def payload(tmp_path):
-    """Everything under here is packaged, so nothing else may live in it --
-    the licence file and the output directory each get their own."""
+    """What build_linux_payload.sh leaves behind."""
     root = tmp_path / "payload"
     (root / "bin").mkdir(parents=True)
-    (root / "lib").mkdir()
+    (root / "licenses").mkdir()
     (root / "bin" / "esbmc").write_bytes(b"\x7fELF fake")
-    (root / "lib" / "libz3.so.4").write_bytes(b"\x7fELF fake lib")
+    (root / "licenses" / "COPYING").write_text("ESBMC licence notices\n", encoding="utf-8")
+    (root / "licenses" / "Z3_LICENSE.txt").write_text("MIT\n", encoding="utf-8")
     return root
 
 
-@pytest.fixture
-def licence(tmp_path):
-    path = tmp_path / "COPYING"
-    path.write_text("ESBMC licence notices\n", encoding="utf-8")
-    return path
-
-
-def _build(payload, licence, outdir, plat="manylinux_2_38_x86_64"):
+def _bundle(wheel, payload, outdir, plat="manylinux_2_17_x86_64"):
     result = subprocess.run(
-        [sys.executable, str(BUILDER), "--payload", str(payload),
-         "--plat", plat, "--license", str(licence), "--outdir", str(outdir)],
+        [sys.executable, str(BUNDLER), "--wheel", str(wheel), "--payload", str(payload),
+         "--plat", plat, "--outdir", str(outdir)],
         capture_output=True, text=True, cwd=ROOT,
     )
     assert result.returncode == 0, result.stderr
@@ -46,172 +70,134 @@ def _build(payload, licence, outdir, plat="manylinux_2_38_x86_64"):
 
 
 class TestWheelContents:
-    def test_the_checker_keeps_its_executable_bit(self, payload, licence, tmp_path):
+    def test_it_is_named_and_tagged_for_the_platform(self, pure_wheel, payload, tmp_path):
+        wheel = _bundle(pure_wheel, payload, tmp_path / "dist", plat="manylinux_2_17_aarch64")
+        assert wheel.name == "veripp-9.9.9-py3-none-manylinux_2_17_aarch64.whl"
+        with zipfile.ZipFile(wheel) as z:
+            meta = z.read("veripp-9.9.9.dist-info/WHEEL").decode()
+        assert "Tag: py3-none-manylinux_2_17_aarch64" in meta
+        assert "Root-Is-Purelib: false" in meta
+
+    def test_the_checker_keeps_its_executable_bit(self, pure_wheel, payload, tmp_path):
         """pip preserves the mode recorded in the archive. Without the file
         type bits in external_attr the checker installs as 0644, and veripp
-        then reports no checker at all -- which is how this was found."""
-        wheel = _build(payload, licence, tmp_path / "dist")
+        then reports no checker at all."""
+        wheel = _bundle(pure_wheel, payload, tmp_path / "dist")
         with zipfile.ZipFile(wheel) as z:
-            mode = (z.getinfo("veripp_checker/bin/esbmc").external_attr >> 16)
+            mode = z.getinfo("veripp/bin/esbmc").external_attr >> 16
         assert mode & 0o111, f"not executable: {oct(mode)}"
         assert mode & 0o170000 == 0o100000, "regular-file bits missing"
 
-    def test_shared_libraries_travel_with_it(self, payload, licence, tmp_path):
-        wheel = _build(payload, licence, tmp_path / "dist")
-        with zipfile.ZipFile(wheel) as z:
-            assert "veripp_checker/lib/libz3.so.4" in z.namelist()
+    def test_everything_from_the_pure_wheel_is_still_there(self, pure_wheel, payload, tmp_path):
+        wheel = _bundle(pure_wheel, payload, tmp_path / "dist")
+        with zipfile.ZipFile(pure_wheel) as before, zipfile.ZipFile(wheel) as after:
+            for name in before.namelist():
+                if name.endswith(("/RECORD", "/WHEEL")):
+                    continue
+                assert after.read(name) == before.read(name), name
 
-    def test_the_licence_notices_are_shipped(self, payload, licence, tmp_path):
-        """ESBMC derives from CBMC under BSD-4-clause, whose advertising
-        clause obliges the notice to travel with the binary."""
-        wheel = _build(payload, licence, tmp_path / "dist")
-        with zipfile.ZipFile(wheel) as z:
-            names = z.namelist()
-            notice = next(n for n in names if n.endswith("COPYING.esbmc"))
-            assert "ESBMC licence notices" in z.read(notice).decode()
-
-    def test_the_import_shim_is_included(self, payload, licence, tmp_path):
-        wheel = _build(payload, licence, tmp_path / "dist")
-        with zipfile.ZipFile(wheel) as z:
-            assert "veripp_checker/__init__.py" in z.namelist()
-
-    def test_the_platform_tag_reaches_the_filename_and_metadata(
-        self, payload, licence, tmp_path
-    ):
-        """A wheel tagged for the wrong platform installs on machines whose
-        glibc cannot run the binary."""
-        wheel = _build(payload, licence, tmp_path / "dist",
-                       plat="manylinux_2_38_aarch64")
-        assert wheel.name.endswith("manylinux_2_38_aarch64.whl")
-        with zipfile.ZipFile(wheel) as z:
-            meta = z.read("veripp_checker-0.1.0.dist-info/WHEEL").decode()
-        assert "Tag: py3-none-manylinux_2_38_aarch64" in meta
-
-    def test_entry_names_are_posix_on_every_platform(self, payload, licence,
-                                                     tmp_path):
-        """Zip entry names are forward-slash separated by specification.
-        Building on Windows once wrote RECORD entries with backslashes,
-        naming files that were not in the archive."""
-        wheel = _build(payload, licence, tmp_path / "dist")
+    def test_the_licence_notices_travel_beside_the_binary(self, pure_wheel, payload, tmp_path):
+        wheel = _bundle(pure_wheel, payload, tmp_path / "dist")
         with zipfile.ZipFile(wheel) as z:
             names = z.namelist()
-            record = z.read("veripp_checker-0.1.0.dist-info/RECORD").decode()
-        assert not any("\\" in n for n in names), names
-        assert not any("\\" in line for line in record.splitlines()), record
+        assert "veripp/bin/licenses/COPYING" in names
+        assert "veripp/bin/licenses/Z3_LICENSE.txt" in names
 
-    def test_a_record_is_written_for_every_file(self, payload, licence, tmp_path):
-        wheel = _build(payload, licence, tmp_path / "dist")
+    def test_a_record_is_written_for_every_file(self, pure_wheel, payload, tmp_path):
+        """pip verifies RECORD on install; a file it does not list, or a
+        hash that does not match, is an install error."""
+        wheel = _bundle(pure_wheel, payload, tmp_path / "dist")
         with zipfile.ZipFile(wheel) as z:
-            record = z.read("veripp_checker-0.1.0.dist-info/RECORD").decode()
-            recorded = {line.split(",")[0] for line in record.splitlines()}
-            missing = set(z.namelist()) - recorded
-        assert not missing, f"absent from RECORD: {missing}"
+            names = set(z.namelist())
+            record = z.read("veripp-9.9.9.dist-info/RECORD").decode()
+            listed = {}
+            for line in record.strip().splitlines():
+                name, digest, _size = line.split(",")
+                listed[name] = digest
+            assert set(listed) == names
+            for name, digest in listed.items():
+                if name.endswith("/RECORD"):
+                    assert digest == ""
+                    continue
+                expect = base64.urlsafe_b64encode(
+                    hashlib.sha256(z.read(name)).digest()).rstrip(b"=").decode()
+                assert digest == f"sha256={expect}", name
 
+    @pytest.mark.skipif(os.name == "nt", reason="unix modes")
+    def test_the_wheel_installs_and_veripp_finds_the_checker(self, pure_wheel, payload, tmp_path):
+        """The real thing: unpack the wheel the way pip does and ask veripp's
+        own lookup whether it sees a checker."""
+        from veripp.checker import bundled_esbmc
 
-class TestMetadataIsUploadable:
-    """PyPI validates metadata before it accepts a file. These are the parts
-    twine rejected in a real publish run."""
-
-    def test_license_fields_declare_a_metadata_version_that_allows_them(
-        self, payload, licence, tmp_path
-    ):
-        """License-Expression and License-File are PEP 639, valid only from
-        metadata 2.4. Declaring them under 2.1 fails the upload, after the
-        wheels have already been built."""
-        wheel = _build(payload, licence, tmp_path / "dist")
+        wheel = _bundle(pure_wheel, payload, tmp_path / "dist")
+        site = tmp_path / "site"
         with zipfile.ZipFile(wheel) as z:
-            meta = z.read("veripp_checker-0.1.0.dist-info/METADATA").decode()
-        version = next(l.split(": ", 1)[1] for l in meta.splitlines()
-                       if l.startswith("Metadata-Version:"))
-        if "License-Expression:" in meta or "License-File:" in meta:
-            assert float(version) >= 2.4, (
-                f"PEP 639 fields need metadata 2.4, found {version}"
-            )
-
-    def test_the_declared_licence_file_is_actually_present(
-        self, payload, licence, tmp_path
-    ):
-        wheel = _build(payload, licence, tmp_path / "dist")
-        with zipfile.ZipFile(wheel) as z:
-            meta = z.read("veripp_checker-0.1.0.dist-info/METADATA").decode()
-            names = z.namelist()
-        for line in meta.splitlines():
-            if line.startswith("License-File:"):
-                declared = line.split(": ", 1)[1].strip()
-                assert any(n.endswith(f"licenses/{declared}") for n in names), (
-                    f"METADATA names {declared}, which is not in the wheel"
-                )
+            for info in z.infolist():
+                target = site / info.filename
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(z.read(info))
+                mode = (info.external_attr >> 16) & 0o7777
+                if mode:
+                    target.chmod(mode)
+        assert bundled_esbmc(site / "veripp" / "bin") == str(site / "veripp" / "bin" / "esbmc")
+        assert site.joinpath("veripp", "bin", "esbmc").stat().st_mode & stat.S_IXUSR
 
 
 class TestRefusals:
-    def test_a_payload_without_a_checker_is_refused(self, tmp_path, licence):
-        (tmp_path / "bin").mkdir()
-        result = subprocess.run(
-            [sys.executable, str(BUILDER), "--payload", str(tmp_path),
-             "--plat", "manylinux_2_38_x86_64", "--license", str(licence),
-             "--outdir", str(tmp_path / "dist")],
-            capture_output=True, text=True, cwd=ROOT,
-        )
+    def _run(self, *args):
+        return subprocess.run([sys.executable, str(BUNDLER), *args],
+                              capture_output=True, text=True, cwd=ROOT)
+
+    def test_a_payload_without_a_checker_is_refused(self, pure_wheel, tmp_path):
+        (tmp_path / "empty" / "bin").mkdir(parents=True)
+        result = self._run("--wheel", str(pure_wheel), "--payload", str(tmp_path / "empty"),
+                           "--plat", "manylinux_2_17_x86_64", "--outdir", str(tmp_path / "d"))
         assert result.returncode != 0
         assert "no bin/esbmc" in result.stderr
 
-    def test_the_licence_is_not_optional(self, payload, tmp_path):
-        """Building a redistributable binary without its notices should not
-        be something you can do by forgetting a flag."""
-        result = subprocess.run(
-            [sys.executable, str(BUILDER), "--payload", str(payload),
-             "--plat", "manylinux_2_38_x86_64", "--outdir", str(tmp_path / "d")],
-            capture_output=True, text=True, cwd=ROOT,
-        )
+    def test_a_payload_without_the_notices_is_refused(self, pure_wheel, payload, tmp_path):
+        """Shipping the binary without ESBMC's COPYING should not be
+        something you can do by forgetting a file."""
+        (payload / "licenses" / "COPYING").unlink()
+        result = self._run("--wheel", str(pure_wheel), "--payload", str(payload),
+                           "--plat", "manylinux_2_17_x86_64", "--outdir", str(tmp_path / "d"))
         assert result.returncode != 0
-        assert "--license" in result.stderr
+        assert "COPYING" in result.stderr
 
-
-def test_veripp_falls_back_gracefully_without_the_package():
-    """veripp must stay usable where no wheel is published."""
-    from veripp.checker import bundled_esbmc
-
-    assert bundled_esbmc() is None or Path(bundled_esbmc()).exists()
-
-
-class TestFallbackWheel:
-    """The binary-free wheel is what lets `pip install veripp` resolve on a
-    platform no checker wheel targets. Without it the dependency would have
-    to be an extra, and batteries-included would stop being the default."""
-
-    def _build(self, licence, outdir):
-        result = subprocess.run(
-            [sys.executable, str(BUILDER), "--fallback",
-             "--license", str(licence), "--outdir", str(outdir)],
-            capture_output=True, text=True, cwd=ROOT,
-        )
-        assert result.returncode == 0, result.stderr
-        return next(Path(outdir).glob("*.whl"))
-
-    def test_it_is_tagged_any_so_every_platform_can_resolve(self, licence, tmp_path):
-        wheel = self._build(licence, tmp_path / "dist")
-        assert wheel.name.endswith("py3-none-any.whl")
-
-    def test_it_carries_no_binary(self, licence, tmp_path):
-        wheel = self._build(licence, tmp_path / "dist")
-        with zipfile.ZipFile(wheel) as z:
-            payload = [n for n in z.namelist() if "/bin/" in n or ".so" in n]
-        assert not payload, f"fallback wheel is not binary-free: {payload}"
-
-    def test_it_still_ships_the_shim_and_the_notices(self, licence, tmp_path):
-        wheel = self._build(licence, tmp_path / "dist")
-        with zipfile.ZipFile(wheel) as z:
-            names = z.namelist()
-        assert "veripp_checker/__init__.py" in names
-        assert any(n.endswith("COPYING.esbmc") for n in names)
-
-    def test_a_platform_wheel_still_needs_its_payload(self, licence, tmp_path):
-        """--fallback is the only way to build without one; forgetting
-        --payload must not quietly produce an empty platform wheel."""
-        result = subprocess.run(
-            [sys.executable, str(BUILDER), "--plat", "manylinux_2_38_x86_64",
-             "--license", str(licence), "--outdir", str(tmp_path / "d")],
-            capture_output=True, text=True, cwd=ROOT,
-        )
+    def test_only_the_pure_wheel_is_accepted_as_input(self, payload, tmp_path):
+        already = tmp_path / "veripp-9.9.9-py3-none-manylinux_2_17_x86_64.whl"
+        already.write_bytes(b"PK")
+        result = self._run("--wheel", str(already), "--payload", str(payload),
+                           "--plat", "manylinux_2_17_x86_64", "--outdir", str(tmp_path / "d"))
         assert result.returncode != 0
-        assert "--payload" in result.stderr
+        assert "py3-none-any" in result.stderr
+
+
+class TestLookup:
+    def test_a_source_checkout_has_no_bundled_checker(self):
+        """veripp must stay usable where no platform wheel is published: a
+        checkout, the pure wheel, the sdist."""
+        from veripp.checker import bundled_esbmc
+
+        found = bundled_esbmc()
+        assert found is None or Path(found).exists()
+
+    @pytest.mark.skipif(os.name == "nt", reason="unix modes")
+    def test_a_binary_without_the_executable_bit_is_not_a_checker(self, tmp_path):
+        from veripp.checker import bundled_esbmc
+
+        (tmp_path / "esbmc").write_bytes(b"\x7fELF")
+        (tmp_path / "esbmc").chmod(0o644)
+        assert bundled_esbmc(tmp_path) is None
+        (tmp_path / "esbmc").chmod(0o755)
+        assert bundled_esbmc(tmp_path) == str(tmp_path / "esbmc")
+
+    def test_the_bundled_checker_comes_last(self):
+        """$VERIPP_ESBMC, then install-checker's, then PATH, then the wheel's:
+        the default for people who have not chosen, not an override."""
+        import inspect
+
+        from veripp import esbmc
+
+        source = inspect.getsource(esbmc.find_esbmc)
+        assert source.index("managed_esbmc()") < source.index('which("esbmc")') < source.index("bundled_esbmc()")

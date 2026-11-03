@@ -44,19 +44,20 @@ pip install veripp
 veripp doctor          # checks the setup and probes the checker for known soundness holes
 ```
 
-On Linux (x86_64 and aarch64) the ESBMC checker comes bundled with the
-install. On Windows there is no bundled checker yet, so fetch one with:
+On Linux (x86_64 and arm64) that is the whole installation: the wheel
+carries the [ESBMC 8.6](https://github.com/esbmc/esbmc/releases/tag/v8.6)
+checker inside it. On Windows, or when installing from source, fetch one
+with:
 
 ```bash
 veripp install-checker
 ```
 
-It downloads the [ESBMC 8.6](https://github.com/esbmc/esbmc/releases/tag/v8.6)
-release binary for your architecture (Linux x86_64 and arm64, Windows),
-checks it against the digest veripp pins, and keeps it only if the checker
-rejects every one of a set of known-failing programs. On macOS the only
-sound route is `brew install --HEAD esbmc`. Avoid the ESBMC 8.4 release,
-including `brew install esbmc`: it silently misses some out-of-bounds writes
+It downloads the same release binary for your architecture, checks it
+against the digest veripp pins, and keeps it only if the checker rejects
+every one of a set of known-failing programs. On macOS the only sound route
+is `brew install --HEAD esbmc`. Avoid the ESBMC 8.4 release, including
+`brew install esbmc`: it silently misses some out-of-bounds writes
 ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)). `doctor` detects
 this.
 

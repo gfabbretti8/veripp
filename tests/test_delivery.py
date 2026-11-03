@@ -201,18 +201,21 @@ class TestCheckerWheelPayload:
         assert "msat_" in text and "yices_" in text
         assert "refusing to package" in text
 
-    def test_the_workflow_runs_it_per_architecture_without_an_image(self) -> None:
+    def test_the_release_runs_it_per_architecture_without_an_image(self) -> None:
         yaml = pytest.importorskip("yaml")
-        text = read(".github/workflows/checker-wheels.yml")
-        linux = yaml.safe_load(text)["jobs"]["linux"]
-        runs = "\n".join(step.get("run", "") for step in linux["steps"])
+        wheels = yaml.safe_load(read(".github/workflows/release.yml"))["jobs"]["wheels"]
+        runs = "\n".join(step.get("run", "") for step in wheels["steps"])
         assert "build_linux_payload.sh ${{ matrix.arch }}" in runs
         assert "ghcr.io" not in runs
-        arches = {entry["arch"] for entry in linux["strategy"]["matrix"]["include"]}
-        assert arches == {"x86_64", "aarch64"}
-        assert "payload/licenses/COPYING" in runs, (
-            "the licence notice should be the one shipped with this build"
-        )
+
+    def test_the_separate_checker_package_is_gone(self) -> None:
+        """One package: veripp depends on nothing, and nothing in the tree
+        builds or names veripp-checker any more."""
+        assert not (ROOT / ".github/workflows/checker-wheels.yml").exists()
+        assert not (ROOT / "checker/build_wheel.py").exists()
+        pyproject = read("pyproject.toml")
+        assert "veripp-checker" not in pyproject
+        assert re.search(r"^dependencies = \[\]$", pyproject, re.M)
 
 
 
@@ -1150,12 +1153,44 @@ class TestReleaseWorkflow:
 
     WF = ROOT / ".github/workflows/release.yml"
 
+    def _jobs(self) -> dict:
+        yaml = pytest.importorskip("yaml")
+        return yaml.safe_load(self.WF.read_text(encoding="utf-8"))["jobs"]
+
     def test_publish_cannot_run_before_the_tests(self) -> None:
-        text = self.WF.read_text(encoding="utf-8")
-        assert "needs: test" in text, (
-            "the publish job must be gated on the test job, or a tag on a "
-            "bad commit publishes before anything fails"
+        needs = self._jobs()["publish"]["needs"]
+        assert "test" in needs and "wheels" in needs, (
+            "the publish job must be gated on the test and wheel jobs, or a "
+            "tag on a bad commit publishes before anything fails"
         )
+
+    def test_publish_runs_only_from_a_tag(self) -> None:
+        """A workflow_dispatch rehearses the release: everything is built and
+        tested, and nothing is uploaded."""
+        wf = pytest.importorskip("yaml").safe_load(self.WF.read_text(encoding="utf-8"))
+        assert "workflow_dispatch" in wf[True] or "workflow_dispatch" in wf.get("on", {})
+        assert "refs/tags/v" in self._jobs()["publish"]["if"]
+
+    def test_a_platform_wheel_is_built_and_probed_per_architecture(self) -> None:
+        """The checker travels inside veripp's own wheel: one manylinux wheel
+        per Linux architecture, each pip-installed in a clean container and
+        put through doctor and a real verification before publish."""
+        wheels = self._jobs()["wheels"]
+        arches = {entry["arch"] for entry in wheels["strategy"]["matrix"]["include"]}
+        assert arches == {"x86_64", "aarch64"}
+        assert "ubuntu-24.04-arm" in {e["runner"] for e in wheels["strategy"]["matrix"]["include"]}
+        runs = "\n".join(step.get("run", "") for step in wheels["steps"])
+        assert "build_linux_payload.sh ${{ matrix.arch }}" in runs
+        assert "bundle_wheel.py" in runs and "manylinux_2_17_${{ matrix.arch }}" in runs
+        assert "docker build" in runs and "veripp doctor" in runs
+        assert "bundled_esbmc()" in runs, "the test must ask veripp's own lookup"
+        assert "off_by_one.cpp" in runs, "a real verification, not only doctor"
+
+    def test_publish_refuses_an_incomplete_set(self) -> None:
+        runs = "\n".join(step.get("run", "") for step in self._jobs()["publish"]["steps"])
+        assert "py3-none-any.whl" in runs and "tar.gz" in runs
+        assert "x86_64 aarch64" in runs
+        assert "incomplete" in runs.lower() or "missing the" in runs
 
     def test_it_uses_the_repository_secret(self) -> None:
         assert "secrets.PYPI_TOKEN" in self.WF.read_text(encoding="utf-8")

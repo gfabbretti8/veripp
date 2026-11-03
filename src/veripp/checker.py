@@ -356,17 +356,23 @@ def missing_checker() -> str:
     )
 
 
-def bundled_esbmc() -> str | None:
-    """The checker from `pip install veripp[checker]`, if that extra is here.
+#: Where a platform wheel of veripp carries its checker. The pure wheel, the
+#: sdist and a source checkout have no such directory, and on those
+#: `install-checker` or an esbmc on PATH is the route.
+BUNDLED_DIR = Path(__file__).resolve().parent / "bin"
 
-    Kept behind an import guard rather than a dependency: veripp must stay
-    installable, and useful, on the platforms no wheel is published for.
+
+def bundled_esbmc(bundled_dir: Path | None = None) -> str | None:
+    """The checker that came inside this veripp wheel, if this is one.
+
+    Linux x86_64 and arm64 wheels ship ESBMC's static release binary under
+    `veripp/bin/`, put there by checker/bundle_wheel.py from the same pinned
+    download `install-checker` makes. Every other install has none here, and
+    veripp stays usable on them: `doctor` says what to run.
     """
-    try:
-        import veripp_checker
-    except ImportError:
-        return None
-    try:
-        return veripp_checker.esbmc_path()
-    except Exception:
-        return None
+    directory = bundled_dir or BUNDLED_DIR
+    name = "esbmc.exe" if sys.platform == "win32" else "esbmc"
+    candidate = directory / name
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None

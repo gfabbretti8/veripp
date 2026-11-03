@@ -7,7 +7,43 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
-## Unreleased
+## 0.7.0
+
+Results fail closed where they used to fail open, and the checker arrives
+with the install on Linux arm64 as well as x86_64.
+
+### Changed: what counts as a proof
+- **Every proof is probed for reachability**, in `verify` and in `scan`. A
+  harness that verifies is re-run with an always-failing assertion at its
+  end: it must fail that (reachable), or it reached nothing (vacuous), or the
+  probe did not settle (unconfirmed). Only the first is a proof; the other
+  two exit 3, and `scan` lists them apart from timeouts. The probe no longer
+  depends on the harness text mentioning an assumption, and a probe that
+  times out no longer counts as reachable. `examples/off_by_one.reachable.cpp`,
+  a leftover of the old probe, is gone.
+- **An LLM's rewritten file is a proposal, not a proof.** When the escalation
+  ladder runs out and the model proposes loop invariants, the proposal is
+  accepted only if it is the original file plus side-effect-free assertions;
+  anything else -- an assume, an edited or deleted line, an assertion that
+  assigns or calls -- ends the run inconclusive with the reason. Accepted
+  assertions are listed as `llm_invariants`. A frontend rewrite is never run
+  as a proof: the result stays a parse error and names the file to review.
+- **The scan retry pass never consults the model.** It widens bounds and
+  switches strategy only; a counterexample that disappears under an accepted
+  precondition is filed as `preconditioned`, never `proved`.
+- **The scan cache keys on every input**: every project header reached at
+  any depth along the real include path, linked sources, force-included
+  headers, and the checker and veripp themselves identified by their bytes
+  rather than a version string. `CACHE_VERSION` is 3; old entries are not
+  served.
+- **`doctor` probes every default check**, nine planted bugs instead of two,
+  and passes a probe only when the planted property is the one that failed.
+  `verify` remembers the result per checker binary instead of re-probing
+  after every proof.
+- **Triage runs only with a model you asked for** (`--model`,
+  `$VERIPP_LLM_MODEL`, `--llm-base-url` or `$VERIPP_LLM_BASE_URL`). A
+  provider's API key in the environment no longer turns it on by itself; the
+  note says when a key is present and unused.
 
 ### Changed: the checker
 - **ESBMC 8.6 everywhere**, pinned by tag and by digest, instead of the
@@ -15,19 +51,52 @@ run, and refuses to back results from one that cannot detect a planted bug.
   release workflow and the container image all fetch the same release
   binaries, and `install-checker` refuses a download whose SHA-256 is not
   the one veripp pins.
+- **The checker is inside veripp's own wheel.** `pip install veripp` on
+  Linux x86_64 or arm64 gets a `manylinux` wheel carrying ESBMC at
+  `veripp/bin/esbmc`; every other platform gets the pure wheel and
+  `install-checker`. The separate `veripp-checker` package and its release
+  tag are retired; veripp has no runtime dependencies.
 - **Linux arm64 gets a prebuilt checker.** ESBMC 8.6 publishes a static
-  arm64 Linux binary (`esbmc-linux-armv8.zip`), so `veripp install-checker`
-  installs it, the Action runs on arm64 runners such as `ubuntu-24.04-arm`,
-  and the `linux/arm64` image downloads it instead of compiling ESBMC from
-  source. The from-source recipe is gone from the Dockerfile; it remains in
-  the git history.
+  arm64 Linux binary, so `install-checker` installs it, the Action runs on
+  arm64 runners such as `ubuntu-24.04-arm`, and the `linux/arm64` image
+  downloads it instead of compiling ESBMC from source. The from-source recipe
+  is gone from the Dockerfile; it remains in the git history.
 - The Action's checker cache is keyed on the runner's architecture as well
   as its OS, so an x86_64 cache can no longer be restored on an arm64 runner.
-- **The checker wheel no longer comes out of the container image.**
-  `checker/build_linux_payload.sh` fetches the release binary for an
-  architecture, checks its digest and strips it; `checker-wheels.yml` needs
-  no image, no Docker build and no compiler. The image is a distribution
-  channel only, for `docker run` with nothing installed.
+- A missing checker says where veripp looked and prints the install command
+  for this machine, with exit 2 from `verify`, instead of a traceback
+  recommending `brew install esbmc` (which is the unsound 8.4).
+
+### Changed: the GitHub Action
+- **A vacuous proof fails the job** under the default `fail-on: counterexample`,
+  with a `vacuous` output for later steps. New `fail-on: inconclusive` fails
+  on anything short of a proof; an unknown `fail-on` value is an error.
+- On macOS the install step fails at once and says what works, instead of
+  unpacking a release zip that cannot run outside Homebrew's prefix.
+
+### Fixed
+- `verify` and `scan` built their checker configuration separately and had
+  drifted: include directories were passed twice, `-U` from the compilation
+  database reached one and not the other, and a C standard never reached a
+  C harness. One builder now, and the verdict names the standard that
+  applied.
+- `--preprocess` hands the preprocessor the build's `-D`, `-U` and `-include`
+  flags, so a function behind `#if FEATURE` is no longer reported as "not in
+  this build" under the very flags that enable it.
+- Scan threads no longer empty each other's enum types: the type information
+  is a value computed once per file, not a module-level set.
+- `--keep-harness` keeps the harness; without it the scratch directory is
+  removed, for `verify` and for every file a scan visits.
+- Sources in any encoding are read; one function veripp trips over no longer
+  costs the rest of its file.
+- Each SARIF result states its own bounds (a tree scan stated none) and maps
+  leaks, use after free, invalid frees, uninitialised reads, undefined shifts
+  and NaN to rules of their own, with the CWEs ESBMC reports.
+- The CLI parses on Python 3.10 and 3.11 again; CI tests 3.10, 3.12 and 3.14
+  and lints for syntax newer than the floor.
+- Checker-backed tests run whenever veripp can find a checker, not only when
+  one is on PATH.
+- The skill documents every flag, and a test holds it to that.
 
 ## 0.6.0
 

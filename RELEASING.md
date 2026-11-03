@@ -1,19 +1,37 @@
 # Releasing
 
 A release is a tag. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`,
-which re-tests everything on that exact commit and then publishes to PyPI
-with the repository's `PYPI_TOKEN` secret. Nothing is uploaded by hand.
+which re-tests everything on that exact commit, builds the wheels, and then
+publishes to PyPI with the repository's `PYPI_TOKEN` secret. Nothing is
+uploaded by hand.
 
 ```bash
-# 1. bump the version
+# 1. bump the version -- pyproject.toml, package.json and .claude-plugin/*.json
+#    must agree (a test checks), and CHANGELOG.md gets a section
 $EDITOR pyproject.toml            # version = "X.Y.Z"
 git commit -am "X.Y.Z: <what changed>"
 git push
 
-# 2. tag it -- this is the release
+# 2. rehearse: run the release workflow by hand (Actions -> release -> Run
+#    workflow). Without a tag it builds and tests everything and stops short
+#    of the upload.
+
+# 3. tag it -- this is the release
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
+
+The same tag runs `image.yml`, which publishes the container image for both
+architectures.
+
+## What goes up
+
+Four files, always together: the sdist, the pure `py3-none-any` wheel, and a
+`manylinux_2_17` wheel for x86_64 and for aarch64 that carries the ESBMC
+checker at `veripp/bin/esbmc`. pip takes the platform wheel where one
+matches, so `pip install veripp` is the whole installation on Linux, and the
+pure wheel everywhere else. See `checker/README.md` for how the platform
+wheels are made.
 
 ## What the workflow guarantees before anything leaves the machine
 
@@ -23,9 +41,15 @@ git push origin vX.Y.Z
   finished failing;
 * `veripp doctor` passes -- a release built against a checker that silently
   misses a bug class would ship proofs that are not proofs;
+* each platform wheel, pip-installed in a clean container on a native runner
+  of its architecture, finds its bundled checker, passes `veripp doctor` and
+  finds the bug in `examples/off_by_one.cpp`;
 * the tag matches `pyproject.toml`'s version, so a mislabelled build is
   refused rather than published;
-* `twine check` accepts both artifacts (catches a README that will not
+* the set is complete -- sdist, pure wheel, both platform wheels -- since a
+  subset would leave some users unable to resolve the package or silently
+  without a checker;
+* `twine check` accepts every artifact (catches a README that will not
   render on the project page);
 * the sdist carries `examples/`, which the README tells people to run.
 

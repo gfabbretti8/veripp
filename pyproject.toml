@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "veripp"
-version = "0.6.0"
+version = "0.7.0"
 description = "AI-assisted bounded verification for C and C++ functions (ESBMC + optional LLM triage)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,12 +20,12 @@ classifiers = [
   "Topic :: Software Development :: Quality Assurance",
   "Topic :: Software Development :: Testing",
 ]
-# The checker is a native binary, so it ships as its own platform wheel.
-# Unconditional rather than an extra: veripp-checker also publishes a
-# binary-free py3-none-any wheel, which pip falls back to where no platform
-# wheel exists, so this resolves everywhere. Where it resolves to the
-# fallback, `veripp doctor` says there is no checker and how to get one.
-dependencies = ["veripp-checker>=0.1"]
+# No runtime dependencies. The checker is a native binary and travels inside
+# veripp's own platform wheels (Linux x86_64 and arm64, made by
+# checker/bundle_wheel.py from this pure wheel at release time); the pure
+# wheel pip falls back to elsewhere has none, and there `veripp doctor` says
+# what to run.
+dependencies = []
 
 [project.optional-dependencies]
 # Only the Anthropic provider needs a package: every other provider speaks the

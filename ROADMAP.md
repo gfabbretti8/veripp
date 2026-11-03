@@ -99,8 +99,9 @@ Known M1 limits, all disclosed at runtime rather than papered over:
       the `--directory` bug broke) and `image.yml` with `push: false`.
 - [x] Published, from the public repo: the image on ghcr.io
       (`ghcr.io/gfabbretti8/veripp`, 0.1.0 to 0.5.0) and the packages on PyPI
-      (`veripp` 0.2.0, 0.4.0 and 0.5.0; `veripp-checker` 0.1.0). RELEASING.md
-      is the procedure.
+      (`veripp` 0.2.0, 0.4.0, 0.5.0 and 0.6.0; `veripp-checker` 0.1.0, which
+      0.7.0 folded back into veripp's own platform wheels). RELEASING.md is
+      the procedure.
 - [ ] CppCon lightning talk / Show HN.
 
 Two things worth knowing before touching delivery:

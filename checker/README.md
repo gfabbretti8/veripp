@@ -1,79 +1,60 @@
-# veripp-checker
+# The bundled checker
 
-The [ESBMC](https://esbmc.org) model checker, packaged as a wheel so that
+`pip install veripp` is the entire installation on Linux because veripp's
+platform wheels carry the [ESBMC](https://esbmc.org) model checker inside
+the package, at `veripp/bin/esbmc`. This directory holds what makes those
+wheels.
 
-```bash
-pip install veripp
-```
+- `esbmc-linux.zip.sha256`, `esbmc-linux-armv8.zip.sha256`: the SHA-256 of
+  the ESBMC release assets veripp pins -- one per Linux architecture. The
+  release tag is `ESBMC_RELEASE` in `src/veripp/checker.py`, the same digests
+  are in `PINNED_SHA256` there for `veripp install-checker`, and CI, the
+  release workflow and the container image check downloads against these
+  files. A test keeps all of them in step.
+- `build_linux_payload.sh <x86_64|aarch64> <outdir>`: downloads the release
+  zip for an architecture, checks it against the pin, refuses it if it
+  carries MathSAT or Yices (ESBMC's own `COPYING` notes those may not be
+  redistributed freely; the release builds ship Z3 and Boolector, both MIT),
+  strips the static binary and keeps the release's licence notices beside it.
+- `bundle_wheel.py`: takes the pure `py3-none-any` wheel that `uv build`
+  makes and that payload, and writes `veripp-X.Y.Z-py3-none-manylinux_2_17_<arch>.whl`
+  with the binary and its notices added, the WHEEL file retagged and RECORD
+  rewritten. Nothing is rebuilt and no compiler is involved.
 
-is the entire installation of [veripp](https://github.com/gfabbretti8/veripp).
+`.github/workflows/release.yml` does this on a native runner per
+architecture, pip-installs each wheel in a clean container, runs
+`veripp doctor` and a real verification there, and publishes the two platform
+wheels together with the pure wheel and the sdist -- never a subset. pip
+prefers the platform wheel where one matches and falls back to the pure one
+elsewhere (macOS, other architectures, source installs), where
+`veripp doctor` says what to run instead.
 
-The binary is ESBMC's own static Linux release build (8.6, for x86_64 and
-arm64), fetched straight from the release and checked against the digest
-veripp pins — the same bytes CI tests against and the container image ships.
-It carries Z3 and Boolector and **no MathSAT or Yices**;
-`build_linux_payload.sh` checks that before packaging, since ESBMC's own
-`COPYING` notes that MathSAT is academic/non-commercial and Yices is
-personal-use or GPL3, while Z3 and Boolector are MIT. ESBMC's own code is
-Apache-2.0 and the CBMC base it derives from is BSD-4-clause. All of those
-notices ship inside the wheel.
+## Why inside veripp, and not a separate package
 
-Every wheel is built only from a checker that passes veripp's soundness
-probes: known-failing programs that the checker must reject. A build that
-misses a planted bug is never published, because every result obtained from it
-would be a false proof.
-
-```python
-import veripp_checker
-veripp_checker.esbmc_path()   # -> "/.../site-packages/veripp_checker/bin/esbmc"
-```
-
-## Publishing
-
-The wheels are built by `.github/workflows/checker-wheels.yml`, which keeps a
-wheel only if a clean container that `pip install`s it passes `veripp doctor`.
-Nothing is uploaded automatically.
-
-Order matters. Until `veripp-checker` exists on an index, veripp **must not**
-depend on it: a dependency naming an unresolvable package breaks
-`uv sync` and `pip install veripp` alike. So:
-
-1. build and check the wheels (`workflow_dispatch` on that workflow);
-2. publish `veripp-checker`;
-3. only then add to veripp's `pyproject.toml`, as a real dependency rather
-   than an extra:
-
-   ```toml
-   dependencies = ["veripp-checker>=0.1"]
-   ```
-
-4. release veripp.
-
-Publish the `py3-none-any` wheel **together with** the platform wheels, never
-after. pip ranks a platform wheel above `any`, so the fallback is chosen only
-where nothing else fits — and it is the reason the dependency can be
-unconditional. Without it, `pip install veripp` would fail outright on every
-platform no checker is built for.
+veripp 0.6 shipped the binary as `veripp-checker`, a dependency with its own
+release tag, so that veripp's frequent releases did not re-upload a binary
+that rarely changes. That meant two tags to sequence, a second package to
+version, and a pipeline that copied the binary out of the container image.
+The storage cost of bundling is about 105 MB per veripp release, well inside
+PyPI's project quota, and in exchange there is one package, one version, and
+no way to end up with a veripp and a checker that were not tested together.
 
 ## Building one locally
 
 ```bash
-./checker/build_linux_payload.sh aarch64 payload   # or x86_64; needs curl, unzip, strip
-python3 checker/build_wheel.py --payload payload \
-  --plat manylinux_2_17_aarch64 --license payload/licenses/COPYING --outdir dist
+uv build --wheel --out-dir pure
+./checker/build_linux_payload.sh x86_64 payload      # needs curl, unzip, strip
+python3 checker/bundle_wheel.py --wheel pure/veripp-*-py3-none-any.whl \
+  --payload payload --plat manylinux_2_17_x86_64 --outdir dist
+pip install dist/veripp-*-manylinux*.whl && veripp doctor
 ```
 
-Nothing here needs Docker or a compiler: the script downloads the release
-zip for the architecture, checks it against `checker/<asset>.sha256`,
-refuses it if it carries MathSAT or Yices, and strips it. Run it on a
-machine of the target architecture (or with multiarch binutils), since
-`strip` has to understand the binary.
+Run the payload step on a machine of the target architecture, or with
+multiarch binutils, since `strip` has to understand the binary. The wheels
+measure about 61 MB for x86_64 and 43 MB for aarch64; the weight is Clang,
+which ESBMC uses as its C/C++ frontend. PyPI's per-file default is 100 MB.
 
-The payload is one static binary; the weight is Clang, which ESBMC uses as
-its C/C++ frontend, not ESBMC itself. The 0.1.0 arm64 wheel, built from
-source with Z3 only, measured 87 MB; PyPI's per-file default is 100 MB, so
-check the size before tagging a checker release.
-
-macOS and Windows are not built yet. macOS should be the easiest of the three:
-its release zip is 10 MB and is non-relocatable only because it links
-Homebrew's dylibs, which is exactly what `delocate` exists to fix.
+macOS and Windows wheels are not built. ESBMC's Windows release zip is
+relocatable and `veripp install-checker` fetches it; the macOS zip links
+Homebrew's libraries by absolute path, so there the route is
+`brew install --HEAD esbmc`.

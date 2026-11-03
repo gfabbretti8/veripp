@@ -8,11 +8,13 @@ uv run veripp doctor     # checks ESBMC, the contracts header, and soundness
 uv run pytest -q
 ```
 
-You need ESBMC 8.5 or later — `uv sync` brings the bundled one on Linux, and
-`veripp install-checker` fetches the pinned
+You need ESBMC 8.5 or later. A source checkout has no bundled checker (only
+the released Linux wheels carry one), so run `uv run veripp install-checker`
+once: it fetches the pinned
 [8.6 release](https://github.com/esbmc/esbmc/releases/tag/v8.6) for Linux
-x86_64, Linux arm64 and Windows. **Not** the v8.4 release, which silently
-misses a class of bug veripp targets
+x86_64, Linux arm64 or Windows into your user data directory and keeps it
+only if it passes the soundness probes. **Not** the v8.4 release, which
+silently misses a class of bug veripp targets
 ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)). On macOS,
 `brew install --HEAD esbmc`. `veripp doctor` fails loudly if yours is affected.
 
