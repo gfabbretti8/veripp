@@ -277,3 +277,103 @@ class TestDatabasePathsAcrossPlatforms:
         assert "posix=" in code, (
             "shlex.split must choose its mode, not default to POSIX on Windows"
         )
+
+
+class TestOneConfiguration:
+    """`verify` built its checker configuration inline while `scan` and the
+    SARIF writer used _config_for, and the two had drifted: `verify` added
+    the database's include directories twice, and only `verify` passed its
+    -U flags. A C standard from the database, or from --std, never reached
+    the C harness at all, and the result line always named the C++ one."""
+
+    DATABASE = ["-Iinc", "-DLIMIT=4", "-ULIMIT", "-include", "cfg.h", "-std=gnu99"]
+
+    @staticmethod
+    def _configs(tmp_path, monkeypatch, *flags, database=None):
+        """The VerifyConfig that `verify` and `scan` each hand the checker."""
+        from veripp import cli
+        from veripp.agent import AgentReport
+        from veripp.esbmc import Outcome, VerifyResult
+        from veripp.scan import ScanReport
+
+        (tmp_path / "inc").mkdir(exist_ok=True)
+        (tmp_path / "cfg.h").write_text("#define CFG 1\n", encoding="utf-8")
+        src = tmp_path / "a.c"
+        src.write_text("int f(int x) { return x; }\n", encoding="utf-8")
+        if database is not None:
+            (tmp_path / "compile_commands.json").write_text(json.dumps([{
+                "directory": str(tmp_path), "file": "a.c",
+                "arguments": ["cc", *database, "-c", "a.c"],
+            }]), encoding="utf-8")
+        seen = {}
+
+        def fake_agent(source, config, **kwargs):
+            seen["verify"] = config
+            return AgentReport(final=VerifyResult(Outcome.UNKNOWN, config))
+
+        def fake_scan(source, config, *args, **kwargs):
+            seen["scan"] = config
+            return ScanReport(source=source)
+
+        monkeypatch.setattr(cli, "verify_with_agent", fake_agent)
+        monkeypatch.setattr(cli, "scan", fake_scan)
+        cli.main(["verify", str(src), "--function", "f", "--no-llm", *flags])
+        cli.main(["scan", str(src), "--no-llm", "--no-cache", *flags])
+        return seen["verify"], seen["scan"]
+
+    def test_verify_and_scan_hand_the_checker_the_same_configuration(
+        self, tmp_path, monkeypatch
+    ):
+        verify, scan = self._configs(tmp_path, monkeypatch, database=self.DATABASE)
+        assert verify == scan
+
+    def test_database_include_dirs_are_passed_once(self, tmp_path, monkeypatch):
+        verify, _ = self._configs(tmp_path, monkeypatch, database=self.DATABASE)
+        assert len(verify.include_dirs) == len(set(verify.include_dirs))
+
+    def test_a_database_undefine_reaches_scan(self, tmp_path, monkeypatch):
+        _, scan = self._configs(tmp_path, monkeypatch, database=self.DATABASE)
+        args = scan.to_args(tmp_path / "a.c")
+        assert ["-U", "LIMIT"] == args[args.index("-U"):args.index("-U") + 2]
+        # After the define it undoes, or it undoes nothing.
+        assert args.index("LIMIT=4") < args.index("-U")
+
+    def test_a_c_standard_from_the_database_reaches_the_c_harness(
+        self, tmp_path, monkeypatch
+    ):
+        verify, _ = self._configs(tmp_path, monkeypatch, database=self.DATABASE)
+        assert verify.std_for(tmp_path / "h.c") == "gnu99"
+        assert verify.std_for(tmp_path / "h.cpp") == "c++17"
+
+    def test_a_c_standard_on_the_command_line_reaches_the_c_harness(
+        self, tmp_path, monkeypatch
+    ):
+        verify, _ = self._configs(tmp_path, monkeypatch, "--std", "c99")
+        assert verify.std_for(tmp_path / "h.c") == "c99"
+        assert verify.std_for(tmp_path / "h.cpp") == "c++17"
+
+    def test_a_passthrough_flag_comes_last(self, tmp_path, monkeypatch):
+        """So a deliberate flag wins over anything inferred from the build,
+        as the comment on it always said."""
+        verify, _ = self._configs(tmp_path, monkeypatch,
+                                  "--esbmc-arg=--struct-fields-check",
+                                  database=self.DATABASE)
+        assert verify.extra_args[-1] == "--struct-fields-check"
+
+    def test_the_result_line_names_the_standard_that_applied(self):
+        from veripp.esbmc import VerifyConfig
+
+        config = VerifyConfig(c_std="gnu99")
+        assert "std=gnu99" in config.describe(Path("veripp_harness_f.c"))
+        assert "std=c++17" in config.describe(Path("veripp_harness_f.cpp"))
+
+    @pytest.mark.esbmc
+    def test_a_c_verdict_says_it_was_checked_as_c(self, tmp_path, capsys):
+        from veripp.cli import main
+
+        src = tmp_path / "inc.c"
+        src.write_text("int inc(int x) { return x > 100 ? 0 : x + 1; }\n",
+                       encoding="utf-8")
+        main(["verify", str(src), "--function", "inc", "--no-llm"])
+        out = capsys.readouterr().out
+        assert "std=c11" in out and "std=c++17" not in out
