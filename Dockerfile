@@ -45,9 +45,14 @@ ARG ESBMC_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip binutils \
     && rm -rf /var/lib/apt/lists/*
+# The build every workflow pins (see .github/workflows/ci.yml): `weekly` is
+# re-cut in place, and this image is where the checker wheels take their
+# binary from, so an unpinned download here would reach every pip install.
+COPY checker/esbmc-linux.zip.sha256 /tmp/esbmc.zip.sha256
 RUN set -eux; \
     curl -fsSL -o /tmp/esbmc.zip \
       "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/esbmc-linux.zip"; \
+    echo "$(cat /tmp/esbmc.zip.sha256)  /tmp/esbmc.zip" | sha256sum -c -; \
     mkdir -p /tmp/unz && unzip -q /tmp/esbmc.zip -d /tmp/unz; \
     bin="$(find /tmp/unz -name esbmc -type f | head -1)"; \
     test -n "$bin"; \

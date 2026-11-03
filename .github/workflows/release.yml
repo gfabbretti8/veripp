@@ -29,7 +29,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml', 'checker/esbmc-linux.zip.sha256') }}
 
       - name: Install zsh, for the completion tests
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
@@ -40,6 +40,8 @@ jobs:
           mkdir -p ~/.local/esbmc
           curl -fsSL -o /tmp/esbmc.zip \
             "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/esbmc-linux.zip"
+          # The build ci.yml pins, and no other: see the comment there.
+          echo "$(cat checker/esbmc-linux.zip.sha256)  /tmp/esbmc.zip" | sha256sum -c -
           unzip -q /tmp/esbmc.zip -d ~/.local/esbmc
           chmod +x "$(find ~/.local/esbmc -name esbmc -type f | head -1)"
 
