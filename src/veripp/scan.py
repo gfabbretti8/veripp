@@ -25,7 +25,8 @@ from dataclasses import replace as _replace
 
 from .esbmc import Outcome, VerifyConfig, run
 from .harness import (
-    HarnessError, HarnessOptions, generate, unused_length_parameters,
+    HarnessError, HarnessOptions, generate, source_types,
+    unused_length_parameters,
 )
 from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
@@ -449,6 +450,9 @@ def scan(
         return report
     workdir = scratch_dir("veripp-scan-")
     harness_paths: dict[str, Path] = {}
+    # Once per file, not per function: the workers share it, and nothing
+    # writes to it after this.
+    types = source_types(source, options)
 
     def one(name: str) -> FunctionResult:
         # One function veripp trips over must not cost the rest of the file:
@@ -465,7 +469,7 @@ def scan(
 
     def attempt(name: str) -> FunctionResult:
         try:
-            harness = generate(source, name, options)
+            harness = generate(source, name, options, types=types)
         except (HarnessError, SignatureError) as exc:
             return FunctionResult(name=name, outcome="refused", detail=str(exc))
         sig = harness.signature
