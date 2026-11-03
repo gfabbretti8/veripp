@@ -94,31 +94,68 @@ class TestAction:
 
     def test_defaults_to_the_sound_esbmc(self) -> None:
         """8.4 silently misses out-of-bounds writes (esbmc#6508)."""
+        from veripp.checker import ESBMC_RELEASE
+
         text = read("action.yml")
-        assert "default: 'weekly'" in text or 'default: "weekly"' in text
+        assert f"default: '{ESBMC_RELEASE}'" in text
+
+
+class TestOneRelease:
+    """Every consumer names the same ESBMC release: the module that installs
+    it, the workflows that test against it, the image and the Action."""
+
+    def test_every_consumer_pins_the_same_tag(self) -> None:
+        from veripp.checker import ESBMC_RELEASE
+
+        assert re.search(rf"^  ESBMC_VERSION: {re.escape(ESBMC_RELEASE)}$",
+                         read(".github/workflows/ci.yml"), re.M)
+        assert re.search(rf"^  ESBMC_VERSION: {re.escape(ESBMC_RELEASE)}$",
+                         read(".github/workflows/release.yml"), re.M)
+        assert re.search(rf"^ARG ESBMC_VERSION={re.escape(ESBMC_RELEASE)}$",
+                         read("Dockerfile"), re.M)
+        assert f"releases/download/{ESBMC_RELEASE}" in read("skills/veripp/install.sh")
+
+    def test_nothing_tracks_the_rolling_tag_any_more(self) -> None:
+        """`weekly` is re-cut in place under one name, so a download from it
+        is not the build anything was tested with."""
+        for name in (".github/workflows/ci.yml", ".github/workflows/release.yml",
+                     "Dockerfile", "action.yml", "skills/veripp/install.sh"):
+            assert "download/weekly" not in read(name), name
 
 
 class TestPinnedChecker:
-    """`weekly` is re-cut in place under one name, so nothing but a digest
-    says which ESBMC build CI, a release and the image actually ran -- and
-    the image is where the checker wheels take their binary from."""
+    """A digest, not a tag, says which ESBMC build CI, a release and the
+    image actually ran -- and the image is where the checker wheels take
+    their binary from. One pin per Linux asset, x86_64 and arm64."""
 
-    PIN = ROOT / "checker" / "esbmc-linux.zip.sha256"
+    PINS = ("esbmc-linux.zip", "esbmc-linux-armv8.zip")
     CONSUMERS = (".github/workflows/ci.yml", ".github/workflows/release.yml",
                  "Dockerfile")
 
-    def test_the_pin_is_one_sha256(self) -> None:
-        assert re.fullmatch(r"[0-9a-f]{64}\n?", self.PIN.read_text(encoding="utf-8"))
+    @pytest.mark.parametrize("asset", PINS)
+    def test_the_pin_is_one_sha256(self, asset) -> None:
+        pin = ROOT / "checker" / f"{asset}.sha256"
+        assert re.fullmatch(r"[0-9a-f]{64}\n?", pin.read_text(encoding="utf-8"))
 
     @pytest.mark.parametrize("name", CONSUMERS)
     def test_every_download_is_checked_before_it_is_unpacked(self, name) -> None:
-        text = read(name)
-        download = text.index("esbmc-linux.zip")
+        # Judge the instructions, not the comments explaining them.
+        text = "\n".join(
+            line for line in read(name).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        download = text.index("releases/download/")
         check = text.index("sha256sum -c", download)
-        assert check < text.index("unzip", download), (
-            f"{name} unpacks esbmc-linux.zip before checking its digest"
+        assert check < text.index("unzip -q", download), (
+            f"{name} unpacks the ESBMC zip before checking its digest"
         )
         assert "esbmc-linux.zip.sha256" in text
+
+    def test_the_image_pins_both_architectures(self) -> None:
+        text = read("Dockerfile")
+        for asset in self.PINS:
+            assert f"checker/{asset}.sha256" in text, asset
+        assert "esbmc-linux-armv8.zip" in text
 
     @pytest.mark.parametrize("name", CONSUMERS[:2])
     def test_bumping_the_pin_rotates_the_cache(self, name) -> None:
@@ -128,44 +165,33 @@ class TestPinnedChecker:
 
 class TestDockerfile:
     def test_builds_both_architectures(self) -> None:
+        """One stage, keyed on buildkit's TARGETARCH, picks the release
+        binary for the platform: x86_64 and, since ESBMC 8.6, arm64."""
         text = read("Dockerfile")
-        assert "AS esbmc-amd64" in text
-        assert "AS esbmc-arm64" in text
-        # The selector is what makes one Dockerfile serve both.
-        assert "FROM esbmc-${TARGETARCH}" in text
-
-    def test_arm64_builds_from_source(self) -> None:
-        """No sound prebuilt arm64 Linux ESBMC exists.
-
-        The only prebuilt one is the Homebrew bottle at 8.4, which carries
-        esbmc#6508. If this stage ever becomes a download, that is a silent
-        soundness regression for every arm64 user, so pin the intent here.
-        """
-        text = read("Dockerfile")
-        arm_stage = text.split("AS esbmc-arm64", 1)[1].split("\nFROM ", 1)[0]
-        # Judge the instructions, not the comments explaining them.
         instructions = "\n".join(
-            line for line in arm_stage.splitlines()
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        assert "ARG TARGETARCH" in instructions
+        assert "amd64) asset=esbmc-linux.zip" in instructions
+        assert "arm64) asset=esbmc-linux-armv8.zip" in instructions
+
+    def test_nothing_is_compiled_from_source_any_more(self) -> None:
+        """Until 8.6 the arm64 stage compiled ESBMC, with a cmake
+        configuration and an LLVM apt repository of its own. A download is
+        the same bytes CI tested; a build is not."""
+        instructions = "\n".join(
+            line for line in read("Dockerfile").splitlines()
             if not line.lstrip().startswith("#")
         )
-        assert "cmake --build" in instructions or "build.sh" in instructions, (
-            "the arm64 stage must compile ESBMC from source"
-        )
-        assert "esbmc-linux.zip" not in instructions, (
-            "esbmc-linux.zip is x86_64; it cannot be used for arm64"
-        )
+        for marker in ("cmake", "build.sh", "apt.llvm.org", "git clone"):
+            assert marker not in instructions, marker
 
-    def test_arm64_disables_the_32bit_libc_model(self) -> None:
-        """arm64 has no 32-bit multilib, so that model cannot be built.
-
-        esbmc's own scripts/build.sh skips g++-multilib on aarch64 and then
-        asks for the 32-bit libc model anyway, which fails on a missing
-        bits/libc-header-start.h. Homebrew's formula turns it off on Linux for
-        the same reason.
-        """
-        text = read("Dockerfile")
-        arm_stage = text.split("AS esbmc-arm64", 1)[1].split("\nFROM ", 1)[0]
-        assert "-DENABLE_BUNDLE_LIBC_32BIT=OFF" in arm_stage
+    def test_the_runtime_needs_no_checker_libraries(self) -> None:
+        """The release binaries are static. A runtime that installs z3 or
+        boost again is carrying weight for a build that no longer exists."""
+        runtime = read("Dockerfile").split("AS runtime", 1)[1]
+        for package in ("libz3", "libboost", "LD_LIBRARY_PATH"):
+            assert package not in runtime, package
 
     def test_the_build_refuses_to_ship_an_unsound_checker(self) -> None:
         assert re.search(r"^RUN veripp doctor", read("Dockerfile"), re.M), (
@@ -613,23 +639,12 @@ class TestSystemHeadersAreReachable:
     image scored 13/13 while failing 104 of 117 functions in cJSON.
     """
 
-    def test_the_arm64_stage_stages_clang_resource_headers(self) -> None:
-        """Built against a system LLVM, esbmc hard-codes the path to clang's
-        resource headers and its own libc headers #include_next onto them.
-        The directory has to exist, as a real directory, at that path: a
-        symlink does not satisfy clang's header search, and
-        -DESBMC_CLANG_HEADERS_BUNDLED=ON does not substitute for it. Both were
-        tried against a real cJSON scan before settling on this.
-        """
-        text = read("Dockerfile")
-        arm_stage = text.split("AS esbmc-arm64", 1)[1].split("\nFROM ", 1)[0]
-        assert "overlay" in arm_stage and "stddef.h" in arm_stage
-
-    def test_the_runtime_applies_the_overlay(self) -> None:
-        runtime = read("Dockerfile").split("AS runtime", 1)[1]
-        assert "/opt/esbmc/overlay" in runtime and "cp -a" in runtime
-
     def test_the_smoke_test_exercises_system_headers(self) -> None:
+        """The release binaries bundle their own clang resource headers, so
+        there is no overlay to stage any more -- which is exactly why the
+        smoke test, run on both architectures, has to keep reaching a real
+        system header: it is the only thing that would notice if a release
+        stopped bundling them."""
         smoke = read("tests/image_smoketest.sh")
         for header in ("<stddef.h>", "<stdlib.h>", "<string.h>", "<cstddef>"):
             assert header in smoke, (
@@ -690,9 +705,10 @@ class TestSkillInstaller:
 
 
 class TestActHarness:
-    """Local Action testing on arm64, which is otherwise impossible: the
-    action installs ESBMC by download, and upstream publishes no arm64 Linux
-    binary, so it correctly refuses before anything can be exercised."""
+    """Local Action testing on arm64 with the image's own checker, from the
+    days when upstream published no arm64 Linux binary and the action
+    refused to run there. Since ESBMC 8.6 the action downloads one, but the
+    harness still exercises the reuse-an-esbmc-on-PATH route."""
 
     PATH = "tests/act_local.sh"
 

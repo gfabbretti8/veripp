@@ -1,5 +1,9 @@
 """The action's checker install step, run per platform.
 
+Linux gets the release binary for its architecture: x86_64, and since ESBMC
+8.6 arm64 too, which the step used to refuse because the only prebuilt arm64
+build was the unsound Homebrew 8.4 bottle.
+
 On a macOS runner it downloaded esbmc-macos.zip -- a build that links against
 Homebrew's libraries by absolute path, which is why `veripp install-checker`
 refuses to install it: unzipped anywhere else it does not start. The job then
@@ -48,7 +52,7 @@ def _install(tmp_path, runner_os: str, machine: str):
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "HOME": str(tmp_path),
-        "ESBMC_VERSION": "weekly",
+        "ESBMC_VERSION": "v8.6",
     }
     done = subprocess.run(
         ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
@@ -67,12 +71,27 @@ def test_macos_fails_with_directions_instead_of_fetching_a_dead_binary(tmp_path,
     assert "already on PATH" in printed
 
 
-def test_linux_x86_64_still_fetches_the_weekly_build(tmp_path):
+def test_linux_x86_64_fetches_the_x86_64_release_binary(tmp_path):
     _, _, urls = _install(tmp_path, "Linux", "x86_64")
-    assert urls == ["https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip"]
+    assert urls == ["https://github.com/esbmc/esbmc/releases/download/v8.6/esbmc-linux.zip"]
 
 
-def test_linux_arm64_still_says_why_it_cannot(tmp_path):
-    code, printed, urls = _install(tmp_path, "Linux", "aarch64")
-    assert code != 0 and urls == []
-    assert "esbmc#6508" in printed
+@pytest.mark.parametrize("machine", ["aarch64", "arm64"])
+def test_linux_arm64_fetches_the_arm64_release_binary(tmp_path, machine):
+    _, _, urls = _install(tmp_path, "Linux", machine)
+    assert urls == ["https://github.com/esbmc/esbmc/releases/download/v8.6/esbmc-linux-armv8.zip"]
+
+
+def test_the_default_version_is_the_one_veripp_pins(tmp_path):
+    from veripp.checker import ESBMC_RELEASE
+
+    steps = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))
+    assert steps["inputs"]["esbmc-version"]["default"] == ESBMC_RELEASE
+
+
+def test_the_cache_key_tells_the_architectures_apart():
+    """x86_64 and arm64 runners share an OS; a cache keyed on the OS alone
+    would restore a binary the other cannot execute."""
+    steps = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))["runs"]["steps"]
+    cache = next(step for step in steps if step.get("id") == "cache-esbmc")
+    assert "runner.arch" in cache["with"]["key"]

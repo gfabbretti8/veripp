@@ -26,10 +26,26 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-#: The `weekly` tag is a rolling build cut from master. Despite the name it is
-#: cut infrequently -- but it is the only published build that carries the
-#: esbmc#6508 fix, so it is what veripp installs.
-WEEKLY = "https://github.com/esbmc/esbmc/releases/download/weekly"
+#: The ESBMC release veripp installs, and the one every workflow and the
+#: container image pin. 8.4 is the floor nobody should go below (esbmc#6508);
+#: 8.5 and later carry the fix, and from 8.6 upstream publishes a static
+#: Linux binary for arm64 as well as x86_64. A release's assets are immutable,
+#: unlike the `weekly` tag, which is re-cut in place under one name -- so a
+#: digest pinned here stays true.
+ESBMC_RELEASE = "v8.6"
+RELEASE_URL = f"https://github.com/esbmc/esbmc/releases/download/{ESBMC_RELEASE}"
+
+#: SHA-256 of the Linux assets of that release. `install` refuses a download
+#: that does not match: the only way those bytes change is someone replacing
+#: the asset, and a checker is the one program nobody should take on trust.
+#: checker/*.sha256 hold the same digests for the workflows and the image; a
+#: test keeps the two in step.
+PINNED_SHA256 = {
+    "esbmc-linux.zip":
+        "07b00b4a2590fe285edb5ce063ca2e5fbb368bbe556cfe139014c173717637f6",
+    "esbmc-linux-armv8.zip":
+        "d3e9fbdeba2ba6cfeb54b32c8fb8a9cd8125f6c5f92fbf05a212a4c2289fcc12",
+}
 
 
 @dataclass(frozen=True)
@@ -40,6 +56,8 @@ class Source:
     #: Set when no relocatable prebuilt exists: what to do instead.
     unavailable_reason: str | None = None
     binary_name: str = "esbmc"
+    #: The digest the download must have, where the release is pinned.
+    sha256: str | None = None
 
     @property
     def available(self) -> bool:
@@ -83,19 +101,20 @@ def managed_esbmc() -> str | None:
 def source_for(system: str | None = None, machine: str | None = None) -> Source:
     """The download for this platform, or the reason there is not one.
 
-    Architecture is not a detail here. ESBMC publishes one Linux binary and it
-    is x86_64; handing an aarch64 user that URL gets them a download that will
-    not run. The only prebuilt arm64 Linux ESBMC anywhere is the Homebrew
-    bottle, pinned to the unsound 8.4 -- installing that would trade a loud
-    failure for a quiet one, so this refuses instead.
+    Linux gets the release's static binary for its architecture: upstream
+    publishes x86_64 and, since 8.6, arm64 (`esbmc-linux-armv8.zip`). Before
+    that the only prebuilt arm64 Linux ESBMC was the Homebrew bottle at the
+    unsound 8.4, and this refused rather than install it.
     """
     system = system or platform.system()
     machine = (machine or platform.machine()).lower()
 
     if system == "Linux" and machine in ("x86_64", "amd64"):
-        return Source(url=f"{WEEKLY}/esbmc-linux.zip")
+        return _release("esbmc-linux.zip")
+    if system == "Linux" and machine in ("aarch64", "arm64", "armv8", "armv8l"):
+        return _release("esbmc-linux-armv8.zip")
     if system == "Windows":
-        return Source(url=f"{WEEKLY}/esbmc-windows.zip", binary_name="esbmc.exe")
+        return _release("esbmc-windows.zip", binary_name="esbmc.exe")
     if system == "Darwin":
         # The macOS release zip links against Homebrew's z3/gmp/mpfr by
         # absolute path, so it is not relocatable: unzipping it elsewhere
@@ -114,10 +133,18 @@ def source_for(system: str | None = None, machine: str | None = None) -> Source:
         url=None,
         unavailable_reason=(
             f"no prebuilt ESBMC is published for {system}/{machine}.\n"
-            "  use the container, which carries one built from source:\n"
+            "  use the container, which carries one for x86_64 and arm64:\n"
             '    docker run --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp '
             "scan src/parser.c"
         ),
+    )
+
+
+def _release(asset: str, binary_name: str = "esbmc") -> Source:
+    return Source(
+        url=f"{RELEASE_URL}/{asset}",
+        binary_name=binary_name,
+        sha256=PINNED_SHA256.get(asset),
     )
 
 
@@ -158,10 +185,8 @@ def _locate_binary(root: Path, binary_name: str) -> Path | None:
 def download(url: str, dest: Path, opener=urllib.request.urlopen) -> str:
     """Fetch `url` to `dest`, returning the SHA-256 of what arrived.
 
-    The digest is recorded rather than checked against a pin: `weekly` is a
-    rolling tag, so a pinned hash would be wrong by design within weeks. What
-    is recorded is what was installed, which is the question asked after the
-    fact.
+    The caller compares it with the pin where there is one, and records it
+    either way: what was installed is the question asked after the fact.
     """
     digest = hashlib.sha256()
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -213,6 +238,21 @@ def install(
         digest = download(source.url, archive, opener=opener)
     except Exception as exc:  # network, DNS, HTTP -- all the same to the user
         return InstallResult(path=None, error=f"could not download {source.url}: {exc}")
+    if source.sha256 and digest != source.sha256:
+        # A release asset does not change. One that has is not the checker
+        # this veripp was tested with, whatever else it may be.
+        shutil.rmtree(staging, ignore_errors=True)
+        return InstallResult(
+            path=None,
+            sha256=digest,
+            error=(
+                f"{source.url} does not match the digest veripp pins for it:\n"
+                f"  expected {source.sha256}\n"
+                f"  got      {digest}\n"
+                "  Nothing was installed. If upstream really re-published the "
+                "asset, the pin in veripp needs a reviewed bump."
+            ),
+        )
 
     unpacked = staging / "unpacked"
     shutil.rmtree(unpacked, ignore_errors=True)
@@ -274,15 +314,13 @@ DOCKER_HINT = (
 def install_hint() -> str:
     """The exact command for *this* machine, not a link to go read.
 
-    Architecture matters more than it looks. ESBMC publishes one Linux binary
-    and it is x86_64; handing an aarch64 user that URL gets them a download
-    that will not execute. The only prebuilt arm64 Linux ESBMC anywhere is the
-    Homebrew bottle, pinned to 8.4, which is the release that silently misses
-    out-of-bounds writes (esbmc#6508) -- so recommending it would trade a
-    clear failure for a quiet one. On that platform the image is the answer.
+    Architecture still matters: the Linux release comes as one binary per
+    architecture, and handing an arm64 user the x86_64 URL gets them a
+    download that will not execute. Where veripp can fetch and probe the
+    right one itself -- Linux x86_64 and arm64, Windows -- that is the whole
+    instruction.
     """
-    # Where veripp can fetch and probe a checker itself, that is the whole
-    # instruction: one command, and it refuses to keep an unsound build.
+    # One command, and it refuses to keep a download that fails the probes.
     if source_for().available:
         return "veripp install-checker"
 
@@ -294,29 +332,11 @@ def install_hint() -> str:
         # absolute path, so it is not relocatable; brew is the only sane route.
         return "brew install --HEAD esbmc"
 
-    if system == "Linux" and machine in ("x86_64", "amd64"):
-        return (
-            "curl -fsSL -o /tmp/esbmc.zip "
-            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip "
-            "&& unzip -q /tmp/esbmc.zip -d ~/.local/esbmc "
-            "&& chmod +x ~/.local/esbmc/*/bin/esbmc"
-        )
-
-    if system == "Windows":
-        # esbmc-windows.zip is published on every release; the CLI itself is
-        # pure Python and portable, so this is the whole install.
-        return (
-            "curl.exe -L -o esbmc.zip "
-            "https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-windows.zip "
-            "&& tar -xf esbmc.zip "
-            "&& (add the folder containing esbmc.exe to PATH)"
-        )
-
     if system == "Linux":
         return (
             f"{DOCKER_HINT}\n"
             f"      (no prebuilt ESBMC is published for Linux/{machine}; the image "
-            "carries one built from source)"
+            "is built for x86_64 and arm64)"
         )
 
     return DOCKER_HINT

@@ -2,19 +2,18 @@ name: ci
 on: [push, pull_request]
 
 env:
-  # We track `weekly` rather than the v8.4 release because 8.4 carries
-  # esbmc#6508 -- it silently misses out-of-bounds writes to a member array
-  # indexed by another member of the same object, which is the ordinary
-  # container idiom and exactly the code veripp is pointed at.
-  #
-  # `weekly` is newer than 8.4 and passes our soundness probe, but do not read
-  # it as "master": despite the name it is cut infrequently, and re-cut in
-  # place under the same name. So which build CI runs is pinned by digest,
-  # in one place, checker/esbmc-linux.zip.sha256 -- at present the build
-  # whose assets were uploaded on 2026-10-26 -- and taking a newer one is a reviewed
-  # bump of that file. `veripp doctor` still re-checks the checker
-  # behaviourally on every run instead of trusting a version string.
-  ESBMC_VERSION: weekly
+  # The ESBMC release under test, in step with ESBMC_RELEASE in
+  # src/veripp/checker.py, the Dockerfile and action.yml (a test checks).
+  # Not 8.4: that release carries esbmc#6508 -- it silently misses
+  # out-of-bounds writes to a member array indexed by another member of the
+  # same object, the ordinary container idiom and exactly the code veripp is
+  # pointed at. 8.5 fixed it, and 8.6 is the first release with a static
+  # arm64 Linux binary. Which exact bytes CI runs is pinned by digest in
+  # checker/esbmc-linux.zip.sha256; a release's assets do not change, so a
+  # mismatch there means the download is not what it claims to be. `veripp
+  # doctor` still re-checks the checker behaviourally on every run instead of
+  # trusting a version string.
+  ESBMC_VERSION: v8.6
 
 jobs:
   test:
@@ -42,9 +41,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/esbmc
-          # Keyed on this file and the pinned digest, not a date: bumping
-          # either rotates the cache. `veripp doctor` still re-probes the
-          # checker's soundness on every run, cached or not.
+          # Keyed on this file and the pinned digest: bumping either rotates
+          # the cache. `veripp doctor` still re-probes the checker's soundness
+          # on every run, cached or not.
           key: esbmc-${{ env.ESBMC_VERSION }}-linux-${{ hashFiles('.github/workflows/ci.yml', 'checker/esbmc-linux.zip.sha256') }}
 
       # zsh is not on the runner image, and without it the zsh completion is
@@ -58,10 +57,9 @@ jobs:
           mkdir -p ~/.local/esbmc
           curl -fsSL -o /tmp/esbmc.zip \
             "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/esbmc-linux.zip"
-          # `weekly` is re-cut in place under the same name, so the tag says
-          # nothing about which build arrived. The digest does, and a new
-          # build is a one-line reviewed bump of checker/esbmc-linux.zip.sha256
-          # instead of something every workflow silently picks up.
+          # The bytes CI tested are the bytes everything else pins: a new
+          # release is a reviewed bump of checker/esbmc-linux.zip.sha256,
+          # not something every workflow silently picks up.
           echo "$(cat checker/esbmc-linux.zip.sha256)  /tmp/esbmc.zip" | sha256sum -c -
           unzip -q /tmp/esbmc.zip -d ~/.local/esbmc
           chmod +x "$(find ~/.local/esbmc -name esbmc -type f | head -1)"
@@ -155,7 +153,7 @@ jobs:
 
       - name: Fetch ESBMC for Windows
         run: |
-          curl.exe -L -o esbmc.zip https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-windows.zip
+          curl.exe -L -o esbmc.zip https://github.com/esbmc/esbmc/releases/download/$env:ESBMC_VERSION/esbmc-windows.zip
           tar -xf esbmc.zip
           Get-ChildItem -Recurse -Filter esbmc.exe | Select-Object -First 1 -ExpandProperty DirectoryName |
             Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append

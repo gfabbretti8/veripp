@@ -2095,7 +2095,7 @@ def _doctor(allow_unsound: bool = False) -> int:
             "\nWARNING: this esbmc silently misses "
             + ", ".join(unsound)
             + ".\n'verified' results covering that pattern are NOT trustworthy "
-            "(esbmc/esbmc#6508 is fixed upstream but in no release yet).\n"
+            "(esbmc/esbmc#6508 is fixed in ESBMC 8.5 and later).\n"
             f"  upgrade with:  {install_hint()}",
             file=sys.stderr,
         )

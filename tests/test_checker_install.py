@@ -24,10 +24,20 @@ from veripp.checker import Source, install, managed_esbmc, source_for
 
 
 class TestPlatformSelection:
-    def test_linux_x86_64_gets_the_weekly_build(self):
+    def test_linux_x86_64_gets_the_pinned_release(self):
+        from veripp.checker import ESBMC_RELEASE, PINNED_SHA256
+
         src = source_for("Linux", "x86_64")
         assert src.available and src.url.endswith("esbmc-linux.zip")
-        assert "weekly" in src.url  # the release is 8.4 and unsound
+        assert f"/{ESBMC_RELEASE}/" in src.url
+        assert src.sha256 == PINNED_SHA256["esbmc-linux.zip"]
+
+    def test_the_release_is_not_the_unsound_one(self):
+        """8.4 carries esbmc#6508; 8.5 fixed it and 8.6 added arm64."""
+        from veripp.checker import ESBMC_RELEASE
+
+        major, minor = (int(x) for x in ESBMC_RELEASE.lstrip("v").split(".")[:2])
+        assert (major, minor) >= (8, 6)
 
     def test_windows_gets_an_exe(self):
         src = source_for("Windows", "AMD64")
@@ -39,12 +49,35 @@ class TestPlatformSelection:
         assert "brew install --HEAD" in src.unavailable_reason
         assert "NOT `brew install esbmc`" in src.unavailable_reason
 
-    def test_linux_arm64_refuses_rather_than_installing_8_4(self):
-        """The only prebuilt arm64 Linux ESBMC is the Homebrew bottle, pinned
-        to the release that misses member-array writes."""
-        src = source_for("Linux", "aarch64")
+    @pytest.mark.parametrize("machine", ["aarch64", "arm64"])
+    def test_linux_arm64_gets_the_arm64_release_binary(self, machine):
+        """Until 8.6 the only prebuilt arm64 Linux ESBMC was the Homebrew
+        bottle at 8.4, and this refused rather than install it. 8.6 publishes
+        a static arm64 binary of its own."""
+        from veripp.checker import PINNED_SHA256
+
+        src = source_for("Linux", machine)
+        assert src.available and src.url.endswith("esbmc-linux-armv8.zip")
+        assert src.sha256 == PINNED_SHA256["esbmc-linux-armv8.zip"]
+
+    def test_the_two_linux_binaries_are_different_downloads(self):
+        x86, arm = source_for("Linux", "x86_64"), source_for("Linux", "aarch64")
+        assert x86.url != arm.url and x86.sha256 != arm.sha256
+
+    def test_an_unknown_architecture_is_sent_to_the_image(self):
+        src = source_for("Linux", "riscv64")
         assert not src.available
         assert "docker" in src.unavailable_reason.lower()
+
+    def test_the_pins_match_the_files_the_workflows_read(self):
+        """One digest per asset, in two places: checker.py for
+        `install-checker`, checker/*.sha256 for CI and the image."""
+        from veripp.checker import PINNED_SHA256
+
+        root = Path(__file__).resolve().parent.parent / "checker"
+        for asset, digest in PINNED_SHA256.items():
+            pinned = (root / f"{asset}.sha256").read_text(encoding="utf-8").strip()
+            assert pinned == digest, asset
 
 
 def _release_zip(path: Path, script: str, name: str = None) -> Path:
@@ -75,6 +108,40 @@ class TestInstall:
         assert "MISSES" in result.error
         assert "member-array bounds" in result.error
         assert not (dest / "bin" / EXE).exists(), "unsound binary was kept"
+
+    def test_a_download_that_does_not_match_its_pin_is_refused(self, tmp_path, monkeypatch):
+        """A release asset never changes. One that has is not the checker
+        veripp was tested with, so it is not probed, let alone installed."""
+        archive = _release_zip(tmp_path / "rel.zip", "#!/bin/sh\nexit 0\n")
+        probed = []
+        monkeypatch.setattr("veripp.esbmc.check_soundness",
+                            lambda binary, **kw: probed.append(binary) or {})
+        dest = tmp_path / "install"
+        result = install(
+            dest=dest,
+            source=Source(url="http://x/rel.zip", binary_name=EXE, sha256="0" * 64),
+            opener=_opener_for(archive),
+        )
+        assert not result.ok
+        assert "does not match the digest" in result.error
+        assert "0" * 64 in result.error and result.sha256 in result.error
+        assert probed == [], "a mismatched download was still run"
+        assert not (dest / "bin").exists() and not (dest / "download").exists()
+
+    def test_a_download_that_matches_its_pin_is_installed(self, tmp_path, monkeypatch):
+        import hashlib
+
+        archive = _release_zip(tmp_path / "rel.zip", "#!/bin/sh\nexit 0\n")
+        monkeypatch.setattr("veripp.esbmc.check_soundness",
+                            lambda binary, **kw: {"local-array bounds": True})
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        result = install(
+            dest=tmp_path / "install",
+            source=Source(url="http://x/rel.zip", binary_name=EXE, sha256=digest),
+            opener=_opener_for(archive),
+        )
+        assert result.ok, result.error
+        assert result.sha256 == digest
 
     def test_a_sound_checker_is_installed_and_found(self, tmp_path, monkeypatch):
         archive = _release_zip(tmp_path / "rel.zip", "#!/bin/sh\nexit 0\n")

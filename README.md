@@ -45,17 +45,18 @@ veripp doctor          # checks the setup and probes the checker for known sound
 ```
 
 On Linux (x86_64 and aarch64) the ESBMC checker comes bundled with the
-install. On macOS and Windows there is no bundled checker yet, so fetch one
-with:
+install. On Windows there is no bundled checker yet, so fetch one with:
 
 ```bash
 veripp install-checker
 ```
 
-It downloads ESBMC's [`weekly`](https://github.com/esbmc/esbmc/releases/tag/weekly)
-build and keeps it only if the checker rejects every one of a set of
-known-failing programs. Avoid the ESBMC 8.4 release, including
-`brew install esbmc`: it silently misses some out-of-bounds writes
+It downloads the [ESBMC 8.6](https://github.com/esbmc/esbmc/releases/tag/v8.6)
+release binary for your architecture (Linux x86_64 and arm64, Windows),
+checks it against the digest veripp pins, and keeps it only if the checker
+rejects every one of a set of known-failing programs. On macOS the only
+sound route is `brew install --HEAD esbmc`. Avoid the ESBMC 8.4 release,
+including `brew install esbmc`: it silently misses some out-of-bounds writes
 ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)). `doctor` detects
 this.
 
@@ -212,10 +213,10 @@ has the details.
 ## In CI
 
 The action installs a checker, runs `veripp doctor` (so a broken checker
-fails the job) and then scans. It installs one on x86_64 Linux runners;
-anywhere else it uses an `esbmc` already on PATH. On macOS that means an
-earlier `brew install --HEAD esbmc` step, since the only sound macOS build is
-compiled from source. This workflow uses a baseline and annotates
+fails the job) and then scans. It installs one on Linux runners, x86_64 and
+arm64 alike; anywhere else it uses an `esbmc` already on PATH. On macOS that
+means an earlier `brew install --HEAD esbmc` step, since the only sound macOS
+build is compiled from source. This workflow uses a baseline and annotates
 the pull-request diff through SARIF:
 
 ```yaml

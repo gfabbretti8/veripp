@@ -48,7 +48,7 @@ def _digest_file(path: Path, into: hashlib._Hash) -> None:
 
 
 #: Checker digests already computed, by path, size, mtime and inode. The
-#: binary runs to hundreds of megabytes -- the Linux `weekly` build is 650MB,
+#: binary runs to hundreds of megabytes -- the Linux 8.6 build is 700MB,
 #: nearly two seconds to hash -- and a tree scan asks once per file, so each
 #: is hashed once per process and remembered in the cache directory after.
 _CHECKER_DIGESTS: dict[str, str] = {}

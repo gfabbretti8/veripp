@@ -9,9 +9,9 @@ on:
     tags: ["v*"]
 
 env:
-  # Kept in lockstep with ci.yml -- see the comment there for why `weekly`
-  # and not the 8.4 release (esbmc#6508, silently missed OOB writes).
-  ESBMC_VERSION: weekly
+  # Kept in lockstep with ci.yml -- see the comment there for why this
+  # release and not 8.4 (esbmc#6508, silently missed OOB writes).
+  ESBMC_VERSION: v8.6
 
 jobs:
   test:

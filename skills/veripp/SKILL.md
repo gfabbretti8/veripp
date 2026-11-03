@@ -238,7 +238,7 @@ which you will not be.
 **Show the user that plan and get agreement before running it with `--yes`.**
 The dry report above needs no permission; the `--yes` form deliberately does.
 Every route is expensive in a way worth consenting to: the image is a
-450-540 MB pull, the Linux x86_64 ESBMC is a 235 MB download, and on macOS
+450-540 MB pull, the Linux ESBMC is a 215-250 MB download, and on macOS
 `brew install --HEAD esbmc` is a source build measured in tens of minutes that
 may drag in LLVM. None of that should start because an agent decided to be
 helpful.
@@ -248,7 +248,8 @@ Two things the script will tell you that are easy to get wrong on your own:
 - `brew install esbmc` (without `--HEAD`) gives you 8.4, which silently misses
   out-of-bounds writes (esbmc/esbmc#6508). A "verified" from it is worthless,
   which is why `veripp doctor` probes for it.
-- Linux/arm64 has no prebuilt ESBMC at all. Use the image there.
+- Linux/arm64 has a prebuilt ESBMC only from release 8.6 on
+  (`esbmc-linux-armv8.zip`); `veripp install-checker` fetches that one.
 
 If the user would rather not install anything, the image needs nothing beyond
 docker:

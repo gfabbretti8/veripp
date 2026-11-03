@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Assemble a relocatable ESBMC payload for a Linux wheel.
 #
-# The binary comes from veripp's own image, which builds ESBMC from source
-# with Z3 only -- no Boolector, Bitwuzla, MathSAT or Yices. That is not an
-# optimisation: ESBMC's COPYING notes that MathSAT is academic/non-commercial
-# and Yices is personal-use or GPL3, so the fat official release is the one
-# that cannot be redistributed. The slim build is both smaller and clean.
+# The binary comes from veripp's own image: ESBMC's static Linux release
+# build for the architecture, digest-checked and stripped there. ESBMC's
+# COPYING notes that MathSAT is academic/non-commercial and Yices is
+# personal-use or GPL3, so below this checks the binary carries neither
+# before packaging it -- the 8.6 release builds ship Z3 and Boolector only.
 #
 #   ./build_linux_payload.sh <image> <outdir>
 set -euo pipefail

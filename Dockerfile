@@ -1,185 +1,55 @@
 #
 # veripp — AI-driven formal verification for C/C++, built on ESBMC.
 #
-# Multi-architecture by construction, but the two architectures are NOT
-# built the same way, and the reason matters:
+# Multi-architecture, and since ESBMC 8.6 both architectures are built the
+# same way: upstream publishes a static Linux binary for x86_64
+# (esbmc-linux.zip) and for arm64 (esbmc-linux-armv8.zip) on every release,
+# and the image downloads the one for its platform. Until 8.6 there was no
+# arm64 Linux binary anywhere but the Homebrew 8.4 bottle -- which silently
+# misses out-of-bounds writes (esbmc/esbmc#6508) -- so the arm64 image used
+# to compile ESBMC from source; see the git history for that recipe.
 #
-#   linux/amd64  ESBMC publishes a prebuilt x86_64 binary on every `weekly`
-#                tag. We download it. Fast.
-#   linux/arm64  ESBMC publishes no arm64 Linux binary. The only prebuilt
-#                arm64 ESBMC anywhere is the Homebrew bottle, and that is
-#                pinned to the 8.4 release -- which silently misses
-#                out-of-bounds writes (esbmc/esbmc#6508) and is therefore
-#                unsound for our purposes. So on arm64 we build ESBMC from
-#                source. Configured as below -- without the frontends and test
-#                suites we do not ship -- that compile is about 3.5 minutes on
-#                four native arm64 cores, not the hour a full build.sh run
-#                costs. It is the only way to hand arm64 users a checker as
-#                sound as the one amd64 users get.
-#
-# Both paths land the same layout at /opt/esbmc/bin/esbmc, and `veripp doctor`
-# runs at build time on both, so an image that cannot detect a planted bug
-# never gets published.
+# Each download is checked against the digest pinned in checker/*.sha256
+# before it is unpacked, and `veripp doctor` runs at build time, so an image
+# whose checker cannot detect a planted bug never gets published.
 
-# The prebuilt amd64 asset comes from a release tag.
-ARG ESBMC_VERSION=weekly
-# The arm64 source build takes a git ref, and it is deliberately NOT `weekly`.
-# The weekly tag is described as rolling but is in practice cut infrequently --
-# at the time of writing it points at 2026-05-27, with master ~1900 commits
-# ahead. esbmc/esbmc#5252, which is what makes an arm64 Linux build possible at
-# all (SVE builtin types, 32-bit libc, Solidity stub), merged 2026-06-09, two
-# weeks after that tag. Building `weekly` on arm64 therefore fails on the very
-# bug whose fix is already upstream.
-ARG ESBMC_SOURCE_REF=master
-# Compile parallelism for the arm64 source build. Left empty, it is derived
-# from the builder's memory rather than its core count: linking LLVM-heavy
-# objects wants roughly 2GB per job, so ninja's default of one job per core
-# runs a 6GB machine out of memory ("cannot allocate memory") long before it
-# runs out of CPU. Set it explicitly to override.
-ARG ESBMC_BUILD_JOBS=
+# The release the binaries come from. Kept in step with ESBMC_RELEASE in
+# src/veripp/checker.py and the workflows; a test checks they agree.
+ARG ESBMC_VERSION=v8.6
 ARG UBUNTU=24.04
 
-# ---------------------------------------------------------------- amd64 ----
-FROM ubuntu:${UBUNTU} AS esbmc-amd64
+# --------------------------------------------------------------- esbmc ----
+FROM ubuntu:${UBUNTU} AS esbmc
 ARG ESBMC_VERSION
+# TARGETARCH is supplied by buildkit: amd64 | arm64.
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip binutils \
     && rm -rf /var/lib/apt/lists/*
-# The build every workflow pins (see .github/workflows/ci.yml): `weekly` is
-# re-cut in place, and this image is where the checker wheels take their
-# binary from, so an unpinned download here would reach every pip install.
-COPY checker/esbmc-linux.zip.sha256 /tmp/esbmc.zip.sha256
+# The digests every workflow pins (see .github/workflows/ci.yml). This image
+# is where the checker wheels take their binary from, so an unchecked
+# download here would reach every pip install.
+COPY checker/esbmc-linux.zip.sha256 checker/esbmc-linux-armv8.zip.sha256 /tmp/pins/
 RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) asset=esbmc-linux.zip ;; \
+      arm64) asset=esbmc-linux-armv8.zip ;; \
+      *) echo "no ESBMC release binary for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
     curl -fsSL -o /tmp/esbmc.zip \
-      "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/esbmc-linux.zip"; \
-    echo "$(cat /tmp/esbmc.zip.sha256)  /tmp/esbmc.zip" | sha256sum -c -; \
+      "https://github.com/esbmc/esbmc/releases/download/${ESBMC_VERSION}/${asset}"; \
+    echo "$(cat "/tmp/pins/${asset}.sha256")  /tmp/esbmc.zip" | sha256sum -c -; \
     mkdir -p /tmp/unz && unzip -q /tmp/esbmc.zip -d /tmp/unz; \
     bin="$(find /tmp/unz -name esbmc -type f | head -1)"; \
     test -n "$bin"; \
-    mkdir -p /opt/esbmc/bin /opt/esbmc/lib && cp "$bin" /opt/esbmc/bin/esbmc; \
+    mkdir -p /opt/esbmc/bin && cp "$bin" /opt/esbmc/bin/esbmc; \
     chmod +x /opt/esbmc/bin/esbmc; \
-    rm -rf /tmp/esbmc.zip /tmp/unz
-# The published binary is static and unstripped: 604MB, of which 455MB is
-# debug symbols nobody debugging *their own C code* will ever read. Verified
-# that the stripped binary still passes `veripp doctor`.
+    rm -rf /tmp/esbmc.zip /tmp/unz /tmp/pins
+# The published binaries are static and unstripped: ~700MB on x86_64, most
+# of it debug symbols nobody debugging *their own C code* will ever read.
+# The stripped binary still passes `veripp doctor`, which the build checks.
 RUN strip --strip-unneeded /opt/esbmc/bin/esbmc && du -h /opt/esbmc/bin/esbmc
-# The prebuilt binary carries its own headers; nothing to overlay.
-RUN mkdir -p /opt/esbmc/overlay
-
-# ---------------------------------------------------------------- arm64 ----
-# Mirrors esbmc's own .github/workflows/release.yml `build-linux-arm64` job,
-# which is the only arm64 Linux build recipe the project actually exercises.
-FROM ubuntu:${UBUNTU} AS esbmc-arm64
-ARG ESBMC_SOURCE_REF
-ARG ESBMC_BUILD_JOBS
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git wget gnupg unzip \
-        build-essential cmake ninja-build python3 python3-dev \
-        bison flex libboost-all-dev libgmp-dev libssl-dev libz3-dev \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-RUN set -eux; \
-    wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-      | gpg --dearmor -o /usr/share/keyrings/llvm.gpg; \
-    echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
-      > /etc/apt/sources.list.d/llvm.list; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      llvm-22 llvm-22-dev clang-22 libclang-22-dev libclang-cpp22-dev; \
-    rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 --branch "${ESBMC_SOURCE_REF}" \
-      https://github.com/esbmc/esbmc.git /src/esbmc
-WORKDIR /src/esbmc
-
-# Configured directly rather than through ./scripts/build.sh. That script
-# targets the project's own CI and turns on the regression suite, csmith, and
-# the Solidity/Jimple/Python frontends, none of which we ship -- and on arm64
-# two of its defaults are fatal:
-#
-#   ENABLE_BUNDLE_LIBC_32BIT  builds a 32-bit libc model, which needs 32-bit
-#                             headers that do not exist on arm64 (build.sh
-#                             itself skips g++-multilib there, then asks for
-#                             the model anyway). Homebrew's formula turns this
-#                             off on Linux for the same reason.
-#   ENABLE_PYTHON_FRONTEND    pulls library/python/*.c into the libc model.
-#
-# These flags mirror Homebrew's esbmc formula, which is the configuration
-# known to produce a working arm64 Linux build.
-RUN set -eux; \
-    cmake -S . -B build -GNinja \
-      -DDOWNLOAD_DEPENDENCIES=On \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-      -DENABLE_BUNDLE_LIBC_32BIT=OFF \
-      -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm \
-      -DClang_DIR=/usr/lib/cmake/clang-22 \
-      -DENABLE_Z3=ON -DZ3_DIR=/usr \
-      -DENABLE_BOOLECTOR=OFF \
-      -DENABLE_BITWUZLA=OFF \
-      -DENABLE_GOTO_CONTRACTOR=OFF \
-      -DENABLE_PYTHON_FRONTEND=OFF \
-      -DENABLE_SOLIDITY_FRONTEND=OFF \
-      -DENABLE_JIMPLE_FRONTEND=OFF \
-      -DENABLE_CSMITH=OFF \
-      -DENABLE_FUZZER=OFF \
-      -DBUILD_TESTING=OFF \
-      -DENABLE_REGRESSION=OFF \
-      -DBUILD_STATIC=OFF \
-      -DENABLE_WERROR=OFF \
-      -DCMAKE_INSTALL_PREFIX=/opt/esbmc; \
-    jobs="${ESBMC_BUILD_JOBS:-}"; \
-    if [ -z "$jobs" ]; then \
-      cpus="$(nproc)"; \
-      mem_gb="$(awk '/MemTotal/ {printf "%d", $2/1048576}' /proc/meminfo)"; \
-      jobs="$(( mem_gb / 2 ))"; \
-      [ "$jobs" -lt 1 ] && jobs=1; \
-      [ "$jobs" -gt "$cpus" ] && jobs="$cpus"; \
-    fi; \
-    echo "building esbmc with -j$jobs"; \
-    cmake --build build --parallel "$jobs"; \
-    cmake --install build
-# BUILD_STATIC=OFF (as Homebrew does) leaves esbmc linked against LLVM and
-# clang shared objects that come from apt.llvm.org, not stock Ubuntu. Rather
-# than add that repository to the runtime image -- which the amd64 half, a
-# static binary, has no use for -- bundle exactly what ldd asks for that the
-# runtime will not already have, and let each architecture hand the runtime a
-# self-contained /opt/esbmc tree.
-RUN set -eux; \
-    mkdir -p /opt/esbmc/lib; \
-    for lib in $(ldd /opt/esbmc/bin/esbmc | awk '/=>/ {print $3}'); do \
-      case "$lib" in \
-        */libLLVM*|*/libclang*) cp -L "$lib" /opt/esbmc/lib/ ;; \
-      esac; \
-    done; \
-    strip --strip-unneeded /opt/esbmc/bin/esbmc /opt/esbmc/lib/*; \
-    du -sh /opt/esbmc
-
-# Built against a system LLVM, esbmc hard-codes the path to clang's resource
-# headers -- its own libc headers #include_next onto them. Without that
-# directory, every translation unit that reaches a real system header dies
-# with "'stddef.h' file not found" while self-contained files pass, so the
-# image looks healthy and cannot verify a line of real code.
-#
-# It has to be the actual directory at the actual path. A symlink there does
-# not satisfy clang's header search (tried), and -DESBMC_CLANG_HEADERS_BUNDLED
-# does not help either (also tried). Stage it under a root that the runtime
-# overlays onto /.
-RUN set -eux; \
-    dir="$(dirname "$(find /usr/lib/llvm-22/lib/clang -name stddef.h | head -1)")"; \
-    test -n "$dir"; \
-    mkdir -p "/opt/esbmc/overlay$(dirname "$dir")"; \
-    cp -a "$dir" "/opt/esbmc/overlay$dir"; \
-    ls "/opt/esbmc/overlay$dir/stddef.h"
-
-
-RUN test -x /opt/esbmc/bin/esbmc \
-    && LD_LIBRARY_PATH=/opt/esbmc/lib /opt/esbmc/bin/esbmc --version
-
-# ------------------------------------------------------------ selector ----
-# TARGETARCH is supplied by buildkit: amd64 | arm64.
-ARG TARGETARCH
-FROM esbmc-${TARGETARCH} AS esbmc
+RUN test -x /opt/esbmc/bin/esbmc && /opt/esbmc/bin/esbmc --version
 
 # ------------------------------------------------------------- runtime ----
 FROM ubuntu:${UBUNTU} AS runtime
@@ -188,26 +58,17 @@ FROM ubuntu:${UBUNTU} AS runtime
 # *headers* -- a bare python image cannot resolve <string.h> and verifies
 # nothing -- but not gcc or g++ themselves. Confirmed by removing them and
 # re-running both a C and a C++ verification.
+# The checker is a static binary and brings its own clang resource headers,
+# so nothing else is needed for it: no solver or LLVM shared objects.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-venv libstdc++6 libgomp1 libgmp10 \
+        python3 python3-venv libstdc++6 libgmp10 \
         libc6-dev libstdc++-13-dev \
         ca-certificates \
-        libz3-4 libedit2 libxml2 libzstd1 liblzma5 libtinfo6 libffi8 \
-        libboost-filesystem1.83.0 libboost-program-options1.83.0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=esbmc /opt/esbmc /opt/esbmc
 
-# Put anything the checker expects at an absolute path back where it belongs.
-# Empty on amd64.
-RUN set -eux; \
-    if [ -d /opt/esbmc/overlay ] && [ -n "$(ls -A /opt/esbmc/overlay)" ]; then \
-      cp -a /opt/esbmc/overlay/. /; \
-    fi; \
-    rm -rf /opt/esbmc/overlay
-
-ENV PATH="/opt/veripp/bin:/opt/esbmc/bin:${PATH}" \
-    LD_LIBRARY_PATH="/opt/esbmc/lib"
+ENV PATH="/opt/veripp/bin:/opt/esbmc/bin:${PATH}"
 
 # veripp itself: a venv, so the image has no opinion about the system python.
 COPY . /src/veripp

@@ -7,6 +7,23 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## Unreleased
+
+### Changed: the checker
+- **ESBMC 8.6 everywhere**, pinned by tag and by digest, instead of the
+  rolling `weekly` tag. `veripp install-checker`, the GitHub Action, CI, the
+  release workflow and the container image all fetch the same release
+  binaries, and `install-checker` refuses a download whose SHA-256 is not
+  the one veripp pins.
+- **Linux arm64 gets a prebuilt checker.** ESBMC 8.6 publishes a static
+  arm64 Linux binary (`esbmc-linux-armv8.zip`), so `veripp install-checker`
+  installs it, the Action runs on arm64 runners such as `ubuntu-24.04-arm`,
+  and the `linux/arm64` image downloads it instead of compiling ESBMC from
+  source. The from-source recipe is gone from the Dockerfile; it remains in
+  the git history.
+- The Action's checker cache is keyed on the runner's architecture as well
+  as its OS, so an x86_64 cache can no longer be restored on an arm64 runner.
+
 ## 0.6.0
 
 Fewer false counterexamples on real-world C, and new options for C APIs that

@@ -8,12 +8,13 @@ pip install veripp
 
 is the entire installation of [veripp](https://github.com/gfabbretti8/veripp).
 
-This is a **slim build: Z3 only**. Boolector, Bitwuzla, MathSAT and Yices are
-not included. That keeps the wheel small, and it keeps redistribution simple —
-ESBMC's own `COPYING` notes that MathSAT is academic/non-commercial and Yices
-is personal-use or GPL3, while Z3 is MIT. ESBMC's own code is Apache-2.0 and
-the CBMC base it derives from is BSD-4-clause. All of those notices ship
-inside the wheel.
+The binary is ESBMC's own static Linux release build (8.6, for x86_64 and
+arm64), which carries Z3 and Boolector and **no MathSAT or Yices** —
+`build_linux_payload.sh` checks that before packaging, since ESBMC's own
+`COPYING` notes that MathSAT is academic/non-commercial and Yices is
+personal-use or GPL3, while Z3 and Boolector are MIT. ESBMC's own code is
+Apache-2.0 and the CBMC base it derives from is BSD-4-clause. All of those
+notices ship inside the wheel.
 
 Every wheel is built only from a checker that passes veripp's soundness
 probes: known-failing programs that the checker must reject. A build that
@@ -62,10 +63,10 @@ python3 checker/build_wheel.py --payload payload \
   --plat manylinux_2_38_aarch64 --license COPYING.esbmc --outdir dist
 ```
 
-Measured on arm64: a 16 MB binary plus 214 MB of LLVM, Clang and Z3, which
-compresses to an **87 MB wheel** — under PyPI's 100 MB per-file default, but
-not by much. The weight is Clang, which ESBMC uses as its C/C++ frontend, not
-ESBMC itself.
+The payload is one static binary, stripped in the image; the weight is
+Clang, which ESBMC uses as its C/C++ frontend, not ESBMC itself. The 0.1.0
+arm64 wheel, built from source with Z3 only, measured 87 MB; PyPI's per-file
+default is 100 MB, so check the size before tagging a checker release.
 
 macOS and Windows are not built yet. macOS should be the easiest of the three:
 its release zip is 10 MB and is non-relocatable only because it links

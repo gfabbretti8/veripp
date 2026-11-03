@@ -44,13 +44,12 @@ inputs:
     default: 'counterexample'
   esbmc-version:
     description: >-
-      ESBMC release tag. Defaults to `weekly`, because the v8.4 release
-      silently misses out-of-bounds writes in ordinary container code
-      (esbmc/esbmc#6508), which veripp checks for and refuses to build proofs
-      on. Note that `weekly` is cut infrequently despite the name, so it is
-      not the same as master; `veripp doctor` probes whichever build you get.
+      ESBMC release tag. Defaults to the release veripp is tested with. Do
+      not pass v8.4: it silently misses out-of-bounds writes in ordinary
+      container code (esbmc/esbmc#6508), which veripp checks for and refuses
+      to build proofs on. `veripp doctor` probes whichever build you name.
     required: false
-    default: 'weekly'
+    default: 'v8.6'
 
 outputs:
   outcome:
@@ -86,12 +85,15 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/veripp-esbmc
-        key: veripp-esbmc-${{ inputs.esbmc-version }}-${{ runner.os }}
+        # The architecture is part of the key: x86_64 and arm64 runners share
+        # an OS, and a cache from one would hand the other a binary that
+        # cannot execute.
+        key: veripp-esbmc-${{ inputs.esbmc-version }}-${{ runner.os }}-${{ runner.arch }}
 
     # A self-hosted runner, a prewarmed container, or an earlier step may
-    # already have one. Downloading 235MB over the top of a working checker
-    # helps nobody -- and on arm64, where no prebuilt exists, reusing what is
-    # there is the only way this action runs at all.
+    # already have one. Downloading 250MB over the top of a working checker
+    # helps nobody -- and on macOS, where no relocatable build exists, reusing
+    # what is there is the only way this action runs at all.
     - name: Use an ESBMC already on PATH
       id: existing
       shell: bash
@@ -115,6 +117,12 @@ runs:
         case "${{ runner.os }}:$arch" in
           Linux:x86_64|Linux:amd64)
             asset=esbmc-linux.zip ;;
+          Linux:aarch64|Linux:arm64)
+            # Static, like the x86_64 one, and published from 8.6 on. Before
+            # that the only prebuilt arm64 Linux ESBMC was the Homebrew 8.4
+            # bottle, which misses out-of-bounds writes (esbmc/esbmc#6508),
+            # and this action refused to run on arm64 rather than fetch it.
+            asset=esbmc-linux-armv8.zip ;;
           macOS:*)
             # ESBMC's macOS release zip links against Homebrew's z3, gmp and
             # mpfr by absolute path (see src/veripp/checker.py), so unzipped
@@ -125,24 +133,13 @@ runs:
             echo "::error::veripp's action cannot install ESBMC on macOS: the" \
                  "macOS release zip does not run outside Homebrew's prefix, and" \
                  'a sound build comes only from `brew install --HEAD esbmc`,' \
-                 "which compiles it from source. Run the action on an x86_64" \
-                 "Linux runner such as ubuntu-latest, or install ESBMC in an" \
-                 "earlier step -- the action reuses an esbmc already on PATH."
-            exit 1 ;;
-          Linux:aarch64|Linux:arm64)
-            # esbmc publishes no arm64 Linux binary, and the only prebuilt one
-            # anywhere (the Homebrew 8.4 bottle) silently misses out-of-bounds
-            # writes -- esbmc/esbmc#6508 -- which is exactly what veripp is
-            # for. Say so instead of downloading an x86_64 binary that cannot
-            # execute and failing three steps later with "exec format error".
-            echo "::error::veripp's action needs an x86_64 Linux runner:" \
-                 "upstream publishes no arm64 Linux ESBMC binary, and" \
-                 "the only prebuilt arm64 build is unsound (esbmc/esbmc#6508)." \
-                 "On an arm64 runner, use the container image instead:" \
-                 "docker run --rm -v \"\$PWD:/src\" ghcr.io/gfabbretti8/veripp scan FILE"
+                 "which compiles it from source. Run the action on a Linux" \
+                 "runner such as ubuntu-latest or ubuntu-24.04-arm, or install" \
+                 "ESBMC in an earlier step -- the action reuses an esbmc already" \
+                 "on PATH."
             exit 1 ;;
           *)
-            echo "::error::veripp's action installs ESBMC on x86_64 Linux runners only (got ${{ runner.os }}/$arch)"
+            echo "::error::veripp's action installs ESBMC on Linux x86_64 and arm64 runners only (got ${{ runner.os }}/$arch)"
             exit 1 ;;
         esac
         curl -fsSL -o /tmp/esbmc.zip \

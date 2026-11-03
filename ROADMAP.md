@@ -104,13 +104,13 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [ ] CppCon lightning talk / Show HN.
 
 Two things worth knowing before touching delivery:
-- The `weekly` ESBMC tag is not rolling: it is cut infrequently, and re-cut
-  in place under the same name. On 2026-08-24 it pointed at a commit from
-  2026-05-27, with master ~1900 commits ahead, which is why the arm64 image
-  builds from master: the fix that makes an arm64 build possible at all
-  (esbmc#5252) landed after that cut. It was re-cut on 2026-09-08 (a build
-  of 4e619b97) and again on 2026-10-26; CI pins the build it runs by digest
-  in `checker/esbmc-linux.zip.sha256`.
-- ESBMC publishes no arm64 Linux binary, and its `scripts/build.sh` does not
-  work on aarch64 in a clean container. `Dockerfile` configures cmake directly
-  instead; see the comments there for why each flag is set.
+- Everything pins one ESBMC release, 8.6, by tag and by digest: `ESBMC_RELEASE`
+  and `PINNED_SHA256` in `src/veripp/checker.py`, `checker/*.sha256` for the
+  workflows and the image, and a test that keeps them in step. veripp used
+  to track the `weekly` tag, which is re-cut in place under one name, so
+  nothing recorded which build a run used; a release's assets do not move.
+- Since 8.6 ESBMC publishes a static arm64 Linux binary
+  (`esbmc-linux-armv8.zip`), so the image, the Action and
+  `veripp install-checker` download it like the x86_64 one. Before that the
+  arm64 image compiled ESBMC from source with a hand-tuned cmake
+  configuration; it is in the git history if upstream ever stops publishing.

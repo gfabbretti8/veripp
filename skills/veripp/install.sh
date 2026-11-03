@@ -32,6 +32,9 @@ fi
 
 os="$(uname -s)"; arch="$(uname -m)"
 say "No veripp on PATH. Host: $os/$arch"
+# The release veripp is tested with. Not 8.4 (esbmc/esbmc#6508); 8.6 is the
+# first with a prebuilt arm64 Linux binary.
+ESBMC_RELEASE_URL="https://github.com/esbmc/esbmc/releases/download/v8.6"
 say ""
 
 # --- the container needs no install at all ---------------------------------
@@ -74,17 +77,17 @@ case "$os:$arch" in
     say "   --HEAD builds from source. Budget tens of minutes, and it pulls"
     say "   LLVM if you do not have it."
     ;;
-  Linux:x86_64|Linux:amd64)
-    plan "curl -fsSL -o /tmp/esbmc.zip https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip"
+  Linux:x86_64|Linux:amd64|Linux:aarch64|Linux:arm64)
+    # One static binary per architecture; arm64 has had one since 8.6.
+    case "$arch" in
+      x86_64|amd64) asset=esbmc-linux.zip; size="250 MB" ;;
+      *)            asset=esbmc-linux-armv8.zip; size="215 MB" ;;
+    esac
+    plan "curl -fsSL -o /tmp/esbmc.zip $ESBMC_RELEASE_URL/$asset"
     plan "unzip -q /tmp/esbmc.zip -d ~/.local/esbmc && chmod +x ~/.local/esbmc/*/bin/esbmc"
-    say "   235 MB download. Put the binary on PATH afterwards."
-    ;;
-  Linux:aarch64|Linux:arm64)
-    say "   No prebuilt ESBMC exists for Linux/arm64, and the only prebuilt"
-    say "   arm64 build anywhere (the Homebrew 8.4 bottle) is unsound."
-    say "   Use the image, or build ESBMC from source -- see this project's"
-    say "   Dockerfile for a working cmake configuration."
-    exit 4
+    say "   $size download. Put the binary on PATH afterwards."
+    say "   (Once veripp is installed, 'veripp install-checker' does the same"
+    say "    and keeps the binary only if it passes the soundness probes.)"
     ;;
   *)
     say "   Unsupported host. Use the image."
@@ -101,7 +104,7 @@ uv tool install "git+https://github.com/gfabbretti8/veripp" || exit 1
 case "$os" in
   Darwin) brew install --HEAD esbmc ;;
   Linux)
-    curl -fsSL -o /tmp/esbmc.zip https://github.com/esbmc/esbmc/releases/download/weekly/esbmc-linux.zip \
+    curl -fsSL -o /tmp/esbmc.zip "$ESBMC_RELEASE_URL/$asset" \
       && mkdir -p ~/.local/esbmc && unzip -qo /tmp/esbmc.zip -d ~/.local/esbmc \
       && chmod +x ~/.local/esbmc/*/bin/esbmc
     say "Add this to PATH: $(dirname "$(find ~/.local/esbmc -name esbmc -type f | head -1)")"

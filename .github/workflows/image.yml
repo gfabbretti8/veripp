@@ -1,9 +1,10 @@
 name: image
 
-# Two architectures, built on native runners rather than under emulation.
-# That is not a preference: the arm64 leg compiles ESBMC (and LLVM bindings)
-# from source because no arm64 Linux ESBMC binary is published anywhere, and
-# doing that under qemu turns a long build into an unusable one.
+# Two architectures, built on native runners rather than under emulation:
+# each leg downloads the release binary for its platform and runs `veripp
+# doctor` on it, which under qemu is slow enough to time out. (Until ESBMC
+# 8.6 the arm64 leg compiled ESBMC from source; that is why the runners are
+# native, and it still is the right call.)
 #
 # Each arch pushes a digest; a final job stitches them into one manifest, so
 # `docker run ghcr.io/OWNER/veripp` resolves to the right image on any host.
@@ -17,9 +18,8 @@ on:
         description: 'Push to ghcr.io (otherwise build and test only)'
         type: boolean
         default: false
-  # On pull requests we build the amd64 image only, and never push. This keeps
-  # the Dockerfile from rotting between releases without paying for the arm64
-  # source build on every PR.
+  # On pull requests we build and smoke-test both images, and never push.
+  # This keeps the Dockerfile from rotting between releases.
   pull_request:
     paths: ['Dockerfile', '.dockerignore', '.github/workflows/image.yml', 'src/**', 'pyproject.toml']
 
@@ -31,10 +31,8 @@ jobs:
   build:
     strategy:
       fail-fast: false
-      # Both architectures on every trigger, pull requests included. The arm64
-      # source build measures ~3.5 minutes on native arm64 cores, which is well
-      # worth paying per PR: it is the leg with no prebuilt binary to fall back
-      # on, so it is the one most likely to break silently.
+      # Both architectures on every trigger, pull requests included: each is
+      # a download and a doctor run, minutes rather than a source build.
       matrix:
         include:
           - platform: linux/amd64
@@ -44,9 +42,9 @@ jobs:
             runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
-    # Generous next to the ~15 minutes a cold arm64 build measures, but a
-    # stuck apt mirror should not hold a runner for hours.
-    timeout-minutes: 45
+    # Generous next to a download and a doctor run, but a stuck mirror
+    # should not hold a runner for hours.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
