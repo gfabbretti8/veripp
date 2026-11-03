@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .esbmc import VerifyResult
+from .paths import read_source
 
 KINDS = ("real_bug", "missing_assumption", "harness_issue")
 
@@ -194,7 +195,7 @@ class PromptedLLM:
     def propose_invariants(self, source: Path, result: VerifyResult) -> Path | None:
         # Read outside the f-string: reusing its quote inside a replacement
         # field needs Python 3.12 (PEP 701), and requires-python says 3.10.
-        text = source.read_text(encoding="utf-8")
+        text = read_source(source)
         reply = self._ask(
             system=(
                 "You are a verification engineer operating the ESBMC model "
@@ -211,7 +212,7 @@ class PromptedLLM:
         return self._write_variant(source, code, "inv") if code else None
 
     def propose_frontend_fix(self, source: Path, result: VerifyResult) -> Path | None:
-        text = source.read_text(encoding="utf-8")
+        text = read_source(source)
         reply = self._ask(
             system=(
                 "The ESBMC C++ frontend rejected this file. Produce a "

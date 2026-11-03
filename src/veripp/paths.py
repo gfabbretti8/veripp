@@ -1,4 +1,5 @@
-"""Locating the headers and scratch space veripp needs at runtime."""
+"""Locating the headers and scratch space veripp needs at runtime, and
+reading the sources it is pointed at."""
 
 from __future__ import annotations
 
@@ -26,3 +27,15 @@ def contracts_include_dir() -> Path | None:
 
 def scratch_dir(prefix: str = "veripp-") -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix))
+
+
+def read_source(path: Path) -> str:
+    """A C or C++ source as text, whatever its encoding.
+
+    Real code is not all UTF-8: a copyright line in Latin-1 is enough, and
+    a strict read turned it into a traceback from `verify` and cost `scan`
+    every function in the file. veripp reads source to find signatures,
+    types and call sites, which are ASCII; an undecodable byte in a comment
+    or a literal only has to not stop it. The checker reads the file itself.
+    """
+    return path.read_text(encoding="utf-8", errors="replace")

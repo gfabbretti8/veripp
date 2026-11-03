@@ -20,6 +20,7 @@ from . import term
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
 from .harness import HarnessError, generate, reachability_variant
 from .llm import LLMClient, LLMError, NullLLM
+from .paths import read_source
 from .triage import (
     Diagnosis, TargetInfo, real_failures, triage_counterexample,
 )
@@ -437,7 +438,7 @@ def _is_vacuous(harness: Path, config: VerifyConfig) -> bool:
     extra run is skipped when there are none.
     """
     try:
-        code = harness.read_text(encoding="utf-8")
+        code = read_source(harness)
     except OSError:
         return False
     if "VERIPP_ASSUME" not in code and "VERIPP_REQUIRES" not in code:

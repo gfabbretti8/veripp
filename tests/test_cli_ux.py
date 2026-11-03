@@ -371,6 +371,75 @@ class TestRoughInput:
         assert result.returncode in (1, 2, 3)
 
 
+#: Real code is not all UTF-8: a copyright line in Latin-1 is enough.
+LATIN1 = "/* (c) 2003 Jos\xe9 Mar\xeda */\nint inc(int x) { return x + 1; }\n"
+
+
+def _latin1(tmp_path) -> Path:
+    path = tmp_path / "old.c"
+    path.write_bytes(LATIN1.encode("latin-1"))
+    return path
+
+
+class TestSourcesThatAreNotUtf8:
+    """A strict UTF-8 read of the source turned one byte in a comment into
+    a traceback from `verify` and `harness`, and cost `scan` every function
+    in the file."""
+
+    def test_a_harness_is_generated(self, tmp_path) -> None:
+        result = run("harness", str(_latin1(tmp_path)), "--function", "inc")
+        assert "Traceback" not in result.stderr, result.stderr[-300:]
+        assert result.returncode == 0
+        assert "inc(x)" in result.stdout
+
+    @pytest.mark.esbmc
+    def test_verify_answers(self, tmp_path) -> None:
+        result = run("verify", str(_latin1(tmp_path)), "--function", "inc", "--no-llm")
+        assert "Traceback" not in result.stderr, result.stderr[-300:]
+        assert result.returncode == 1  # x + 1 overflows
+        assert "arithmetic overflow" in result.stdout
+
+    @pytest.mark.esbmc
+    def test_scan_answers(self, tmp_path) -> None:
+        result = run("scan", str(_latin1(tmp_path)), "--no-llm", "--no-cache")
+        assert "Traceback" not in result.stderr, result.stderr[-300:]
+        assert result.returncode == 1
+        assert "inc: arithmetic overflow" in result.stdout
+
+    @pytest.mark.esbmc
+    def test_a_tree_scan_does_not_skip_the_file(self, tmp_path) -> None:
+        _latin1(tmp_path)
+        result = run("scan", str(tmp_path), "--no-llm", "--no-cache")
+        assert "skipped" not in result.stderr, result.stderr[-300:]
+        assert "COUNTEREXAMPLE      1" in result.stdout
+
+
+def test_one_function_that_trips_veripp_does_not_cost_the_file(tmp_path, monkeypatch):
+    """pool.map re-raises the first exception, so anything a worker did not
+    expect ended the whole file's scan."""
+    from veripp import scan as scan_module
+    from veripp.esbmc import Outcome, VerifyConfig, VerifyResult
+    from veripp.harness import generate
+
+    source = tmp_path / "two.c"
+    source.write_text("int good(int x) { return x; }\nint bad(int x) { return x; }\n",
+                      encoding="utf-8")
+
+    def picky(path, name, options=None, **kwargs):
+        if name == "bad":
+            raise IndexError("a parser bug")
+        return generate(path, name, options, **kwargs)
+
+    monkeypatch.setattr(scan_module, "generate", picky)
+    monkeypatch.setattr(scan_module, "run", lambda path, config, esbmc_bin=None:
+                        VerifyResult(outcome=Outcome.COUNTEREXAMPLE, config=config))
+    report = scan_module.scan(source, VerifyConfig(), retry_budget=0)
+    outcomes = {r.name: r for r in report.results}
+    assert outcomes["good"].outcome == "counterexample"
+    assert outcomes["bad"].outcome == "tool_error"
+    assert "IndexError: a parser bug" in outcomes["bad"].detail
+
+
 class TestScanNextStep:
     """A tally answers "what happened". The reader's question is "what now"."""
 
