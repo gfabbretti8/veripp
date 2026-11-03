@@ -1800,8 +1800,12 @@ def _verify(args) -> int:
 
     if report.final.outcome is Outcome.VERIFIED:
         try:
+            # Remembered per checker: the probes are one run per default
+            # check, and asking them again after every proof bought nothing
+            # while the checker's bytes had not changed.
             report.unsound_probes = [
-                name for name, ok in check_soundness().items() if not ok
+                name for name, ok in check_soundness(remember=True).items()
+                if not ok
             ]
         except RuntimeError:
             pass
