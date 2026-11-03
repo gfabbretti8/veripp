@@ -10,12 +10,17 @@ Found by probing popular single-TU libraries through the ESBMC 8.4 frontend
 
 ## Working targets
 
-| library | popularity | frontend | veripp coverage | notes |
+Harnessable is the share of a file's functions veripp can build a harness
+for. lodepng and cJSON are measured in [CORPUS.md](CORPUS.md), and their
+figures here are copied from it. stb_image_write and miniz are not in it;
+theirs were measured on 2026-08-23, with ESBMC 8.4, and not since.
+
+| library | popularity | frontend | harnessable | notes |
 |---|---|---|---|---|
-| [lodepng](https://github.com/lvandeve/lodepng) | ~2k stars, ubiquitous PNG codec | OK | 54/260 functions (21%) | best target; exercises every triage category |
-| [stb_image_write](https://github.com/nothings/stb) | ~30k stars (stb) | OK | 14/49 functions (29%) | needs `-D STB_IMAGE_WRITE_IMPLEMENTATION` |
-| [cJSON](https://github.com/DaveGamble/cJSON) | ~12k stars | OK (as C++ TU) | 4/117 | most functions take `cJSON*` structs |
-| [miniz](https://github.com/richgel999/miniz) | ~2k stars | OK (needs stub `miniz_export.h`) | 8/24 | project typedefs (`mz_ulong`) now resolve via local includes |
+| [lodepng](https://github.com/lvandeve/lodepng) | ~2k stars, ubiquitous PNG codec | OK | 82% of 260 functions; 99 proved | best target; exercises every triage category |
+| [stb_image_write](https://github.com/nothings/stb) | ~30k stars (stb) | OK | 14/49 functions (29%), 2026-08-23 | needs `-D STB_IMAGE_WRITE_IMPLEMENTATION` |
+| [cJSON](https://github.com/DaveGamble/cJSON) | ~12k stars | OK (as C++ TU) | 89% of 117 functions; 32 proved | its counterexamples are triaged in CORPUS.md |
+| [miniz](https://github.com/richgel999/miniz) | ~2k stars | OK (needs stub `miniz_export.h`) | 8/24 functions (33%), 2026-08-23 | project typedefs (`mz_ulong`) now resolve via local includes |
 | [uthash](https://github.com/troydhanson/uthash) | ~4k stars | OK | n/a | macro library; no functions to target |
 
 ## Reference results (ESBMC master, defaults)

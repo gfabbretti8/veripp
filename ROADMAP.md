@@ -79,7 +79,7 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [x] Prompts live in one place shared by every provider, so adding a vendor
       cannot change what is asked.
 
-## M3 — delivery (done, except publishing)
+## M3 — delivery (done, except the talk)
 - [x] GitHub Action (`action.yml`), with a self-test workflow that runs it
       three ways. It previously used `uv run --directory`, which resolves the
       caller's source against the action's own checkout and so broke every
@@ -97,16 +97,19 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [x] Both delivery workflows verified on real runners: the action self-test
       (three jobs, including a relative path from a subdirectory — the case
       the `--directory` bug broke) and `image.yml` with `push: false`.
-- [ ] Actually publish: the image to ghcr.io, the package to PyPI. Both need
-      credentials and a decision to make the repo public. Everything up to
-      the push is rehearsed — see RELEASING.md.
+- [x] Published, from the public repo: the image on ghcr.io
+      (`ghcr.io/gfabbretti8/veripp`, 0.1.0 to 0.5.0) and the packages on PyPI
+      (`veripp` 0.2.0, 0.4.0 and 0.5.0; `veripp-checker` 0.1.0). RELEASING.md
+      is the procedure.
 - [ ] CppCon lightning talk / Show HN.
 
 Two things worth knowing before touching delivery:
-- The `weekly` ESBMC tag is not rolling. It currently points at 2026-05-27
-  with master ~1900 commits ahead, which is why the arm64 image builds from
-  master: the fix that makes an arm64 build possible at all (esbmc#5252)
-  landed after that tag was cut.
+- The `weekly` ESBMC tag is not rolling: it is cut infrequently, and re-cut
+  in place under the same name. On 2026-08-24 it pointed at a commit from
+  2026-05-27, with master ~1900 commits ahead, which is why the arm64 image
+  builds from master: the fix that makes an arm64 build possible at all
+  (esbmc#5252) landed after that cut. The build published on 2026-09-08 is
+  of 4e619b97.
 - ESBMC publishes no arm64 Linux binary, and its `scripts/build.sh` does not
   work on aarch64 in a clean container. `Dockerfile` configures cmake directly
   instead; see the comments there for why each flag is set.
