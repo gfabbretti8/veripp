@@ -22,10 +22,10 @@ ROOT = Path(__file__).resolve().parent.parent
 CLEAN = "int clamp(int x){ if(x<0) return 0; if(x>100) return 100; return x; }\n"
 
 
-def run(*args: str, cwd=None) -> subprocess.CompletedProcess:
+def run(*args: str, cwd=None, env=None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "veripp.cli", *args],
-        capture_output=True, text=True, cwd=cwd, timeout=1800,
+        capture_output=True, text=True, cwd=cwd, timeout=1800, env=env,
     )
 
 
@@ -137,6 +137,149 @@ class TestBehaviour:
         run("scan", "a.c", "--only", "clamp", cwd=tmp_path)
         full = run("scan", "a.c", cwd=tmp_path)
         assert full.returncode == 1, "the skipped buggy function was masked"
+
+
+@pytest.mark.esbmc
+class TestEveryInputMisses:
+    """The key hashed only the headers a file includes directly with quotes,
+    found next to it or on -I. Each input below reached the checker without
+    reaching the key, so editing it served the old verdict."""
+
+    @staticmethod
+    def _twice(tmp_path, edit, *args, env=None):
+        first = run("scan", "a.c", *args, cwd=tmp_path, env=env)
+        assert first.returncode in (0, 1), first.stderr[-400:]
+        edit()
+        return run("scan", "a.c", *args, cwd=tmp_path, env=env)
+
+    def test_a_header_included_by_a_header(self, tmp_path) -> None:
+        (tmp_path / "a.c").write_text('#include "a.h"\nint f(void){ return LIMIT; }\n', encoding="utf-8")
+        (tmp_path / "a.h").write_text('#include "b.h"\n', encoding="utf-8")
+        deep = tmp_path / "b.h"
+        deep.write_text("#define LIMIT 1\n", encoding="utf-8")
+        again = self._twice(tmp_path, lambda: deep.write_text("#define LIMIT 2\n", encoding="utf-8"))
+        assert "cached" not in again.stderr
+
+    def test_an_angle_bracket_project_header(self, tmp_path) -> None:
+        (tmp_path / "inc").mkdir()
+        (tmp_path / "a.c").write_text("#include <proj.h>\nint f(void){ return LIMIT; }\n", encoding="utf-8")
+        header = tmp_path / "inc" / "proj.h"
+        header.write_text("#define LIMIT 1\n", encoding="utf-8")
+        again = self._twice(
+            tmp_path, lambda: header.write_text("#define LIMIT 2\n", encoding="utf-8"), "-I", "inc",
+        )
+        assert "cached" not in again.stderr
+
+    def test_a_header_found_through_compile_commands(self, tmp_path) -> None:
+        (tmp_path / "cfg").mkdir()
+        (tmp_path / "a.c").write_text('#include "cfg.h"\nint f(void){ return LIMIT; }\n', encoding="utf-8")
+        header = tmp_path / "cfg" / "cfg.h"
+        header.write_text("#define LIMIT 1\n", encoding="utf-8")
+        (tmp_path / "compile_commands.json").write_text(json.dumps([{
+            "directory": str(tmp_path), "file": "a.c",
+            "arguments": ["cc", "-Icfg", "-c", "a.c"],
+        }]), encoding="utf-8")
+        again = self._twice(tmp_path, lambda: header.write_text("#define LIMIT 2\n", encoding="utf-8"))
+        assert "cached" not in again.stderr
+
+    def test_a_force_included_header(self, tmp_path) -> None:
+        (tmp_path / "a.c").write_text("int f(void){ return LIMIT; }\n", encoding="utf-8")
+        shim = tmp_path / "shim.h"
+        shim.write_text("#define LIMIT 1\n", encoding="utf-8")
+        again = self._twice(
+            tmp_path, lambda: shim.write_text("#define LIMIT 2\n", encoding="utf-8"),
+            "--include-file", str(shim),
+        )
+        assert "cached" not in again.stderr
+
+    def test_a_different_checker_that_reports_the_same_version(self, tmp_path) -> None:
+        """What a master build and the release it descends from look like."""
+        import os
+        import shutil
+
+        from veripp.esbmc import find_esbmc
+
+        real = shutil.which("esbmc") or find_esbmc()
+        builds = []
+        for name in ("build-a", "build-b"):
+            wrapper = tmp_path / name
+            wrapper.write_text(f'#!/bin/sh\n# {name}\nexec "{real}" "$@"\n', encoding="utf-8")
+            wrapper.chmod(0o755)
+            builds.append({**os.environ, "VERIPP_ESBMC": str(wrapper)})
+        (tmp_path / "a.c").write_text(CLEAN, encoding="utf-8")
+        assert run("scan", "a.c", cwd=tmp_path, env=builds[0]).returncode == 0
+        again = run("scan", "a.c", cwd=tmp_path, env=builds[1])
+        assert "cached" not in again.stderr
+
+
+class TestVeripsOwnCode:
+    """`__version__` stayed 0.5.0 across 74 commits of main, so it cannot say
+    which veripp wrote a cached verdict."""
+
+    def test_editing_a_module_changes_the_digest(self, tmp_path) -> None:
+        import shutil
+
+        from veripp.cache import _PACKAGE_ROOT, package_digest
+
+        copy = tmp_path / "veripp"
+        shutil.copytree(_PACKAGE_ROOT, copy, ignore=shutil.ignore_patterns("__pycache__"))
+        before = package_digest(copy)
+        scan = copy / "scan.py"
+        scan.write_text(scan.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+        package_digest.cache_clear()
+        assert package_digest(copy) != before
+
+    def test_the_contracts_header_counts(self, tmp_path) -> None:
+        import shutil
+
+        from veripp.cache import _PACKAGE_ROOT, package_digest
+
+        copy = tmp_path / "veripp"
+        shutil.copytree(_PACKAGE_ROOT, copy, ignore=shutil.ignore_patterns("__pycache__"))
+        before = package_digest(copy)
+        header = copy / "include" / "veripp" / "contracts.hpp"
+        header.write_text(header.read_text(encoding="utf-8") + "\n// changed\n", encoding="utf-8")
+        package_digest.cache_clear()
+        assert package_digest(copy) != before
+
+    def test_the_key_follows_it(self, tmp_path, monkeypatch) -> None:
+        from veripp import cache
+        from veripp.cli import _cache_key
+        from veripp.esbmc import VerifyConfig
+        from veripp.harness import HarnessOptions
+
+        f = tmp_path / "a.c"
+        f.write_text(CLEAN, encoding="utf-8")
+        monkeypatch.setattr(cache, "package_digest", lambda: "one")
+        first = _cache_key(f, VerifyConfig(), HarnessOptions())
+        monkeypatch.setattr(cache, "package_digest", lambda: "two")
+        assert _cache_key(f, VerifyConfig(), HarnessOptions()) != first
+
+
+def test_the_checker_is_identified_by_its_bytes(tmp_path) -> None:
+    from veripp.cache import checker_digest
+
+    one, two = tmp_path / "one", tmp_path / "two"
+    one.write_bytes(b"checker")
+    two.write_bytes(b"checker")
+    assert checker_digest(str(one)) == checker_digest(str(two))
+    two.write_bytes(b"checker, rebuilt")
+    assert checker_digest(str(one)) != checker_digest(str(two))
+
+
+def test_a_checker_digest_is_remembered_between_runs(tmp_path, monkeypatch) -> None:
+    """The Linux checker is ~650MB; hashing it on every cached run would cost
+    more than the cache saves on a small tree."""
+    from veripp import cache
+
+    binary = tmp_path / "esbmc"
+    binary.write_bytes(b"checker")
+    memo = tmp_path / "cache" / cache.CHECKER_MEMO
+    first = cache.checker_digest(str(binary), memo=memo)
+    assert memo.is_file()
+    monkeypatch.setattr(cache, "_CHECKER_DIGESTS", {})  # a new process
+    monkeypatch.setattr(cache.hashlib, "sha256", None)  # hashing would fail
+    assert cache.checker_digest(str(binary), memo=memo) == first
 
 
 class TestCacheStore:
