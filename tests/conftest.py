@@ -1,4 +1,3 @@
-import shutil
 from pathlib import Path
 
 import pytest
@@ -28,13 +27,19 @@ def golden():
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "esbmc: needs the esbmc binary on PATH")
+    config.addinivalue_line("markers", "esbmc: needs a checker veripp can find")
 
 
 def pytest_collection_modifyitems(config, items):
-    if shutil.which("esbmc"):
+    # Ask veripp, not PATH. It also finds $VERIPP_ESBMC, a checker from
+    # `veripp install-checker` and the one bundled with the wheel -- the only
+    # one many installs have -- and a skip for "esbmc not on PATH" then hid
+    # every checker-backed test from someone whose veripp works fine.
+    from veripp.esbmc import find_esbmc
+
+    if find_esbmc():
         return
-    skip = pytest.mark.skip(reason="esbmc not on PATH")
+    skip = pytest.mark.skip(reason="no checker: veripp cannot find esbmc")
     for item in items:
         if "esbmc" in item.keywords:
             item.add_marker(skip)
