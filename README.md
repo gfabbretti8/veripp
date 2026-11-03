@@ -204,7 +204,10 @@ has the details.
 ## In CI
 
 The action installs a checker, runs `veripp doctor` (so a broken checker
-fails the job) and then scans. This workflow uses a baseline and annotates
+fails the job) and then scans. It installs one on x86_64 Linux runners;
+anywhere else it uses an `esbmc` already on PATH. On macOS that means an
+earlier `brew install --HEAD esbmc` step, since the only sound macOS build is
+compiled from source. This workflow uses a baseline and annotates
 the pull-request diff through SARIF:
 
 ```yaml
