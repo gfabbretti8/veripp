@@ -110,7 +110,9 @@ Two things worth knowing before touching delivery:
   to track the `weekly` tag, which is re-cut in place under one name, so
   nothing recorded which build a run used; a release's assets do not move.
 - Since 8.6 ESBMC publishes a static arm64 Linux binary
-  (`esbmc-linux-armv8.zip`), so the image, the Action and
-  `veripp install-checker` download it like the x86_64 one. Before that the
-  arm64 image compiled ESBMC from source with a hand-tuned cmake
-  configuration; it is in the git history if upstream ever stops publishing.
+  (`esbmc-linux-armv8.zip`), so the image, the Action, the checker wheel and
+  `veripp install-checker` all download it like the x86_64 one. Before that
+  the arm64 image compiled ESBMC from source with a hand-tuned cmake
+  configuration and the wheel was copied out of that image; both are in the
+  git history if upstream ever stops publishing. The image is now only a
+  distribution channel, nothing else is built from it.

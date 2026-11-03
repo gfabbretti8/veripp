@@ -26,9 +26,8 @@ ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip binutils \
     && rm -rf /var/lib/apt/lists/*
-# The digests every workflow pins (see .github/workflows/ci.yml). This image
-# is where the checker wheels take their binary from, so an unchecked
-# download here would reach every pip install.
+# The digests every workflow pins (see .github/workflows/ci.yml): the image
+# ships the bytes CI tested, and the checker wheels fetch the same ones.
 COPY checker/esbmc-linux.zip.sha256 checker/esbmc-linux-armv8.zip.sha256 /tmp/pins/
 RUN set -eux; \
     case "${TARGETARCH}" in \

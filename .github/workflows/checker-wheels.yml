@@ -1,5 +1,11 @@
 # Build `veripp-checker` wheels: the ESBMC binary, packaged so that
-# `pip install veripp[checker]` is the whole installation.
+# `pip install veripp` is the whole installation.
+#
+# The binary is ESBMC's own static release build for each architecture,
+# fetched straight from the release and checked against the digest veripp
+# pins -- the same bytes CI tests against and the image ships. No image and
+# no compiler are involved: until ESBMC 8.6 the arm64 binary had to be built
+# from source inside the image and copied out of it, and that is gone.
 #
 # Nothing is published from here. A wheel is kept only if a clean container
 # that pip-installs it passes `veripp doctor`, whose probes are known-failing
@@ -29,23 +35,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Assemble a relocatable payload
-        run: ./checker/build_linux_payload.sh ghcr.io/gfabbretti8/veripp payload
-
-      - name: Fetch ESBMC's licence notices
-        # Required by build_wheel.py: ESBMC derives from CBMC under
-        # BSD-4-clause, whose advertising clause obliges the notice to travel
-        # with the binary.
-        run: curl -fsSL -o COPYING.esbmc
-             https://raw.githubusercontent.com/esbmc/esbmc/master/COPYING
+      # Native runners, not for the download but for what follows: `strip`
+      # has to understand the binary, and the install test below runs it.
+      - name: Fetch the pinned release binary, check its digest, strip it
+        run: ./checker/build_linux_payload.sh ${{ matrix.arch }} payload
 
       - name: Determine the glibc floor
         id: glibc
         run: |
-          floor=$(docker run --rm --entrypoint sh veripp-checker-payload -c \
-            'for f in /payload/bin/esbmc /payload/lib/*.so*; do
-               objdump -T "$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*"; done |
-             sort -V -u | tail -1' | sed 's/GLIBC_//;s/\./_/')
+          floor=$(for f in payload/bin/esbmc payload/lib/*.so*; do
+                    objdump -T "$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*" || true
+                  done | sort -V -u | tail -1 | sed 's/GLIBC_//;s/\./_/')
           # A statically linked checker reports no floor at all. Claiming the
           # oldest widely supported baseline is right there -- it needs
           # nothing from the host -- but an empty value would silently build
@@ -53,10 +53,14 @@ jobs:
           if [ -z "$floor" ]; then floor=2_17; fi
           echo "tag=manylinux_${floor}_${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
 
+      # build_wheel.py requires the licence: ESBMC derives from CBMC under
+      # BSD-4-clause, whose advertising clause obliges the notice to travel
+      # with the binary. The release ships it beside the binary, so the
+      # notice is the one for exactly this build.
       - name: Build the wheel
         run: python3 checker/build_wheel.py --payload payload
              --plat ${{ steps.glibc.outputs.tag }}
-             --license COPYING.esbmc --outdir dist
+             --license payload/licenses/COPYING --outdir dist
 
       - name: A wheel is only kept if it passes the soundness probes
         run: |

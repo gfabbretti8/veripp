@@ -23,6 +23,11 @@ run, and refuses to back results from one that cannot detect a planted bug.
   the git history.
 - The Action's checker cache is keyed on the runner's architecture as well
   as its OS, so an x86_64 cache can no longer be restored on an arm64 runner.
+- **The checker wheel no longer comes out of the container image.**
+  `checker/build_linux_payload.sh` fetches the release binary for an
+  architecture, checks its digest and strips it; `checker-wheels.yml` needs
+  no image, no Docker build and no compiler. The image is a distribution
+  channel only, for `docker run` with nothing installed.
 
 ## 0.6.0
 

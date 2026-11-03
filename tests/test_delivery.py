@@ -124,13 +124,13 @@ class TestOneRelease:
 
 
 class TestPinnedChecker:
-    """A digest, not a tag, says which ESBMC build CI, a release and the
-    image actually ran -- and the image is where the checker wheels take
-    their binary from. One pin per Linux asset, x86_64 and arm64."""
+    """A digest, not a tag, says which ESBMC build CI, a release, the image
+    and the checker wheels actually got. One pin per Linux asset, x86_64 and
+    arm64."""
 
     PINS = ("esbmc-linux.zip", "esbmc-linux-armv8.zip")
     CONSUMERS = (".github/workflows/ci.yml", ".github/workflows/release.yml",
-                 "Dockerfile")
+                 "Dockerfile", "checker/build_linux_payload.sh")
 
     @pytest.mark.parametrize("asset", PINS)
     def test_the_pin_is_one_sha256(self, asset) -> None:
@@ -149,7 +149,9 @@ class TestPinnedChecker:
         assert check < text.index("unzip -q", download), (
             f"{name} unpacks the ESBMC zip before checking its digest"
         )
-        assert "esbmc-linux.zip.sha256" in text
+        # The workflows name the x86_64 pin; the image and the payload
+        # script pick the pin for the architecture by name.
+        assert "esbmc-linux.zip.sha256" in text or '$ASSET.sha256' in text
 
     def test_the_image_pins_both_architectures(self) -> None:
         text = read("Dockerfile")
@@ -161,6 +163,57 @@ class TestPinnedChecker:
     def test_bumping_the_pin_rotates_the_cache(self, name) -> None:
         key = next(line for line in read(name).splitlines() if "key: esbmc-" in line)
         assert "checker/esbmc-linux.zip.sha256" in key
+
+
+class TestCheckerWheelPayload:
+    """The wheel ships the release's own static binary, fetched from the
+    release and checked against the pin. It used to be copied out of the
+    container image, which was the only place an arm64 binary existed before
+    ESBMC 8.6; the image is a distribution channel now, not a build step."""
+
+    SCRIPT = "checker/build_linux_payload.sh"
+
+    def _instructions(self) -> str:
+        return "\n".join(
+            line for line in read(self.SCRIPT).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+
+    def test_needs_no_image_and_no_compiler(self) -> None:
+        text = self._instructions()
+        for marker in ("docker", "ghcr.io", "cmake", "FROM "):
+            assert marker not in text, marker
+
+    def test_fetches_one_asset_per_architecture(self) -> None:
+        text = self._instructions()
+        assert "ASSET=esbmc-linux.zip" in text
+        assert "ASSET=esbmc-linux-armv8.zip" in text
+        assert "releases/download/" in text
+
+    def test_takes_the_release_from_checker_py(self) -> None:
+        """One tag everywhere: the script reads ESBMC_RELEASE rather than
+        carrying a copy that could drift."""
+        assert "ESBMC_RELEASE" in self._instructions()
+        assert "src/veripp/checker.py" in read(self.SCRIPT)
+
+    def test_still_refuses_a_binary_with_a_non_redistributable_solver(self) -> None:
+        text = self._instructions()
+        assert "msat_" in text and "yices_" in text
+        assert "refusing to package" in text
+
+    def test_the_workflow_runs_it_per_architecture_without_an_image(self) -> None:
+        yaml = pytest.importorskip("yaml")
+        text = read(".github/workflows/checker-wheels.yml")
+        linux = yaml.safe_load(text)["jobs"]["linux"]
+        runs = "\n".join(step.get("run", "") for step in linux["steps"])
+        assert "build_linux_payload.sh ${{ matrix.arch }}" in runs
+        assert "ghcr.io" not in runs
+        arches = {entry["arch"] for entry in linux["strategy"]["matrix"]["include"]}
+        assert arches == {"x86_64", "aarch64"}
+        assert "payload/licenses/COPYING" in runs, (
+            "the licence notice should be the one shipped with this build"
+        )
+
 
 
 class TestDockerfile:

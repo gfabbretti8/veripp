@@ -1,45 +1,43 @@
 #!/usr/bin/env bash
-# Assemble a relocatable ESBMC payload for a Linux wheel.
+# Assemble the ESBMC payload for a Linux wheel: the release's own static
+# binary for one architecture, checked against the digest veripp pins and
+# stripped. No image and no compiler are involved -- ESBMC 8.6 publishes a
+# static binary for x86_64 and for arm64, and the wheel ships those bytes.
 #
-# The binary comes from veripp's own image: ESBMC's static Linux release
-# build for the architecture, digest-checked and stripped there. ESBMC's
-# COPYING notes that MathSAT is academic/non-commercial and Yices is
-# personal-use or GPL3, so below this checks the binary carries neither
-# before packaging it -- the 8.6 release builds ship Z3 and Boolector only.
+#   ./build_linux_payload.sh <x86_64|aarch64> <outdir>
 #
-#   ./build_linux_payload.sh <image> <outdir>
+# The release tag is ESBMC_RELEASE in src/veripp/checker.py (override with
+# $ESBMC_VERSION); the digest is checker/<asset>.sha256, the same pin the
+# workflows and the image check. `strip` has to understand the binary, so run
+# this on a machine of the target architecture, or with multiarch binutils.
 set -euo pipefail
 
-IMAGE="${1:-ghcr.io/gfabbretti8/veripp}"
+ARCH="${1:?usage: build_linux_payload.sh <x86_64|aarch64> <outdir>}"
 OUT="${2:-payload}"
-CTX="$(mktemp -d)"
-trap 'rm -rf "$CTX"' EXIT
+HERE="$(cd "$(dirname "$0")" && pwd)"
+RELEASE="${ESBMC_VERSION:-$(sed -n 's/^ESBMC_RELEASE = "\(.*\)"$/\1/p' "$HERE/../src/veripp/checker.py")}"
+test -n "$RELEASE"
 
-cat > "$CTX/Dockerfile" <<DOCKERFILE
-FROM ${IMAGE} AS src
-USER root
-RUN set -eux; \\
-    o=/payload; mkdir -p \$o/bin \$o/lib; \\
-    cp "\$(command -v esbmc)" \$o/bin/esbmc; \\
-    ldd \$o/bin/esbmc 2>/dev/null | awk '{print \$3}' | grep '^/' | sort -u | while read -r f; do \\
-      case "\$f" in */libc.so.*|*/libm.so.*|*/libpthread*|*/libdl*|*/librt*|*/ld-linux*) continue;; esac; \\
-      cp -L "\$f" \$o/lib/; \\
-    done
+case "$ARCH" in
+  x86_64|amd64)  ASSET=esbmc-linux.zip ;;
+  aarch64|arm64) ASSET=esbmc-linux-armv8.zip ;;
+  *) echo "no ESBMC release binary is published for $ARCH" >&2; exit 2 ;;
+esac
+PIN="$HERE/$ASSET.sha256"
+test -s "$PIN" || { echo "no digest pinned for $ASSET at $PIN" >&2; exit 2; }
 
-FROM debian:trixie-slim
-RUN apt-get update -qq && apt-get install -y -qq patchelf binutils && rm -rf /var/lib/apt/lists/*
-COPY --from=src /payload /payload
-# The image relies on its own library path; a wheel cannot. \$ORIGIN makes the
-# tree work wherever pip unpacks it.
-RUN set -eux; \\
-    if [ -n "\$(ls -A /payload/lib)" ]; then \\
-      patchelf --set-rpath '\$ORIGIN/../lib' /payload/bin/esbmc; \\
-      for f in /payload/lib/*.so*; do patchelf --set-rpath '\$ORIGIN' "\$f" || true; done; \\
-    fi; \\
-    cp -r /payload /relocated && /relocated/bin/esbmc --version
-DOCKERFILE
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
-docker build -q -t veripp-checker-payload "$CTX" >/dev/null
+echo "fetching $ASSET from ESBMC $RELEASE"
+curl -fsSL -o "$WORK/$ASSET" \
+  "https://github.com/esbmc/esbmc/releases/download/$RELEASE/$ASSET"
+# The bytes CI tested, and no others: a release asset never changes, so a
+# mismatch means the download is not what it claims to be.
+echo "$(cat "$PIN")  $WORK/$ASSET" | sha256sum -c -
+unzip -q "$WORK/$ASSET" -d "$WORK/unz"
+bin="$(find "$WORK/unz" -name esbmc -type f | head -1)"
+test -n "$bin" || { echo "no esbmc binary inside $ASSET" >&2; exit 1; }
 
 # Refuse to package a binary carrying a solver that cannot be redistributed.
 # ESBMC's own COPYING flags MathSAT as academic/non-commercial and Yices as
@@ -52,8 +50,8 @@ docker build -q -t veripp-checker-payload "$CTX" >/dev/null
 FORBIDDEN=""
 for probe in "mathsat:msat_" "yices:yices_"; do
   solver="${probe%%:*}"; prefix="${probe##*:}"
-  count=$(docker run --rm --entrypoint sh veripp-checker-payload \
-    -c "grep -ao '${prefix}[a-z_]*' /payload/bin/esbmc 2>/dev/null | sort -u | wc -l")
+  # grep exits 1 on no match, which is the good case; keep pipefail quiet.
+  count=$({ grep -ao "${prefix}[a-z_]*" "$bin" || true; } | sort -u | wc -l)
   if [ "${count:-0}" -gt 0 ]; then
     FORBIDDEN="$FORBIDDEN $solver"
   fi
@@ -61,18 +59,25 @@ done
 if [ -n "$FORBIDDEN" ]; then
   echo "refusing to package this checker: it contains$FORBIDDEN," >&2
   echo "which ESBMC's COPYING says may not be redistributed freely." >&2
-  echo "Use a build from source with -DENABLE_Z3=ON and every other solver" >&2
-  echo "OFF -- see the arm64 stage of this repository's Dockerfile." >&2
   exit 1
 fi
-cid="$(docker create veripp-checker-payload)"
-rm -rf "$OUT"; mkdir -p "$OUT"
-docker cp "$cid:/payload/." "$OUT/"
-docker rm "$cid" >/dev/null
 
-if [ -z "$(ls -A "$OUT/lib" 2>/dev/null)" ]; then
-  echo "note: no bundled libraries -- this checker is statically linked"
+rm -rf "$OUT"
+mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/licenses"
+cp "$bin" "$OUT/bin/esbmc"
+chmod +x "$OUT/bin/esbmc"
+# The release ships its own notices beside the binary (ESBMC's COPYING, and
+# Boost, Boolector and Z3); they travel inside the package too.
+if [ -d "$(dirname "$bin")/../license" ]; then
+  cp "$(dirname "$bin")"/../license/* "$OUT/licenses/"
+fi
+# Static and unstripped: ~700MB on x86_64, most of it debug symbols. The
+# stripped binary is what the image ships too, and `veripp doctor` is run on
+# the installed wheel before anything is published.
+strip --strip-unneeded "$OUT/bin/esbmc"
+# A statically linked binary needs nothing from the host; say so, since the
+# workflow derives the manylinux tag from the glibc floor.
+if ! objdump -p "$OUT/bin/esbmc" 2>/dev/null | grep -q NEEDED; then
+  echo "note: statically linked -- no bundled libraries, no glibc floor"
 fi
 echo "payload: $OUT ($(du -sh "$OUT" | cut -f1))"
-echo "glibc floor: $(docker run --rm --entrypoint sh veripp-checker-payload -c \
-  'for f in /payload/bin/esbmc /payload/lib/*.so*; do objdump -T "$f" 2>/dev/null | grep -o "GLIBC_[0-9.]*"; done | sort -V -u | tail -1')"
