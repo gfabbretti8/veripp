@@ -108,8 +108,9 @@ Two things worth knowing before touching delivery:
   in place under the same name. On 2026-08-24 it pointed at a commit from
   2026-05-27, with master ~1900 commits ahead, which is why the arm64 image
   builds from master: the fix that makes an arm64 build possible at all
-  (esbmc#5252) landed after that cut. The build published on 2026-09-08 is
-  of 4e619b97.
+  (esbmc#5252) landed after that cut. It was re-cut on 2026-09-08 (a build
+  of 4e619b97) and again on 2026-10-26; CI pins the build it runs by digest
+  in `checker/esbmc-linux.zip.sha256`.
 - ESBMC publishes no arm64 Linux binary, and its `scripts/build.sh` does not
   work on aarch64 in a clean container. `Dockerfile` configures cmake directly
   instead; see the comments there for why each flag is set.

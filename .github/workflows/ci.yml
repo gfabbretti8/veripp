@@ -10,8 +10,8 @@ env:
   # `weekly` is newer than 8.4 and passes our soundness probe, but do not read
   # it as "master": despite the name it is cut infrequently, and re-cut in
   # place under the same name. So which build CI runs is pinned by digest,
-  # in one place, checker/esbmc-linux.zip.sha256 -- at present the build of
-  # esbmc 4e619b97 made on 2026-09-08 -- and taking a newer one is a reviewed
+  # in one place, checker/esbmc-linux.zip.sha256 -- at present the build
+  # whose assets were uploaded on 2026-10-26 -- and taking a newer one is a reviewed
   # bump of that file. `veripp doctor` still re-checks the checker
   # behaviourally on every run instead of trusting a version string.
   ESBMC_VERSION: weekly
