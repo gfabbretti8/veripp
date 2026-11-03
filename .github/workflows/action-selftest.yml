@@ -17,7 +17,15 @@ on:
 
 jobs:
   finds-a-bug:
-    runs-on: ubuntu-latest
+    # Both architectures the action installs a checker on. Until ESBMC 8.6
+    # there was no arm64 Linux binary and the action refused arm64 runners;
+    # now it downloads esbmc-linux-armv8.zip, and this is the one place that
+    # download, and the architecture-keyed cache, are exercised.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
