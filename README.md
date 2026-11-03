@@ -259,6 +259,19 @@ results (a bound, a timeout, a file the checker's frontend refused) only
 warn; `fail-on: inconclusive` fails on those too, and `fail-on: never` is for
 a first look.
 
+## As an MCP server
+
+```bash
+claude mcp add veripp -- veripp mcp      # Claude Code; any MCP client works the same way
+```
+
+`veripp mcp` speaks the Model Context Protocol over stdio and offers
+`verify`, `scan`, `harness` and `doctor` as tools with structured arguments.
+A call returns the same JSON report `--json` prints, with the exit code and
+what it means, so an agent reads a verdict and the assumptions it rests on
+instead of parsing prose. Triage is off unless the call names a model: the
+agent on the other end is the one doing the reading.
+
 ## As a skill for coding agents
 
 ```bash

@@ -348,6 +348,14 @@ def main(argv: list[str] | None = None) -> int:
         help=_adv("install here instead of the default location"),
     )
 
+    sub.add_parser(
+        "mcp",
+        help="serve verify, scan, harness and doctor to an agent over MCP (stdio)",
+        description="Speak the Model Context Protocol over stdin and stdout, so an "
+        "agent such as Claude Code can call veripp's commands as tools with "
+        "structured arguments and get the --json report back. Register it "
+        "with, e.g., `claude mcp add veripp -- veripp mcp`.",
+    )
     d = sub.add_parser("doctor", help="check that dependencies are available")
     d.add_argument(
         "--allow-unsound",
@@ -401,6 +409,10 @@ def main(argv: list[str] | None = None) -> int:
         return _install_checker(args.dir)
     if args.command == "doctor":
         return _doctor(allow_unsound=args.allow_unsound)
+    if args.command == "mcp":
+        from .mcp import serve
+
+        return serve()
     if not args.source.exists():
         print(f"error: {args.source} not found", file=sys.stderr)
         hint = _missing_source_hint()

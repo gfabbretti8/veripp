@@ -214,6 +214,13 @@ veripp verify src/netbiosns.c --function name_decode --unterminated
 veripp verify src/ppp/lcp.c --function lcp_input --preprocess --constructors
 ```
 
+## Through MCP instead of the shell
+
+If your host speaks the Model Context Protocol, `veripp mcp` offers `verify`,
+`scan`, `harness` and `doctor` as tools with structured arguments and returns
+the `--json` report with the exit code. Same commands, same results, no
+parsing: `claude mcp add veripp -- veripp mcp` registers it in Claude Code.
+
 ## Where it works and where it does not
 
 ESBMC handles C and C-like C++ well. Heavy STL and template metaprogramming

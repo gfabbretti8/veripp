@@ -7,6 +7,16 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## Unreleased
+
+### Added
+- **`veripp mcp`**: the CLI's `verify`, `scan`, `harness` and `doctor` as
+  Model Context Protocol tools over stdio, for Claude Code and any other MCP
+  client. Structured arguments in, the `--json` report plus the exit code and
+  its meaning out; triage stays off unless the call names a model, since the
+  agent on the other end is the one reading the result. Standard library
+  only, like the LLM providers.
+
 ## 0.7.0
 
 Results fail closed where they used to fail open, and the checker arrives
