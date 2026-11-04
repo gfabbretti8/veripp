@@ -49,7 +49,7 @@ def pure_wheel(tmp_path):
 
 @pytest.fixture
 def payload(tmp_path):
-    """What build_linux_payload.sh leaves behind."""
+    """What fetch_payload.sh leaves behind."""
     root = tmp_path / "payload"
     (root / "bin").mkdir(parents=True)
     (root / "licenses").mkdir()
@@ -95,6 +95,18 @@ class TestWheelContents:
                 if name.endswith(("/RECORD", "/WHEEL")):
                     continue
                 assert after.read(name) == before.read(name), name
+
+    def test_a_windows_payload_brings_its_dll_along(self, pure_wheel, payload, tmp_path):
+        """esbmc.exe loads libz3.dll from its own directory, so the DLL
+        has to land beside it."""
+        (payload / "bin" / "esbmc").unlink()
+        (payload / "bin" / "esbmc.exe").write_bytes(b"MZ fake")
+        (payload / "bin" / "libz3.dll").write_bytes(b"MZ fake dll")
+        wheel = _bundle(pure_wheel, payload, tmp_path / "dist", plat="win_amd64")
+        assert wheel.name.endswith("-py3-none-win_amd64.whl")
+        with zipfile.ZipFile(wheel) as z:
+            names = set(z.namelist())
+        assert {"veripp/bin/esbmc.exe", "veripp/bin/libz3.dll"} <= names
 
     def test_the_licence_notices_travel_beside_the_binary(self, pure_wheel, payload, tmp_path):
         wheel = _bundle(pure_wheel, payload, tmp_path / "dist")

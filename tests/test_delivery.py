@@ -128,9 +128,9 @@ class TestPinnedChecker:
     and the checker wheels actually got. One pin per Linux asset, x86_64 and
     arm64."""
 
-    PINS = ("esbmc-linux.zip", "esbmc-linux-armv8.zip")
+    PINS = ("esbmc-linux.zip", "esbmc-linux-armv8.zip", "esbmc-windows.zip")
     CONSUMERS = (".github/workflows/ci.yml", ".github/workflows/release.yml",
-                 "Dockerfile", "checker/build_linux_payload.sh")
+                 "Dockerfile", "checker/fetch_payload.sh")
 
     @pytest.mark.parametrize("asset", PINS)
     def test_the_pin_is_one_sha256(self, asset) -> None:
@@ -155,7 +155,7 @@ class TestPinnedChecker:
 
     def test_the_image_pins_both_architectures(self) -> None:
         text = read("Dockerfile")
-        for asset in self.PINS:
+        for asset in ("esbmc-linux.zip", "esbmc-linux-armv8.zip"):
             assert f"checker/{asset}.sha256" in text, asset
         assert "esbmc-linux-armv8.zip" in text
 
@@ -171,7 +171,7 @@ class TestCheckerWheelPayload:
     container image, which was the only place an arm64 binary existed before
     ESBMC 8.6; the image is a distribution channel now, not a build step."""
 
-    SCRIPT = "checker/build_linux_payload.sh"
+    SCRIPT = "checker/fetch_payload.sh"
 
     def _instructions(self) -> str:
         return "\n".join(
@@ -184,10 +184,11 @@ class TestCheckerWheelPayload:
         for marker in ("docker", "ghcr.io", "cmake", "FROM "):
             assert marker not in text, marker
 
-    def test_fetches_one_asset_per_architecture(self) -> None:
+    def test_fetches_one_asset_per_platform(self) -> None:
         text = self._instructions()
         assert "ASSET=esbmc-linux.zip" in text
         assert "ASSET=esbmc-linux-armv8.zip" in text
+        assert "ASSET=esbmc-windows.zip" in text
         assert "releases/download/" in text
 
     def test_takes_the_release_from_checker_py(self) -> None:
@@ -205,7 +206,7 @@ class TestCheckerWheelPayload:
         yaml = pytest.importorskip("yaml")
         wheels = yaml.safe_load(read(".github/workflows/release.yml"))["jobs"]["wheels"]
         runs = "\n".join(step.get("run", "") for step in wheels["steps"])
-        assert "build_linux_payload.sh ${{ matrix.arch }}" in runs
+        assert "fetch_payload.sh ${{ matrix.arch }}" in runs
         assert "ghcr.io" not in runs
 
     def test_the_separate_checker_package_is_gone(self) -> None:
@@ -1180,7 +1181,7 @@ class TestReleaseWorkflow:
         assert arches == {"x86_64", "aarch64"}
         assert "ubuntu-24.04-arm" in {e["runner"] for e in wheels["strategy"]["matrix"]["include"]}
         runs = "\n".join(step.get("run", "") for step in wheels["steps"])
-        assert "build_linux_payload.sh ${{ matrix.arch }}" in runs
+        assert "fetch_payload.sh ${{ matrix.arch }}" in runs
         assert "bundle_wheel.py" in runs and "manylinux_2_17_${{ matrix.arch }}" in runs
         assert "docker build" in runs and "veripp doctor" in runs
         assert "bundled_esbmc()" in runs, "the test must ask veripp's own lookup"
@@ -1190,7 +1191,20 @@ class TestReleaseWorkflow:
         runs = "\n".join(step.get("run", "") for step in self._jobs()["publish"]["steps"])
         assert "py3-none-any.whl" in runs and "tar.gz" in runs
         assert "x86_64 aarch64" in runs
+        assert "win_amd64.whl" in runs
         assert "incomplete" in runs.lower() or "missing the" in runs
+
+    def test_a_windows_wheel_is_built_and_probed_too(self) -> None:
+        """esbmc.exe and its DLL from the same pinned release, installed in
+        a fresh environment and put through doctor and a verification."""
+        jobs = self._jobs()
+        windows = jobs["wheel-windows"]
+        assert windows["runs-on"].startswith("windows")
+        runs = "\n".join(step.get("run", "") for step in windows["steps"])
+        assert "fetch_payload.sh win_amd64" in runs
+        assert "--plat win_amd64" in runs
+        assert "veripp doctor" in runs and "off_by_one.cpp" in runs
+        assert "wheel-windows" in jobs["publish"]["needs"]
 
     def test_it_uses_the_repository_secret(self) -> None:
         assert "secrets.PYPI_TOKEN" in self.WF.read_text(encoding="utf-8")

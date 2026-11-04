@@ -53,6 +53,11 @@ run, and refuses to back results from one that cannot detect a planted bug.
   pull-request annotation says it) and the MCP result.
 
 ### Added
+- **A Windows wheel.** `pip install veripp` on Windows x86_64 now gets a
+  `win_amd64` wheel carrying ESBMC 8.6's `esbmc.exe` and its `libz3.dll`
+  from the same pinned release; the release workflow installs it in a fresh
+  environment and runs doctor and a real verification before publishing.
+  `install-checker` checks the Windows download against the pin too.
 - **`veripp mcp`**: the CLI's `verify`, `scan`, `harness` and `doctor` as
   Model Context Protocol tools over stdio, for Claude Code and any other MCP
   client. Structured arguments in, the `--json` report plus the exit code and

@@ -5,12 +5,14 @@ name: release
 # of a gate: workflows race, and a tag pushed seconds after a bad commit would
 # publish before ci finished failing.
 #
-# Three wheels and an sdist go up together: the pure py3-none-any wheel, and
-# a manylinux wheel for x86_64 and for arm64 that carries ESBMC's static
-# release binary at veripp/bin/esbmc. pip takes the platform wheel where one
-# matches, so `pip install veripp` is the whole installation on Linux, and the
-# pure wheel everywhere else. Each platform wheel is pip-installed in a clean
-# container and put through `veripp doctor` before anything is uploaded.
+# Four wheels and an sdist go up together: the pure py3-none-any wheel, a
+# manylinux wheel for x86_64 and for arm64 carrying ESBMC's static release
+# binary at veripp/bin/esbmc, and a win_amd64 wheel carrying esbmc.exe and
+# its DLL. pip takes the platform wheel where one matches, so `pip install
+# veripp` is the whole installation on Linux and Windows, and the pure wheel
+# everywhere else (macOS). Each platform wheel is pip-installed afresh and
+# put through `veripp doctor` and a real verification before anything is
+# uploaded.
 #
 # A workflow_dispatch runs everything but the upload: the way to rehearse a
 # release without a tag.
@@ -89,7 +91,7 @@ jobs:
         run: uv build --wheel --out-dir pure
 
       - name: Fetch the pinned release binary, check its digest, strip it
-        run: ./checker/build_linux_payload.sh ${{ matrix.arch }} payload
+        run: ./checker/fetch_payload.sh ${{ matrix.arch }} payload
 
       # The binary is static, so it needs nothing from the host; manylinux_2_17
       # is the oldest tag pip accepts everywhere, and the honest one.
@@ -121,8 +123,49 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
+  # The Windows wheel: esbmc.exe and the libz3.dll it loads from its own
+  # directory, from the same pinned release. Git Bash on the runner has the
+  # curl, unzip and sha256sum the payload script needs.
+  wheel-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Build the pure wheel
+        run: uv build --wheel --out-dir pure
+
+      - name: Fetch the pinned release binary and check its digest
+        shell: bash
+        run: ./checker/fetch_payload.sh win_amd64 payload
+
+      - name: Bundle it into the wheel
+        shell: bash
+        run: python checker/bundle_wheel.py --wheel pure/veripp-*-py3-none-any.whl
+             --payload payload --plat win_amd64 --outdir dist
+
+      - name: Install the wheel in a fresh environment and probe its checker
+        shell: bash
+        run: |
+          python -m venv itest
+          ./itest/Scripts/pip install -q dist/*.whl
+          found="$(./itest/Scripts/python -c "from veripp.checker import bundled_esbmc; print(bundled_esbmc() or '')")"
+          test -n "$found" || { echo "::error::the wheel carries no runnable checker"; exit 1; }
+          echo "bundled checker: $found"
+          ./itest/Scripts/veripp doctor || exit 1
+          ./itest/Scripts/veripp verify examples/off_by_one.cpp --function sum_array --no-llm; status=$?
+          test "$status" -eq 1 || { echo "::error::expected exit 1 (counterexample) from the example, got $status"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-win_amd64
+          path: dist/*.whl
+          if-no-files-found: error
+
   publish:
-    needs: [test, wheels]
+    needs: [test, wheels, wheel-windows]
     # Publishing is the one irreversible step, so it gets its own job: a
     # failure above stops before anything leaves the machine -- and a
     # workflow_dispatch stops here, having built and tested everything.
@@ -165,6 +208,8 @@ jobs:
             test -n "$(ls dist/*manylinux*_${arch}.whl 2>/dev/null)" \
               || { echo "::error::missing the ${arch} wheel"; exit 1; }
           done
+          test -n "$(ls dist/*-win_amd64.whl 2>/dev/null)" \
+            || { echo "::error::missing the Windows wheel"; exit 1; }
 
       # Catches the failure that is otherwise invisible until the project
       # page is live: a README that does not render on PyPI.

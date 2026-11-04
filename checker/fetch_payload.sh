@@ -1,26 +1,31 @@
 #!/usr/bin/env bash
-# Assemble the ESBMC payload for a Linux wheel: the release's own static
-# binary for one architecture, checked against the digest veripp pins and
-# stripped. No image and no compiler are involved -- ESBMC 8.6 publishes a
-# static binary for x86_64 and for arm64, and the wheel ships those bytes.
+# Assemble the ESBMC payload for one of veripp's platform wheels: the
+# release's own binary for the platform, checked against the digest veripp
+# pins, with its licence notices. No image and no compiler are involved --
+# ESBMC 8.6 publishes a static binary for Linux x86_64 and arm64 and a
+# relocatable esbmc.exe (with its one DLL) for Windows, and the wheel ships
+# those bytes.
 #
-#   ./build_linux_payload.sh <x86_64|aarch64> <outdir>
+#   ./fetch_payload.sh <x86_64|aarch64|win_amd64> <outdir>
 #
 # The release tag is ESBMC_RELEASE in src/veripp/checker.py (override with
-# $ESBMC_VERSION); the digest is checker/<asset>.sha256, the same pin the
-# workflows and the image check. `strip` has to understand the binary, so run
-# this on a machine of the target architecture, or with multiarch binutils.
+# $ESBMC_VERSION); the digest is checker/<asset>.sha256, the same pin
+# `install-checker`, the workflows and the image check. On Linux the binary
+# is stripped, so `strip` has to understand it: run this on a machine of the
+# target architecture, or with multiarch binutils. On Windows run it under
+# Git Bash, which has curl, unzip and sha256sum.
 set -euo pipefail
 
-ARCH="${1:?usage: build_linux_payload.sh <x86_64|aarch64> <outdir>}"
+ARCH="${1:?usage: fetch_payload.sh <x86_64|aarch64|win_amd64> <outdir>}"
 OUT="${2:-payload}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RELEASE="${ESBMC_VERSION:-$(sed -n 's/^ESBMC_RELEASE = "\(.*\)"$/\1/p' "$HERE/../src/veripp/checker.py")}"
 test -n "$RELEASE"
 
 case "$ARCH" in
-  x86_64|amd64)  ASSET=esbmc-linux.zip ;;
-  aarch64|arm64) ASSET=esbmc-linux-armv8.zip ;;
+  x86_64|amd64)   ASSET=esbmc-linux.zip;       BIN=esbmc ;;
+  aarch64|arm64)  ASSET=esbmc-linux-armv8.zip; BIN=esbmc ;;
+  win_amd64|windows|AMD64) ASSET=esbmc-windows.zip; BIN=esbmc.exe ;;
   *) echo "no ESBMC release binary is published for $ARCH" >&2; exit 2 ;;
 esac
 PIN="$HERE/$ASSET.sha256"
@@ -36,8 +41,8 @@ curl -fsSL -o "$WORK/$ASSET" \
 # mismatch means the download is not what it claims to be.
 echo "$(cat "$PIN")  $WORK/$ASSET" | sha256sum -c -
 unzip -q "$WORK/$ASSET" -d "$WORK/unz"
-bin="$(find "$WORK/unz" -name esbmc -type f | head -1)"
-test -n "$bin" || { echo "no esbmc binary inside $ASSET" >&2; exit 1; }
+bin="$(find "$WORK/unz" -name "$BIN" -type f | head -1)"
+test -n "$bin" || { echo "no $BIN inside $ASSET" >&2; exit 1; }
 
 # Refuse to package a binary carrying a solver that cannot be redistributed.
 # ESBMC's own COPYING flags MathSAT as academic/non-commercial and Yices as
@@ -64,20 +69,24 @@ fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/licenses"
-cp "$bin" "$OUT/bin/esbmc"
-chmod +x "$OUT/bin/esbmc"
+# Everything beside the binary comes along: on Windows that is libz3.dll,
+# which esbmc.exe loads from its own directory.
+cp "$(dirname "$bin")"/* "$OUT/bin/"
+chmod +x "$OUT/bin/$BIN"
 # The release ships its own notices beside the binary (ESBMC's COPYING, and
 # Boost, Boolector and Z3); they travel inside the package too.
 if [ -d "$(dirname "$bin")/../license" ]; then
   cp "$(dirname "$bin")"/../license/* "$OUT/licenses/"
 fi
-# Static and unstripped: ~700MB on x86_64, most of it debug symbols. The
-# stripped binary is what the image ships too, and `veripp doctor` is run on
-# the installed wheel before anything is published.
-strip --strip-unneeded "$OUT/bin/esbmc"
-# A statically linked binary needs nothing from the host; say so, since the
-# workflow derives the manylinux tag from the glibc floor.
-if ! objdump -p "$OUT/bin/esbmc" 2>/dev/null | grep -q NEEDED; then
-  echo "note: statically linked -- no bundled libraries, no glibc floor"
+if [ "$BIN" = esbmc ]; then
+  # Static and unstripped: ~700MB on x86_64, most of it debug symbols. The
+  # stripped binary is what the image ships too, and `veripp doctor` is run
+  # on the installed wheel before anything is published.
+  strip --strip-unneeded "$OUT/bin/esbmc"
+  # A statically linked binary needs nothing from the host; say so, since
+  # the workflow derives the manylinux tag from the glibc floor.
+  if ! objdump -p "$OUT/bin/esbmc" 2>/dev/null | grep -q NEEDED; then
+    echo "note: statically linked -- no bundled libraries, no glibc floor"
+  fi
 fi
 echo "payload: $OUT ($(du -sh "$OUT" | cut -f1))"

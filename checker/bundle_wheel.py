@@ -3,10 +3,11 @@
 
 `uv build` makes `veripp-X.Y.Z-py3-none-any.whl`: Python only, installable
 anywhere, and without a checker. This takes that wheel and a payload from
-checker/build_linux_payload.sh -- ESBMC's own static release binary for one
-architecture, digest-checked and stripped -- and writes
-`veripp-X.Y.Z-py3-none-<plat>.whl` with the binary at `veripp/bin/esbmc`
-and the release's licence notices beside it. pip prefers the platform wheel
+checker/fetch_payload.sh -- ESBMC's own release binary for one platform,
+digest-checked, stripped on Linux, with the DLL it needs on Windows -- and
+writes `veripp-X.Y.Z-py3-none-<plat>.whl` with everything from the
+payload's bin/ under `veripp/bin/` and the release's licence notices beside
+it. pip prefers the platform wheel
 where one matches and falls back to the pure one everywhere else, which is
 what lets `pip install veripp` be the whole installation on Linux and still
 resolve on macOS.
@@ -45,8 +46,8 @@ def bundle(wheel: Path, payload: Path, plat: str, outdir: Path) -> Path:
         raise SystemExit(f"{wheel.name} is not a py3-none-any wheel")
     if match["dist"] != PACKAGE:
         raise SystemExit(f"{wheel.name} is not a {PACKAGE} wheel")
-    binary = payload / "bin" / "esbmc"
-    if not binary.is_file():
+    binaries = sorted(p for p in (payload / "bin").glob("*") if p.is_file()) if (payload / "bin").is_dir() else []
+    if not any(p.name in ("esbmc", "esbmc.exe") for p in binaries):
         raise SystemExit(f"no bin/esbmc in {payload}: nothing to bundle")
     notices = sorted(p for p in (payload / "licenses").glob("*") if p.is_file())
     if not any(p.name == "COPYING" for p in notices):
@@ -84,7 +85,11 @@ def bundle(wheel: Path, payload: Path, plat: str, outdir: Path) -> Path:
 
         # as_posix(), always: zip entry names are forward-slash separated by
         # specification, whatever the build host.
-        write(f"{PACKAGE}/bin/esbmc", binary.read_bytes(), 0o755)
+        # The checker, and on Windows the DLL beside it. Everything in bin/
+        # is marked executable: pip preserves the mode, and a DLL's mode is
+        # immaterial on Windows but harmless elsewhere.
+        for binary in binaries:
+            write(f"{PACKAGE}/bin/{binary.name}", binary.read_bytes(), 0o755)
         for notice in notices:
             write(f"{PACKAGE}/bin/licenses/{notice.name}", notice.read_bytes(), 0o644)
 
@@ -113,7 +118,7 @@ def main() -> int:
     ap.add_argument("--wheel", type=Path, required=True,
                     help="the py3-none-any wheel from `uv build`")
     ap.add_argument("--payload", type=Path, required=True,
-                    help="tree from build_linux_payload.sh: bin/esbmc and licenses/")
+                    help="tree from fetch_payload.sh: bin/esbmc and licenses/")
     ap.add_argument("--plat", required=True,
                     help="platform tag, e.g. manylinux_2_17_x86_64")
     ap.add_argument("--outdir", type=Path, default=Path("dist"))

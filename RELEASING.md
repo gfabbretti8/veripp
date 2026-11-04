@@ -26,10 +26,11 @@ architectures.
 
 ## What goes up
 
-Four files, always together: the sdist, the pure `py3-none-any` wheel, and a
+Five files, always together: the sdist, the pure `py3-none-any` wheel, a
 `manylinux_2_17` wheel for x86_64 and for aarch64 that carries the ESBMC
-checker at `veripp/bin/esbmc`. pip takes the platform wheel where one
-matches, so `pip install veripp` is the whole installation on Linux, and the
+checker at `veripp/bin/esbmc`, and a `win_amd64` wheel carrying `esbmc.exe`
+and its DLL. pip takes the platform wheel where one matches, so
+`pip install veripp` is the whole installation on Linux and Windows, and the
 pure wheel everywhere else. See `checker/README.md` for how the platform
 wheels are made.
 
@@ -41,12 +42,12 @@ wheels are made.
   finished failing;
 * `veripp doctor` passes -- a release built against a checker that silently
   misses a bug class would ship proofs that are not proofs;
-* each platform wheel, pip-installed in a clean container on a native runner
-  of its architecture, finds its bundled checker, passes `veripp doctor` and
-  finds the bug in `examples/off_by_one.cpp`;
+* each platform wheel, pip-installed afresh on a native runner of its
+  platform, finds its bundled checker, passes `veripp doctor` and finds the
+  bug in `examples/off_by_one.cpp`;
 * the tag matches `pyproject.toml`'s version, so a mislabelled build is
   refused rather than published;
-* the set is complete -- sdist, pure wheel, both platform wheels -- since a
+* the set is complete -- sdist, pure wheel, all three platform wheels -- since a
   subset would leave some users unable to resolve the package or silently
   without a checker;
 * `twine check` accepts every artifact (catches a README that will not

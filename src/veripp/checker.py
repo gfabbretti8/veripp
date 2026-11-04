@@ -35,7 +35,7 @@ from pathlib import Path
 ESBMC_RELEASE = "v8.6"
 RELEASE_URL = f"https://github.com/esbmc/esbmc/releases/download/{ESBMC_RELEASE}"
 
-#: SHA-256 of the Linux assets of that release. `install` refuses a download
+#: SHA-256 of the Linux and Windows assets of that release. `install` refuses a download
 #: that does not match: the only way those bytes change is someone replacing
 #: the asset, and a checker is the one program nobody should take on trust.
 #: checker/*.sha256 hold the same digests for the workflows and the image; a
@@ -45,6 +45,8 @@ PINNED_SHA256 = {
         "07b00b4a2590fe285edb5ce063ca2e5fbb368bbe556cfe139014c173717637f6",
     "esbmc-linux-armv8.zip":
         "d3e9fbdeba2ba6cfeb54b32c8fb8a9cd8125f6c5f92fbf05a212a4c2289fcc12",
+    "esbmc-windows.zip":
+        "c627258b6eddf10355ce8bb448576ab23ce932db58f5beaa7b717abecf0a39e8",
 }
 
 

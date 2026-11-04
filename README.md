@@ -44,10 +44,9 @@ pip install veripp
 veripp doctor          # checks the setup and probes the checker for known soundness holes
 ```
 
-On Linux (x86_64 and arm64) that is the whole installation: the wheel
-carries the [ESBMC 8.6](https://github.com/esbmc/esbmc/releases/tag/v8.6)
-checker inside it. On Windows, or when installing from source, fetch one
-with:
+On Linux (x86_64 and arm64) and Windows that is the whole installation: the
+wheel carries the [ESBMC 8.6](https://github.com/esbmc/esbmc/releases/tag/v8.6)
+checker inside it. When installing from source, fetch one with:
 
 ```bash
 veripp install-checker

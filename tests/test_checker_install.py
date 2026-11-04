@@ -40,8 +40,12 @@ class TestPlatformSelection:
         assert (major, minor) >= (8, 6)
 
     def test_windows_gets_an_exe(self):
+        from veripp.checker import PINNED_SHA256
+
         src = source_for("Windows", "AMD64")
         assert src.available and src.binary_name == "esbmc.exe"
+        assert src.url.endswith("esbmc-windows.zip")
+        assert src.sha256 == PINNED_SHA256["esbmc-windows.zip"]
 
     def test_macos_refuses_rather_than_shipping_a_broken_unzip(self):
         src = source_for("Darwin", "arm64")
