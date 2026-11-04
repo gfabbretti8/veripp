@@ -1415,7 +1415,8 @@ def _scan_tree(args) -> int:
         ],
         "preconditioned": [
             {"file": str(r.source), "function": f.name,
-             "preconditions": f.preconditions}
+             "preconditions": f.preconditions,
+             "precondition_violations": f.precondition_violations}
             for r in reports for f in r.preconditioned
         ],
         "inconclusive": sum(len(r.inconclusive) for r in reports),
@@ -1567,6 +1568,7 @@ def _scan(args) -> int:
             "preconditioned": [
                 {"function": r.name, "signature": r.signature,
                  "property": r.detail, "preconditions": r.preconditions,
+                 "precondition_violations": r.precondition_violations,
                  "triage": r.triage_kind}
                 for r in report.preconditioned
             ],
@@ -1804,6 +1806,8 @@ def _verify(args) -> int:
         return EXIT_USAGE
     if harness and getattr(args, "assume", None):
         report.accepted_preconditions = list(args.assume) + report.accepted_preconditions
+    if harness and args.function and report.accepted_preconditions:
+        report.precondition_violations = _callers_breaking(args, report.accepted_preconditions)
 
     if report.final.outcome is Outcome.PARSE_ERROR:
         hint = _unconfigured_build_hint(args.source, _include_dirs(args))
@@ -1904,6 +1908,27 @@ def _include_dirs(args) -> list[Path]:
     return dirs
 
 
+def _callers_breaking(args, preconditions: list[str]) -> list[str]:
+    """Literal call sites of the target that violate `preconditions`, in the
+    source and anything --link adds. See triage.precondition_violations."""
+    from .cppsig import find_function
+    from .paths import read_source
+    from .triage import precondition_violations
+
+    try:
+        text = read_source(args.source)
+        params = [p.name for p in find_function(text, args.function).params]
+    except (OSError, SignatureError):
+        return []
+    linked = []
+    for path in getattr(args, "link", []) or []:
+        try:
+            linked.append(read_source(Path(path)))
+        except OSError:
+            continue
+    return precondition_violations(text, args.function, params, preconditions, linked=linked)
+
+
 def _payload(report: AgentReport, harness: Harness | None) -> dict:
     prop = report.final.violated_property
     return {
@@ -1920,6 +1945,9 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "config": asdict(report.final.config),
         "assumptions": report.assumptions,
         "accepted_preconditions": report.accepted_preconditions,
+        # Call sites whose literal arguments break one of them: each is a
+        # path to the counterexample the precondition was meant to exclude.
+        "precondition_violations": report.precondition_violations,
         "unsound_probes": report.unsound_probes,
         "harness": str(report.harness) if report.harness else None,
         # Assertions an LLM inserted into that harness as invariants; each
@@ -1978,7 +2006,10 @@ def _exit_code(report: AgentReport) -> int:
     outcome = report.final.outcome
     if outcome is Outcome.VERIFIED:
         # A vacuous proof is not a pass, and neither is one the reachability
-        # probe could not confirm.
+        # probe could not confirm -- nor a conditional one whose precondition
+        # a caller visibly breaks.
+        if report.precondition_violations:
+            return EXIT_INCONCLUSIVE
         return EXIT_VERIFIED if report.verified else EXIT_INCONCLUSIVE
     if outcome is Outcome.COUNTEREXAMPLE:
         return EXIT_COUNTEREXAMPLE

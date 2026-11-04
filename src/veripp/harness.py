@@ -385,7 +385,8 @@ def generate(
         body.append("// property under it, but nothing checks that real callers meet it.")
         body.append(f"VERIPP_ASSUME({expr});")
         assumptions.append(
-            f"PROPOSED precondition (not validated against callers): {expr}"
+            f"PROPOSED precondition (checked only against callers that pass "
+            f"literals): {expr}"
         )
 
     for name in dict.fromkeys(

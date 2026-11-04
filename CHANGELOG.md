@@ -10,6 +10,13 @@ run, and refuses to back results from one that cannot detect a planted bug.
 ## Unreleased
 
 ### Changed
+- **An accepted precondition is checked against the callers.** Where a call
+  site passes an integer literal for a parameter the precondition names,
+  veripp evaluates the precondition on it; a caller that breaks it is
+  reported under the conditional result ("line 6: d = 0 violates `d != 0`")
+  in `verify` and `scan`, in text and in JSON, and `verify` exits 3 instead
+  of 0 for it: that call reaches the counterexample the precondition was
+  meant to exclude. Variable arguments are never judged either way.
 - **`scan` says who can reach each counterexample.** Every finding carries
   its linkage (`external`, an entry point for any other translation unit, or
   `static`, reached only through this file) and the number of call sites

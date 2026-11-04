@@ -31,7 +31,10 @@ from .harness import (
 )
 from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
-from .triage import TargetInfo, access_kind, find_call_sites, mechanical_artifact
+from .triage import (
+    TargetInfo, access_kind, find_call_sites, mechanical_artifact,
+    precondition_violations,
+)
 
 
 @dataclass
@@ -77,6 +80,12 @@ class FunctionResult:
     #: entry point is reachable by definition, a static helper only through
     #: the callers counted below, which may guard every input it rejects.
     linkage: str = ""
+    #: Call sites whose literal arguments break an accepted precondition,
+    #: e.g. "line 42: d = 0 violates `d != 0`". A precondition the solver
+    #: accepted is satisfiable and sufficient; it is not a proof that callers
+    #: honour it, and one that a caller visibly breaks is a lead, not a
+    #: conditional proof.
+    precondition_violations: list[str] = field(default_factory=list)
     #: Call sites of the function found in the scanned translation unit and
     #: any linked sources, by text. None when not counted. "No callers found"
     #: for a static function means dead code, a function pointer, or a
@@ -253,6 +262,9 @@ class ScanReport:
                           "the failing input and is satisfiable):"]
             for r in sorted(self.preconditioned, key=lambda r: r.name):
                 lines.append(f"    {r.name}: " + " && ".join(r.preconditions))
+                for violation in r.precondition_violations:
+                    lines.append(f"      BUT a caller breaks it -- {violation}; "
+                                 "that call is a lead, not covered by the proof")
         if self.unused_lengths:
             lines += ["", "  length parameters the body never reads "
                           "(not findings -- leads):"]
@@ -623,6 +635,24 @@ _RETRYABLE = (Outcome.TIMEOUT.value, Outcome.UNWIND_LIMIT.value,
               Outcome.UNKNOWN.value)
 
 
+def _callers_breaking(report: ScanReport, r: FunctionResult,
+                      options: HarnessOptions) -> list[str]:
+    """Call sites whose literal arguments violate `r.preconditions`.
+
+    The solver said the precondition is satisfiable and sufficient. This is
+    the other half the roadmap asked for: the mechanical check, on literal
+    arguments only, that real callers honour it. A caller that does not
+    turns the conditional proof back into a lead for that call.
+    """
+    try:
+        text = report.source.read_text(encoding="utf-8", errors="replace")
+        params = [p.name for p in find_function(text, r.name).params]
+    except (OSError, SignatureError):
+        return []
+    return precondition_violations(text, r.name, params, r.preconditions,
+                                   linked=_linked_text(options))
+
+
 def _caller_count(name: str, text: str, scrubbed: str, linked: list[str]) -> int:
     """Call sites of `name` in the unit and its linked sources, by text.
 
@@ -718,6 +748,7 @@ def _retry_pass(
                 # by the same rule `_triage_pass` applies.
                 r.outcome = "preconditioned"
                 r.preconditions = list(agent.accepted_preconditions)
+                r.precondition_violations = _callers_breaking(report, r, options)
             r.detail = prop.description if prop else (final.error or "")
             r.stubbed_calls = final.stubbed_calls
             r.artifact = mechanical_artifact(final, harness_paths[r.name])
@@ -786,5 +817,6 @@ def _triage_pass(
         ):
             r.outcome = "preconditioned"
             r.preconditions = list(agent.accepted_preconditions)
+            r.precondition_violations = _callers_breaking(report, r, options)
         if progress is not None:
             progress(done, len(candidates), r)

@@ -9,6 +9,7 @@ every proposal it produces goes back through ESBMC before it is believed.
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -381,3 +382,149 @@ def triage_counterexample(
             ),
             llm_error=str(exc),
         )
+
+
+# ------------------------------------------------ call-site validation ---
+#
+# A precondition the solver accepted is satisfiable and excludes the failing
+# input; it says nothing about whether real callers honour it. Where a call
+# site passes a literal for the parameter the precondition names, that can be
+# checked mechanically, and a caller that violates it turns "safe under this
+# precondition" back into a lead. Only literals are judged: a variable
+# argument is unknown, never assumed either way.
+
+_INT_LITERAL_RE = re.compile(r"^[+-]?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$")
+_CHAR_LITERAL_RE = re.compile(r"^'(\\.|[^'\\])'$")
+
+
+def _c_literal(text: str) -> int | None:
+    text = text.strip()
+    if _INT_LITERAL_RE.match(text):
+        return int(text.rstrip("uUlL"), 0)
+    if _CHAR_LITERAL_RE.match(text):
+        body = text[1:-1]
+        escapes = {"\\0": 0, "\\n": 10, "\\t": 9, "\\r": 13, "\\\\": 92, "\\'": 39}
+        return escapes.get(body, ord(body[-1])) if len(body) <= 2 else None
+    return None
+
+
+def _split_args(inner: str) -> list[tuple[int, int]]:
+    """Spans of the top-level comma-separated arguments in `inner`."""
+    spans, depth, start = [], 0, 0
+    for i, ch in enumerate(inner):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            spans.append((start, i))
+            start = i + 1
+    if inner.strip():
+        spans.append((start, len(inner)))
+    return spans
+
+
+def literal_call_arguments(source: str, name: str, params: list[str]) -> list[tuple[int, dict[str, int]]]:
+    """For each call of `name`, the parameters passed an integer literal.
+
+    Returns (line, {param: value}) per call site, in source order, skipping
+    the definition and calls whose argument count does not match -- those
+    are a different overload, a macro, or a mis-parse, and guessing which
+    parameter a literal belongs to would be worse than saying nothing.
+    """
+    from .cppsig import SignatureError, match_bracket
+
+    # Brackets and commas are found in the scrubbed text, where comments and
+    # the insides of literals are blanked; scrub() keeps every offset, so the
+    # argument's own text is read from the source at the same span, which is
+    # what makes a char literal like 'a' visible.
+    scrubbed = scrub(source)
+    found: list[tuple[int, dict[str, int]]] = []
+    for m in re.finditer(rf"\b{re.escape(name)}\s*\(", scrubbed):
+        if _is_declaration(scrubbed, m.start()):
+            continue
+        open_at = m.end() - 1
+        try:
+            close_at = match_bracket(scrubbed, open_at)
+        except SignatureError:
+            continue
+        spans = _split_args(scrubbed[open_at + 1:close_at])
+        if len(spans) != len(params):
+            continue
+        args = [source[open_at + 1 + a:open_at + 1 + b] for a, b in spans]
+        literals = {}
+        for param, arg in zip(params, args):
+            value = _c_literal(arg)
+            if value is not None and param:
+                literals[param] = value
+        line = scrubbed.count("\n", 0, m.start()) + 1
+        found.append((line, literals))
+    return found
+
+
+_C_TO_PY = (
+    (re.compile(r"&&"), " and "),
+    (re.compile(r"\|\|"), " or "),
+    (re.compile(r"!(?!=)"), " not "),
+    (re.compile(r"\btrue\b"), "True"),
+    (re.compile(r"\bfalse\b"), "False"),
+    (re.compile(r"\bNULL\b"), "0"),
+)
+_ALLOWED_NODES = (
+    ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not, ast.USub,
+    ast.UAdd, ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.BinOp, ast.Add, ast.Sub, ast.Mult, ast.Mod, ast.FloorDiv, ast.Div,
+    ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift,
+    ast.Name, ast.Constant, ast.Load,
+)
+
+
+def evaluate_precondition(precondition: str, bindings: dict[str, int]) -> bool | None:
+    """Whether `precondition` holds for these literal arguments; None if it
+    cannot be judged -- a name without a binding, a call, a field access, a
+    cast, anything beyond integer comparison and arithmetic."""
+    text = precondition
+    for pattern, replacement in _C_TO_PY:
+        text = pattern.sub(replacement, text)
+    text = text.replace("/", "//").strip()  # C integer division on literals
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_NODES):
+            return None
+        if isinstance(node, ast.Name) and node.id not in bindings:
+            return None
+        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, bool)):
+            return None
+    try:
+        return bool(eval(compile(tree, "<precondition>", "eval"), {"__builtins__": {}}, dict(bindings)))
+    except (ZeroDivisionError, ValueError, TypeError, OverflowError):
+        return None
+
+
+def precondition_violations(
+    source: str, name: str, params: list[str], preconditions: list[str],
+    linked: list[str] | None = None,
+) -> list[str]:
+    """Call sites whose literal arguments violate an accepted precondition.
+
+    Each entry reads like "line 42: d = 0 violates `d != 0`". A call that
+    passes a variable, or a precondition that mentions something other than
+    the parameters, is not judged: the answer is only ever "this caller
+    breaks it", never "every caller honours it".
+    """
+    violations: list[str] = []
+    for label, text in [("", source), *((f"{i}: ", t) for i, t in enumerate(linked or []))]:
+        for line, literals in literal_call_arguments(text, name, params):
+            if not literals:
+                continue
+            for precondition in preconditions:
+                if evaluate_precondition(precondition, literals) is False:
+                    passed = ", ".join(f"{k} = {v}" for k, v in literals.items()
+                                       if re.search(rf"\b{re.escape(k)}\b", precondition))
+                    where = f"linked source {label}line {line}" if label else f"line {line}"
+                    violations.append(f"{where}: {passed or 'the literal arguments'} "
+                                      f"violate{'s' if ',' not in passed else ''} `{precondition}`")
+    return violations

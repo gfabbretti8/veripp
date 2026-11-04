@@ -65,6 +65,10 @@ class AgentReport:
     #: assumed -- see `_not_just_assertions`.
     llm_invariants: list[str] = field(default_factory=list)
     accepted_preconditions: list[str] = field(default_factory=list)
+    #: Call sites whose literal arguments break an accepted precondition.
+    #: The solver can say a precondition is sufficient; only the callers can
+    #: say it holds, and one that visibly does not makes this no pass.
+    precondition_violations: list[str] = field(default_factory=list)
     #: Bug classes the checker that produced this result is known to miss.
     #: A "verified" is only as sound as the checker behind it.
     unsound_probes: list[str] = field(default_factory=list)
@@ -229,6 +233,12 @@ class AgentReport:
                 "checks that real callers satisfy them - review before trusting:"
             )
             lines += [f"    requires {p}" for p in self.accepted_preconditions]
+            if self.precondition_violations:
+                lines.append(
+                    "  BUT a caller breaks the precondition, so this is NOT a "
+                    "pass -- that call reaches the counterexample:"
+                )
+                lines += [f"    {v}" for v in self.precondition_violations]
         prop = self.final.violated_property
         if prop:
             lines.append(f"Violated property: {prop.description}")

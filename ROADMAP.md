@@ -68,8 +68,9 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [x] `benchmarks/eval_triage.py --models a,b,c` scores triage per model
       against the pilot's ground truth. Because the solver rejects wrong
       proposals, the question is hit rate against price, not correctness.
-- [ ] Call-site validation of a proposed precondition (mechanical for literal
-      arguments), to catch over-tight but satisfiable invariants.
+- [x] Call-site validation of a proposed precondition, mechanical for literal
+      arguments: a caller that passes a value the precondition forbids turns
+      the conditional proof into a lead, in `verify` (exit 3) and in `scan`.
 
 ## M1.8 — provider independence (done)
 - [x] Any OpenAI-compatible endpoint (OpenAI, Gemini, Groq, Together,
