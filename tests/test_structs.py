@@ -1190,3 +1190,80 @@ class TestUnterminatedStringFields:
         assumptions = self._harness(tmp_path, terminated=False).assumptions
         assert any("NO terminator" in a and "x_obj.name" in a
                    for a in assumptions)
+
+
+class TestVoidPointerParameters:
+    """29 of lz4's 99 functions were refused for a `void *` parameter. A void
+    pointer beside a length is memcpy's shape; one the body casts says what
+    it really is; one with neither gets bounded bytes and the bound stated."""
+
+    def _gen(self, tmp_path, src, fn, **kw):
+        p = tmp_path / "v.c"
+        p.write_text('#include "veripp/contracts.hpp"\n#include <stddef.h>\n' + src,
+                     encoding="utf-8")
+        return generate(p, fn, HarnessOptions(**kw))
+
+    def test_beside_a_length_it_is_that_many_bytes(self, tmp_path):
+        h = self._gen(tmp_path,
+                      "int sum(const void* src, size_t srcSize) {\n"
+                      "  const unsigned char* b = src; int s = 0;\n"
+                      "  for (size_t i = 0; i < srcSize; i++) s += b[i];\n  return s;\n}\n",
+                      "sum")
+        assert "unsigned char src_buf[4];" in h.code
+        assert "VERIPP_ASSUME(srcSize <= 4);" in h.code
+        assert any("`src` points to exactly `srcSize`" in a for a in h.assumptions)
+
+    def test_a_cast_in_the_body_names_the_real_type(self, tmp_path):
+        h = self._gen(tmp_path,
+                      "typedef struct { int table[4]; unsigned n; } stream_internal;\n"
+                      "int reset(void* state) {\n"
+                      "  stream_internal* ctx = (stream_internal*)state;\n"
+                      "  ctx->n = 0; return ctx->table[0];\n}\n",
+                      "reset")
+        assert "stream_internal state_typed_obj;" in h.code
+        assert "void * state = state_typed;" in h.code or "void* state = state_typed;" in h.code
+        assert any("casts to `stream_internal *`" in a for a in h.assumptions)
+
+    def test_an_implicit_c_conversion_counts_as_a_cast(self, tmp_path):
+        h = self._gen(tmp_path,
+                      "struct ctx { int n; };\n"
+                      "int touch(void* p) { struct ctx *c = p; return c->n; }\n",
+                      "touch")
+        assert "struct ctx p_typed_obj;" in h.code
+
+    def test_with_neither_it_is_bounded_bytes_and_says_so(self, tmp_path):
+        h = self._gen(tmp_path,
+                      "int first(const void* p) { return *(const unsigned char*)p; }\n",
+                      "first")
+        assert "unsigned char p_bytes[4];" in h.code
+        assert any("no length beside it" in a and "harness bound" in a for a in h.assumptions)
+
+    def test_a_char_cast_is_not_a_struct(self, tmp_path):
+        """`(const char*)p` says bytes, not an object."""
+        from veripp.harness import _void_cast_target
+
+        assert _void_cast_target("p", "const char* s = (const char*)p; return s[0];") is None
+        assert _void_cast_target("p", "struct foo* f = (struct foo*)p;") == "struct foo"
+        assert _void_cast_target("p", "foo_t *f = p;") == "foo_t"
+        assert _void_cast_target("q", "foo_t *f = p;") is None
+
+    @pytest.mark.esbmc
+    def test_the_memcpy_shape_proves_and_the_cast_shape_runs(self, tmp_path):
+        from veripp.agent import verify_with_agent
+        from veripp.esbmc import VerifyConfig
+        from veripp.llm import NullLLM
+        from veripp.paths import contracts_include_dir
+
+        p = tmp_path / "v.c"
+        p.write_text(
+            '#include "veripp/contracts.hpp"\n#include <stddef.h>\n'
+            "int sum(const void* src, size_t srcSize) {\n"
+            "  const unsigned char* b = src; int s = 0;\n"
+            "  for (size_t i = 0; i < srcSize; i++) s += b[i];\n  return s;\n}\n",
+            encoding="utf-8")
+        harness = generate(p, "sum")
+        target = harness.write(tmp_path)
+        config = VerifyConfig(timeout_s=120, include_dirs=[contracts_include_dir()])
+        report = verify_with_agent(target, config, llm=NullLLM(),
+                                   assumptions=harness.assumptions, harness=target)
+        assert report.verified, report.summary()

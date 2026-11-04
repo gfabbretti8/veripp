@@ -688,11 +688,13 @@ def _pair_buffers_with_lengths(
     for idx, param in enumerate(params):
         if not param.is_pointer:
             continue
-        if nondet_for(param.pointee(), typedefs) is None:
+        if (nondet_for(param.pointee(), typedefs) is None
+                and normalize_type(param.pointee(), typedefs) != "void"):
             # A pointer to a struct is one object, not an array of them, even
             # when a `size`-ish parameter sits next to it: `ucvector_reserve(
             # ucvector* p, size_t size)` grows p's capacity, it does not
-            # describe p's length.
+            # describe p's length. A `void *` beside a length is the
+            # opposite: memcpy's shape, so many bytes of memory.
             continue
         if _walks_to_terminator(param.name, body):
             continue
@@ -994,6 +996,9 @@ def _emit_scalar(
                                       typedefs, source_text, teardown)
             if obj is not None:
                 return obj
+        if normalize_type(param.pointee(), typedefs) == "void":
+            return _emit_void_pointer(param, signature, assumptions, options,
+                                      typedefs, source_text, teardown)
         return _emit_lone_pointer(param, assumptions, options, typedefs,
                                   signature.body, macro_text or source_text,
                                   signature)
@@ -1056,6 +1061,67 @@ def _try_double_pointer(
     )
     return built + [
         f"{_decl_type(param.type)} {param.name} = &{inner.name};",
+    ]
+
+
+#: `(LZ4_stream_t_internal*)state`, `(const struct foo *) p`, and the implicit
+#: C conversion `struct foo *f = state;`: what a body says a `void *` really is.
+def _void_cast_target(name: str, body: str) -> str | None:
+    scrubbed = scrub(body)
+    explicit = re.compile(
+        r"\(\s*(?:const\s+)?((?:struct\s+|union\s+)?[A-Za-z_]\w*)\s*\*\s*(?:const\s*)?\)"
+        rf"\s*\(?\s*{re.escape(name)}\b"
+    )
+    implicit = re.compile(
+        rf"\b((?:struct\s+|union\s+)?[A-Za-z_]\w*)\s*\*\s*(?:const\s+)?\w+\s*=\s*{re.escape(name)}\s*;"
+    )
+    for pattern in (explicit, implicit):
+        for m in pattern.finditer(scrubbed):
+            candidate = re.sub(r"\s+", " ", m.group(1)).strip()
+            if candidate.split()[-1] not in ("void", "char", "unsigned", "signed", "const"):
+                return candidate
+    return None
+
+
+def _emit_void_pointer(param, signature, assumptions, options, typedefs,
+                       source_text, teardown=None) -> list[str]:
+    """A `void *` with no length beside it.
+
+    lz4 takes `void* state` and casts it to `LZ4_stream_t_internal*` on its
+    first line; 29 of its 99 functions were refused for a `void *`. When the
+    body says what the pointer really is, that object is built like any
+    other. When nothing does, the pointer gets a bounded run of
+    nondeterministic bytes and the bound is stated -- a `void *` says
+    nothing about size, and a null would be the harness's own doing.
+    """
+    target = _void_cast_target(param.name, signature.body)
+    if target is not None and source_text:
+        typed = Param(type=f"{target} *", name=f"{param.name}_typed")
+        built = _try_object(typed, signature, assumptions, options, typedefs,
+                            source_text, teardown)
+        if built is not None:
+            assumptions.append(
+                f"`{param.name}` is a `void *` that the body casts to "
+                f"`{target} *`, so the harness hands it one `{target}` built "
+                "like any object parameter -- not whatever else a caller "
+                "might pass through the same void pointer"
+            )
+            return built + [f"{_decl_type(param.type)} {param.name} = {typed.name};"]
+    cap = options.max_array_len
+    storage = f"{param.name}_bytes"
+    assumptions.append(
+        f"`{param.name}` is a `void *` with no length beside it"
+        + (f" and a cast to `{target} *` the harness could not build" if target else
+           " and no cast in the body to say what it is")
+        + f": it points to {cap} nondeterministic bytes (harness bound). A "
+        "function that reads further is reported against that bound, which "
+        "is the harness's, not against anything a caller passed"
+    )
+    return [
+        f"unsigned char {storage}[{cap}];",
+        f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+        f"    {storage}[{_LOOP_VAR}] = (unsigned char)VERIPP_NONDET_CHAR();",
+        f"{_decl_type(param.type)} {param.name} = {storage};",
     ]
 
 
@@ -1540,7 +1606,13 @@ def _emit_buffer(
     length_type: str | None = None,
 ) -> list[str]:
     pointee = param.pointee()
-    nondet = nondet_for(pointee, typedefs)
+    if normalize_type(pointee, typedefs) == "void":
+        # `LZ4_compress_default(const void* src, int srcSize, ...)`: a void
+        # pointer says nothing about the type, but the length beside it says
+        # how much memory is there, and bytes are the one honest model of it.
+        pointee, nondet = "unsigned char", "(unsigned char)VERIPP_NONDET_CHAR()"
+    else:
+        nondet = nondet_for(pointee, typedefs)
     if nondet is None:
         raise HarnessError(
             f"parameter `{param.type} {param.name}` points to `{pointee}`, which "

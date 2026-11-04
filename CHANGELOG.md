@@ -17,6 +17,17 @@ run, and refuses to back results from one that cannot detect a planted bug.
   the ones people use.
 
 ### Changed: harness modelling
+- **`void *` parameters are modelled instead of refused.** Beside a length
+  (`const void* src, int srcSize`) a void pointer is that many
+  nondeterministic bytes, the shape of memcpy. When the body casts it
+  (`(LZ4_stream_t_internal*)state`, or the implicit C conversion
+  `struct ctx *c = p;`) the harness builds that object. With neither it
+  gets a bounded run of bytes and the bound is stated. lz4's `lz4.c` goes
+  from 62% to 92% of functions harnessable; 29 of its 99 were refused for a
+  `void *`.
+- **A comment inside a parameter list no longer becomes a parameter name.**
+  lz4's `int* /* only written when outputDirective == fillOutput */
+  inputConsumed` was refused for a parameter called `/* only written when`.
 - **An uninitialised read inside the checker's library model is filed as an
   artifact.** ESBMC reports a failure in its own model of fread or fseek
   (`/esbmc-vfs/libc/library/io.c`) for a variable that exists in neither

@@ -456,7 +456,7 @@ def find_function(source: str, target: str) -> Signature:
         matching = []
         for cand in candidates:
             try:
-                params = _parse_params(source[cand[1] + 1 : cand[2]])
+                params = _parse_params(scrubbed[cand[1] + 1 : cand[2]])
             except SignatureError:
                 continue
             if [normalize_type(p.type, typedefs) for p in params] == wanted_types:
@@ -487,9 +487,12 @@ def find_function(source: str, target: str) -> Signature:
         scrubbed, head, name_start, name, class_name, enclosing, after_colon
     )
 
-    # Read the return type off the scrubbed text: comments must not leak into it.
+    # Read the return type and the parameters off the scrubbed text: comments
+    # must not leak into either. lz4 writes `int* /* only written when
+    # outputDirective == fillOutput */ inputConsumed`, and read raw that
+    # comment became the parameter's name.
     return_type, is_static = _return_type(scrubbed[head:name_start], name)
-    params = _parse_params(source[lparen + 1 : rparen])
+    params = _parse_params(scrubbed[lparen + 1 : rparen])
     body_end = match_bracket(scrubbed, brace)
 
     return Signature(

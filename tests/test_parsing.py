@@ -494,3 +494,18 @@ class TestDerivedSourceFactsAreCached:
         two = find_function(self.SRC, "f")
         assert one.name == two.name == "f"
         assert [p.type for p in one.params] == [p.type for p in two.params]
+
+
+class TestCommentsInsideAParameterList:
+    """lz4 writes `int* /* only written when outputDirective == fillOutput */
+    inputConsumed`. Read raw, the comment became the parameter's name and the
+    function was refused for a parameter called `/* only written when`."""
+
+    def test_the_comment_is_not_the_name(self):
+        from veripp.cppsig import find_function
+
+        src = ("int f(int* /* only written when outputDirective == fillOutput */ inputConsumed,\n"
+               "      const char* src /* input */, int n) { return *inputConsumed + n; }\n")
+        sig = find_function(src, "f")
+        assert [p.name for p in sig.params] == ["inputConsumed", "src", "n"]
+        assert sig.params[0].type.replace(" ", "") == "int*"
