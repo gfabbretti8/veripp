@@ -97,10 +97,17 @@ user they have a bug:
 
 1. Read the input assignment veripp printed. Is it a value a caller could
    actually pass?
-2. If the function is internal and callers always pass, say, a non-zero length,
+2. Read the tag `scan` puts on each counterexample: `external` means any
+   other translation unit can call it, so the input only has to be one a
+   caller could pass; `static, 2 callers here` means the only ways in are
+   those call sites, so read them. `static, no callers found here` is dead
+   code, a function pointer, or a macro -- find out which.
+3. If the function is internal and callers always pass, say, a non-zero length,
    the finding is an unenforced precondition, not a bug. Re-run with
-   `--assume 'len > 0'` and see if it proves.
-3. Only call it a bug when you can name a public entry point that reaches it.
+   `--assume 'len > 0'` and see if it proves. veripp checks the assumption
+   against every caller that passes a literal and reports one that breaks
+   it (`line 42: len = 0 violates \`len > 0\``); that caller is the bug.
+4. Only call it a bug when you can name a public entry point that reaches it.
 
 veripp will propose a precondition itself if an LLM is configured
 (`--model`), but the solver re-checks every proposal, so treat the proposal as

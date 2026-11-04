@@ -166,9 +166,11 @@ for files that haven't changed. The cache key covers every project header
 the file reaches (through `-I` and `compile_commands.json` alike), linked
 sources and force-included headers, the bounds and harness options, and the
 checker and veripp themselves, identified by their bytes rather than by a
-version string. Counterexamples are grouped by file, with
-writes listed before reads. Length parameters that a function never reads
-are listed separately as leads.
+version string. Counterexamples are grouped by file and ordered by who can
+reach them: externally visible functions before `static` helpers, each
+tagged with the call sites found in the scanned units, and writes before
+reads. Length parameters that a function never reads are listed separately
+as leads.
 
 To adopt veripp on existing code, record what is already there and fail
 only on new findings:
@@ -311,7 +313,9 @@ Shell completions: `eval "$(veripp completion bash)"` (or `zsh`, or
   `UNCONFIRMED`. Neither is a proof, and both exit 3.
 - **The LLM only proposes.** Harnesses and preconditions a model suggests
   are checked by ESBMC. A result that holds only under a proposed
-  precondition is reported as `PRECONDITIONED`, never folded into `PROVED`.
+  precondition is reported as `PRECONDITIONED`, never folded into `PROVED`,
+  and the precondition is checked against every caller that passes a
+  literal: one that breaks it is reported, and `verify` exits 3 for it.
 
 ## Results on real libraries
 
