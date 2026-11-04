@@ -384,6 +384,23 @@ class ScanReport:
                 "         real -- an assert in the function, or a documented caller\n"
                 "         contract -- or the proof is conditional on nothing."
             )
+        refused = len(self.refused)
+        if (refused and not self.preprocessed
+                and refused >= max(len(self.proved), len(self.counterexamples),
+                                   len(self.inconclusive), 1)
+                and any("cannot construct" in r.detail or "conditional" in r.detail
+                        or "not modelled" in r.detail for r in self.refused)):
+            # nanopb: 66 of 84 functions refused for a struct with #ifdef
+            # members; zlib: 39 for a typedef written `} FAR deflate_state;`.
+            # Both are the text, not the code, and the preprocessor settles
+            # them: 21% -> 86% and 52% -> 74% harnessable.
+            return (
+                f"  next:  veripp scan {where} --preprocess\n"
+                f"         {refused} functions were refused for a type veripp could not\n"
+                "         construct from the text. Read through the preprocessor,\n"
+                "         structs with #if members and macro-decorated typedefs\n"
+                "         resolve to the build's own layout."
+            )
         if self.inconclusive:
             return (
                 f"  next:  veripp verify {where} --function "
@@ -399,22 +416,6 @@ class ScanReport:
                 f"{sorted(self.artifacts, key=lambda r: r.name)[0].name}\n"
                 "         these failed on how the harness was built, not on the\n"
                 "         code; read it to see what it assumed."
-            )
-        refused = len(self.refused)
-        if (refused and not self.preprocessed
-                and refused >= max(len(self.proved), len(self.counterexamples), 1)
-                and any("cannot construct" in r.detail or "conditional" in r.detail
-                        or "not modelled" in r.detail for r in self.refused)):
-            # nanopb: 66 of 84 functions refused for a struct with #ifdef
-            # members; zlib: 39 for a typedef written `} FAR deflate_state;`.
-            # Both are the text, not the code, and the preprocessor settles
-            # them: 21% -> 86% and 52% -> 74% harnessable.
-            return (
-                f"  next:  veripp scan {where} --preprocess\n"
-                f"         {refused} functions were refused for a type veripp could not\n"
-                "         construct from the text. Read through the preprocessor,\n"
-                "         structs with #if members and macro-decorated typedefs\n"
-                "         resolve to the build's own layout."
             )
         return None
 
