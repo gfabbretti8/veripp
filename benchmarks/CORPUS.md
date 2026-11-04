@@ -54,6 +54,19 @@ a timeout, none a vacuous or unconfirmed proof. A longer `--timeout` on a
 faster machine is expected to move most of them into one of the settled
 columns, as the table's figures did.
 
+Of parson's 24 counterexamples, 23 are in functions handed a `JSON_Object`
+or `JSON_Array` the harness filled field by field, and they fail in states
+the library never produces: a hash table whose `cell_capacity` is 0, so
+`& (cell_capacity - 1)` indexes anywhere (the nine `json_object_get_*`), and
+an `items` array left null because `JSON_Value **` is a type the harness
+cannot construct (the eight `json_array_get_*`). `scan` now says so on each
+line and suggests `--constructors`. Measured on one of them:
+`json_array_get_value` with `--constructors --timeout 300` is **verified**
+(incremental BMC, termination proved) in 5m40s on this machine, where the
+field-by-field harness reported a NULL dereference in seconds. The
+constructors cost solver time; the field-by-field harness costs false
+leads.
+
 ## How many findings are real? (cJSON, triaged)
 
 The table above counts counterexamples. A counterexample is not a bug: it

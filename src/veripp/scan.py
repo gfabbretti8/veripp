@@ -365,8 +365,9 @@ class ScanReport:
                     f"\n         {len(filled)} of {len(self.counterexamples)} take an "
                     "object the harness filled field by field, which admits\n"
                     "         states no caller produces. --constructors builds it with\n"
-                    "         the library's own constructors instead:\n"
-                    f"         veripp scan {where} --constructors"
+                    "         the library's own constructors instead; the solver then\n"
+                    "         has to run them too, so give it time:\n"
+                    f"         veripp scan {where} --constructors --timeout 300"
                 )
             return nudge
         if self.preconditioned:
