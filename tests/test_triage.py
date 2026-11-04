@@ -82,6 +82,33 @@ class TestContext:
         assert "Call sites" in rendered and "scale(10, 4)" in rendered
 
 
+    def test_context_states_linkage_and_caller_count_as_facts(self, target):
+        result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), raw_output="tail")
+        harness = generate(target.source, "scale")
+        path = harness.write(target.source.parent)
+        ctx = build_context(target, path, result)
+        assert any("external linkage" in f and "2 call sites" in f for f in ctx.facts), ctx.facts
+        rendered = ctx.render()
+        assert "Facts established mechanically" in rendered
+
+    def test_context_names_a_null_the_harness_left(self, tmp_path):
+        from veripp.esbmc import SourceLoc, ViolatedProperty
+
+        src = tmp_path / "node.c"
+        src.write_text(
+            "typedef struct Node { struct Node *next; int v; } Node;\n"
+            "int second(Node *n) { return n->next->v; }\n",
+            encoding="utf-8",
+        )
+        target = TargetInfo(source=src, function="second")
+        harness = generate(src, "second", HarnessOptions(max_struct_depth=0))
+        path = harness.write(tmp_path)
+        prop = ViolatedProperty(loc=SourceLoc(str(src), 2), description="dereference failure: NULL pointer")
+        result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), properties=[prop])
+        ctx = build_context(target, path, result)
+        assert any("`next`" in f and "harness's" in f for f in ctx.facts), ctx.facts
+
+
 class TestTriage:
     def _result(self):
         return VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig())

@@ -10,6 +10,10 @@ run, and refuses to back results from one that cannot detect a planted bug.
 ## Unreleased
 
 ### Changed
+- **Triage is told the mechanical facts first.** The context an LLM sees
+  for a counterexample now states the function's linkage and caller count,
+  and whether the null dereferenced is one the harness itself left, as facts
+  to reason from rather than conclusions.
 - **`scan` suggests `--constructors` when the findings call for it.** When
   most counterexamples are in functions handed an object the harness filled
   field by field, the next-step line says so and gives the command: those

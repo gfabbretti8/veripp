@@ -46,13 +46,20 @@ class TriageContext:
     violated_property: str = ""
     counterexample_inputs: str = ""
     raw_output_tail: str = ""
+    #: What veripp established mechanically before asking: the function's
+    #: linkage and caller count, and whether the null dereferenced is one the
+    #: harness itself left. Facts for the model to reason from, not verdicts.
+    facts: list[str] = field(default_factory=list)
 
     def render(self) -> str:
         sites = "\n".join(self.call_sites) or "(no call sites found in this file)"
+        facts = "".join(f"- {fact}\n" for fact in self.facts)
         return (
             f"Function under verification: {self.signature}\n\n"
             f"Definition:\n```cpp\n{self.function_source}\n```\n\n"
             f"Call sites in the same file (what real callers pass):\n{sites}\n\n"
+            + (f"Facts established mechanically (not judgements):\n{facts}\n" if facts else "")
+            +
             f"Verification harness (machine-generated):\n"
             f"```cpp\n{self.harness_code}\n```\n\n"
             f"Violated property:\n{self.violated_property}\n\n"

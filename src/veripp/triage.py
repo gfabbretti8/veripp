@@ -292,6 +292,7 @@ def build_context(
     parameters: list[str] = []
     function_source = ""
     call_sites: list[str] = []
+    facts: list[str] = []
 
     if target is not None:
         text = read_source(target.source)
@@ -303,6 +304,21 @@ def build_context(
             parameters = [p.name for p in sig.params]
             function_source = _definition_snippet(text, sig.name, sig.body)
             call_sites = find_call_sites(text, sig.name)
+            total = len(find_call_sites(text, sig.name, limit=None))
+            if sig.is_static:
+                facts.append(
+                    f"`{sig.name}` is static: only this file can call it, and "
+                    f"{total or 'no'} call site{'s' if total != 1 else ''} "
+                    "were found here" + (
+                        " (dead code, a function pointer, or a macro)" if not total else ""
+                    )
+                )
+            else:
+                facts.append(
+                    f"`{sig.name}` has external linkage: any other translation "
+                    f"unit may call it with any arguments; {total or 'no'} call "
+                    f"site{'s' if total != 1 else ''} in this file"
+                )
         except SignatureError:
             function = target.function
 
@@ -310,6 +326,12 @@ def build_context(
         harness_code = read_source(harness_path)
     except OSError:
         harness_code = ""
+    nulled = harness_null_note(result.violated_property, harness_assumptions(harness_code))
+    if nulled:
+        facts.append(
+            f"the failing line {nulled}: the null is the harness's, and only "
+            "a caller can say whether that field is ever null in practice"
+        )
 
     inputs = "\n".join(str(a) for a in result.input_assignments())
     return TriageContext(
@@ -322,7 +344,18 @@ def build_context(
         violated_property=str(result.violated_property or ""),
         counterexample_inputs=inputs or "(none recorded)",
         raw_output_tail=result.raw_output[-3000:],
+        facts=facts,
     )
+
+
+def harness_assumptions(harness_code: str) -> list[str]:
+    """The assumptions a generated harness lists in its header comment."""
+    found: list[str] = []
+    for line in harness_code.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("//   - "):
+            found.append(stripped[len("//   - "):])
+    return found
 
 
 def find_call_sites(
