@@ -109,6 +109,21 @@ class TestContext:
         assert any("`next`" in f and "harness's" in f for f in ctx.facts), ctx.facts
 
 
+    def test_context_names_a_bound_the_harness_chose(self, tmp_path):
+        from veripp.esbmc import SourceLoc, ViolatedProperty
+
+        src = tmp_path / "t.c"
+        src.write_text("int get(const void *tableBase, unsigned h) { const unsigned *t = tableBase; return t[h]; }\n",
+                       encoding="utf-8")
+        target = TargetInfo(source=src, function="get")
+        harness = generate(src, "get")
+        path = harness.write(tmp_path)
+        prop = ViolatedProperty(loc=SourceLoc(str(src), 1), description="dereference failure: array bounds violated")
+        result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), properties=[prop])
+        ctx = build_context(target, path, result)
+        assert any("`tableBase`" in f and "no length" in f for f in ctx.facts), ctx.facts
+
+
 class TestTriage:
     def _result(self):
         return VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig())

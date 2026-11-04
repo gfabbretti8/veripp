@@ -416,12 +416,16 @@ def build_context(
         harness_code = read_source(harness_path)
     except OSError:
         harness_code = ""
-    nulled = harness_null_note(result.violated_property, harness_assumptions(harness_code))
+    stated = harness_assumptions(harness_code)
+    nulled = harness_null_note(result.violated_property, stated)
     if nulled:
         facts.append(
             f"the failing line {nulled}: the null is the harness's, and only "
             "a caller can say whether that field is ever null in practice"
         )
+    bounded = harness_bound_note(result.violated_property, stated)
+    if bounded:
+        facts.append(f"the function {bounded}")
 
     inputs = "\n".join(str(a) for a in result.input_assignments())
     return TriageContext(
