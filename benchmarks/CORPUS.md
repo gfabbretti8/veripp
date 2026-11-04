@@ -46,6 +46,8 @@ so more functions hit the 10-second timeout.
 | parson, before the pairing fix below | 144 | 29 | 24 | 15 | 63 | 91% |
 | parson, after it | 144 | 38 | 5 | 16 | 72 | 91% |
 | tinyexpr | 45 | 19 | 0 | 5 | 18 | 93% |
+| lz4 `lz4.c`, before `void *` parameters were modelled | 99 | 19 | 4 | 5 | 33 | 62% |
+| lz4 `lz4.c`, after | 99 | 26 | 15 | 5 | 46 | 93% |
 
 cJSON's 25 artifacts are the `hooks->allocate` alignment class triaged
 below, which the table's run counted among its 19 leads; its two remaining
@@ -81,6 +83,22 @@ timeouts rather than counterexamples: with `names`, `cells`, `hashes` and
 and does not finish in 10 s on this machine. A hash table whose capacity
 is 0 is still an invariant the harness cannot know, and `--constructors` is
 the honest answer there.
+
+lz4 was the other library the sweep changed: 29 of its 99 functions were
+refused for a `void *` parameter, the single largest refusal class. A void
+pointer beside a length is now that many bytes, one the body casts is
+built as that type, and one with neither gets a bounded run of bytes with
+the bound stated. Its eleven new counterexamples are of that last kind:
+`void* tableBase` indexed by a hash, where the caller's table is 16 KB and
+the harness's is four bytes. Each carries the note that the bound crossed
+is the harness's, and ranks after findings the harness had no hand in.
+
+Two libraries were only enumerated, not solved, to see what blocks them:
+nanopb's `pb_encode.c`, `pb_decode.c` and `pb_common.c` are 21%
+harnessable from the text and 86% with `--preprocess`, because every
+stream struct has `#ifdef` members; zlib's eight core modules are 52% and
+74%, because `deflate_state` is written `} FAR deflate_state;`. `scan` now
+suggests the flag when refusals of that kind dominate.
 
 ## How many findings are real? (cJSON, triaged)
 
