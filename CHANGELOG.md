@@ -9,6 +9,14 @@ run, and refuses to back results from one that cannot detect a planted bug.
 
 ## Unreleased
 
+### Changed: reporting
+- **A failure inside the checker's library model is reported at the
+  caller's line.** ESBMC locates a bad `memcmp` at
+  `/esbmc-vfs/libc/library/string.c:371 in memcmp`; veripp now also says
+  `called from vfs.c:3 in cmp`, recovered from the trace, and `scan`, the
+  JSON and so SARIF file the finding at that line in the code under test
+  instead of at a path that exists only inside the checker.
+
 ### Removed
 - **Windows.** The CLI is no longer tested on Windows and
   `veripp install-checker` no longer fetches a Windows checker; on Windows

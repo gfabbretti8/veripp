@@ -220,13 +220,16 @@ def harness_null_note(prop: ViolatedProperty | None, assumptions: list[str]) -> 
 
 
 def _source_line(prop: ViolatedProperty) -> str | None:
-    if not prop.loc.file or not prop.loc.line:
+    """The line of the code under test the failure is at -- the caller's,
+    when the failure itself is inside the checker's library model."""
+    loc = prop.user_loc
+    if not loc.file or not loc.line:
         return None
     try:
-        lines = Path(prop.loc.file).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = Path(loc.file).read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
-    index = prop.loc.line - 1
+    index = loc.line - 1
     return lines[index] if 0 <= index < len(lines) else None
 
 

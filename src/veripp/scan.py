@@ -651,9 +651,11 @@ def scan(
             stubbed_calls=result.stubbed_calls,
             duration_s=result.duration_s,
             artifact=mechanical_artifact(result, path),
-            file=(prop.loc.file if prop and prop.loc else ""),
-            line=(prop.loc.line if prop and prop.loc else 0),
-            column=(prop.loc.column if prop and prop.loc else 0),
+            # The caller's line when the failure is inside the checker's
+            # library model: that is where a reader looks and SARIF points.
+            file=(prop.user_loc.file if prop else ""),
+            line=(prop.user_loc.line if prop else 0),
+            column=(prop.user_loc.column or 0 if prop else 0),
             cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
             access=access_kind(prop) if prop else None,
             harness_null=harness_null_note(prop, harness.assumptions),
@@ -807,9 +809,9 @@ def _retry_pass(
             r.stubbed_calls = final.stubbed_calls
             r.artifact = mechanical_artifact(final, harness_paths[r.name])
             r.terminates = agent.terminates
-            r.file = prop.loc.file if prop and prop.loc else ""
-            r.line = prop.loc.line if prop and prop.loc else 0
-            r.column = prop.loc.column if prop and prop.loc else 0
+            r.file = prop.user_loc.file if prop else ""
+            r.line = prop.user_loc.line if prop else 0
+            r.column = prop.user_loc.column or 0 if prop else 0
             r.cwes = list(getattr(prop, "cwes", []) or []) if prop else []
             r.bounds = final.config.describe()
             r.harness_null = harness_null_note(prop, r.assumptions)

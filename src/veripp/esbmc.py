@@ -183,12 +183,22 @@ class VerifyConfig:
         return line
 
 
+#: Where ESBMC keeps its own C library model. A failure located under this
+#: prefix happened inside memcmp or fread as the checker models them, and the
+#: line a reader wants is the one in their code that called in.
+MODEL_PATH_PREFIX = "/esbmc-vfs/"
+
+
 @dataclass
 class SourceLoc:
     file: str
     line: int
     column: int | None = None
     function: str | None = None
+
+    @property
+    def in_checker_model(self) -> bool:
+        return self.file.startswith(MODEL_PATH_PREFIX)
 
     def __str__(self) -> str:
         loc = f"{self.file}:{self.line}"
@@ -234,6 +244,18 @@ class ViolatedProperty:
     description: str
     expression: str | None = None
     cwes: list[str] = field(default_factory=list)
+    #: The last line of code outside the checker's library model on the way
+    #: to a failure inside it: the memcmp call, not memcmp's own line. None
+    #: when the failure is in the code already, or the trace shows no caller.
+    caller: SourceLoc | None = None
+
+    @property
+    def user_loc(self) -> SourceLoc:
+        """The location to report, annotate and read a source line at: the
+        caller in the code under test when the failure is in the model."""
+        if self.loc.in_checker_model and self.caller is not None:
+            return self.caller
+        return self.loc
 
     @property
     def is_unwinding_assertion(self) -> bool:
@@ -241,6 +263,8 @@ class ViolatedProperty:
 
     def __str__(self) -> str:
         out = f"{self.description}\n  at {self.loc}"
+        if self.loc.in_checker_model and self.caller is not None:
+            out += f"\n  called from {self.caller} (the failure is inside the checker's model of a library call)"
         if self.expression:
             out += f"\n  {self.expression}"
         if self.cwes:
@@ -515,20 +539,39 @@ def _parse_properties(output: str) -> list[ViolatedProperty]:
         # When ESBMC prints both a description and the guard it checked, the
         # guard comes last. A single line is the description.
         expression = detail.pop() if len(detail) > 1 else None
+        loc = SourceLoc(
+            file=loc_match.group("file"),
+            line=int(loc_match.group("line")),
+            column=int(loc_match.group("column") or 0) or None,
+            function=loc_match.group("function"),
+        )
         properties.append(
             ViolatedProperty(
-                loc=SourceLoc(
-                    file=loc_match.group("file"),
-                    line=int(loc_match.group("line")),
-                    column=int(loc_match.group("column") or 0) or None,
-                    function=loc_match.group("function"),
-                ),
+                loc=loc,
                 description=" ".join(detail) or "(no description)",
                 expression=expression,
                 cwes=cwes,
+                caller=_caller_outside_the_model(output, header.start()) if loc.in_checker_model else None,
             )
         )
     return properties
+
+
+def _caller_outside_the_model(output: str, before: int) -> SourceLoc | None:
+    """The last trace state before offset `before` whose file is not the
+    checker's own library model: the line in the code under test that
+    called into it."""
+    caller = None
+    for m in _STATE_RE.finditer(output, 0, before):
+        if m.group("file").startswith(MODEL_PATH_PREFIX):
+            continue
+        caller = SourceLoc(
+            file=m.group("file"),
+            line=int(m.group("line")),
+            column=int(m.group("column")) if m.group("column") else None,
+            function=m.group("function"),
+        )
+    return caller
 
 
 def _parse_trace(output: str) -> list[TraceStep]:

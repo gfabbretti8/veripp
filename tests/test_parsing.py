@@ -509,3 +509,66 @@ class TestCommentsInsideAParameterList:
         sig = find_function(src, "f")
         assert [p.name for p in sig.params] == ["inputConsumed", "src", "n"]
         assert sig.params[0].type.replace(" ", "") == "int*"
+
+
+class TestFailuresInsideTheCheckersModel:
+    """ESBMC reports a failure in its own libc model at
+    /esbmc-vfs/libc/library/string.c:371 in memcmp. The line a reader wants,
+    and the one SARIF should point at, is the call in their code."""
+
+    OUTPUT = (
+        "Counterexample:\n\n"
+        "State 1 file /work/vfs.c line 3 column 40 function cmp thread 0\n"
+        "----------------------------------------------------\n"
+        "  n = 4\n"
+        "State 2 file /esbmc-vfs/libc/library/string.c line 360 function memcmp thread 0\n"
+        "----------------------------------------------------\n"
+        "  i = 0\n"
+        "State 3 file /esbmc-vfs/libc/library/string.c line 371 function memcmp thread 0\n"
+        "----------------------------------------------------\n"
+        "Violated property:\n"
+        "  file /esbmc-vfs/libc/library/string.c line 371 column 3 function memcmp\n"
+        "  dereference failure: memcmp length exceeds object bounds\n"
+        "  CWE: CWE-125\n\n"
+        "VERIFICATION FAILED\n"
+    )
+
+    def test_the_caller_in_the_code_is_recovered_from_the_trace(self):
+        from veripp.esbmc import VerifyConfig, parse_output
+
+        result = parse_output(self.OUTPUT, VerifyConfig())
+        prop = result.violated_property
+        assert prop.loc.in_checker_model
+        assert prop.caller is not None
+        assert (prop.caller.file, prop.caller.line, prop.caller.function) == ("/work/vfs.c", 3, "cmp")
+        assert prop.user_loc is prop.caller
+        text = str(prop)
+        assert "at /esbmc-vfs/libc/library/string.c:371:3 in memcmp" in text
+        assert "called from /work/vfs.c:3:40 in cmp" in text
+
+    def test_a_failure_in_the_code_has_no_caller_and_reads_as_before(self):
+        from veripp.esbmc import VerifyConfig, parse_output
+
+        output = self.OUTPUT.replace("file /esbmc-vfs/libc/library/string.c line 371 column 3 function memcmp",
+                                     "file /work/vfs.c line 3 column 40 function cmp")
+        prop = parse_output(output, VerifyConfig()).violated_property
+        assert not prop.loc.in_checker_model
+        assert prop.caller is None and prop.user_loc is prop.loc
+        assert "called from" not in str(prop)
+
+    def test_scan_files_the_finding_at_the_callers_line(self, tmp_path, monkeypatch, capsys):
+        """The JSON and so the SARIF location is in the code under test."""
+        import json
+
+        from veripp import cli
+        from veripp.esbmc import VerifyConfig, parse_output
+
+        src = tmp_path / "vfs.c"
+        src.write_text("#include <string.h>\nint cmp(const char *a, unsigned n) {\n"
+                       "  char buf[2] = {1, 2}; return memcmp(a, buf, n); }\n", encoding="utf-8")
+        canned = parse_output(self.OUTPUT.replace("/work/vfs.c", str(src)), VerifyConfig())
+        monkeypatch.setattr("veripp.scan.run", lambda path, config, esbmc_bin=None: canned)
+        cli.main(["scan", str(src), "--json", "--no-llm", "--no-cache", "--retry-budget", "0"])
+        report = json.loads(capsys.readouterr().out)
+        (finding,) = report["counterexamples"]
+        assert finding["file"] == str(src) and finding["line"] == 3
