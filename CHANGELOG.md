@@ -7,7 +7,12 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
-## Unreleased
+## 0.7.0
+
+Results fail closed where they used to fail open, the checker arrives with
+the install on Linux arm64 as well as x86_64, counterexamples say who can
+reach them and when the harness had a hand in them, and an agent can drive
+veripp over MCP.
 
 ### Changed: reporting
 - **A library call after `return` is no longer listed as an unmodelled
@@ -69,7 +74,7 @@ run, and refuses to back results from one that cannot detect a planted bug.
   Where two generic counts compete nothing is paired. parson's
   `json_array_get_*` go from eight NULL-pointer counterexamples to proofs.
 
-### Changed
+### Changed: scan and triage
 - **Triage is told the mechanical facts first.** The context an LLM sees
   for a counterexample now states the function's linkage and caller count,
   and whether the null dereferenced is one the harness itself left, as facts
@@ -108,11 +113,6 @@ run, and refuses to back results from one that cannot detect a planted bug.
   its meaning out; triage stays off unless the call names a model, since the
   agent on the other end is the one reading the result. Standard library
   only, like the LLM providers.
-
-## 0.7.0
-
-Results fail closed where they used to fail open, and the checker arrives
-with the install on Linux arm64 as well as x86_64.
 
 ### Changed: what counts as a proof
 - **Every proof is probed for reachability**, in `verify` and in `scan`. A
