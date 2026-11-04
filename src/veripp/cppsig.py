@@ -1250,6 +1250,11 @@ def unresolved_callees(source: str, body: str) -> list[str]:
                 head = scrubbed_source[max(0, m.start() - 60) : m.start()].rstrip()
                 if head and head[-1] in "=(,&|!+-*/<>?:{};" and not head.endswith(";"):
                     continue  # a call in an expression, not a declaration
+                if re.search(r"\b(?:return|else|do|case|goto)\s*$", head):
+                    # `return memcmp(a, b, n);` is a call too: memcmp has no
+                    # declaration in the unit (it comes from <string.h>), and
+                    # the checker's own model gives it a body.
+                    continue
                 unresolved.append(name)
                 break
     return unresolved

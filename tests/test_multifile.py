@@ -111,6 +111,17 @@ class TestUnresolvedCallees:
         src = "#define LOG(x) ((void)0)\nint f(int a) { return a; }\n"
         assert unresolved_callees(src, "LOG(1); return f(2);") == []
 
+    def test_a_library_call_after_return_is_not_a_declaration(self):
+        """`return memcmp(a, buf, n);` was read as a declaration of memcmp,
+        which has none in the unit (it comes from <string.h>) and a body in
+        the checker's model, so the harness said its side effects were not
+        modelled. A call after `return` is a call."""
+        src = ("#include <string.h>\n"
+               "int cmp(const char *a, unsigned n) { char buf[2] = {1, 2}; return memcmp(a, buf, n); }\n")
+        assert unresolved_callees(src, "char buf[2] = {1, 2}; return memcmp(a, buf, n);") == []
+        declared = src + "int helper(int x);\nint use(void) { return helper(1); }\n"
+        assert unresolved_callees(declared, "return helper(1);") == ["helper"]
+
 
 @pytest.mark.esbmc
 class TestLinkingChangesTheAnswer:

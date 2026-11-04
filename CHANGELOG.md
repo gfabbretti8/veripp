@@ -10,6 +10,10 @@ run, and refuses to back results from one that cannot detect a planted bug.
 ## Unreleased
 
 ### Changed: reporting
+- **A library call after `return` is no longer listed as an unmodelled
+  callee.** `return memcmp(a, buf, n);` was read as a declaration of
+  `memcmp`, which has none in the unit and a body in the checker's model,
+  so the harness said its side effects were not modelled. They are.
 - **A failure inside the checker's library model is reported at the
   caller's line.** ESBMC locates a bad `memcmp` at
   `/esbmc-vfs/libc/library/string.c:371 in memcmp`; veripp now also says
