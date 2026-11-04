@@ -232,6 +232,14 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
     for needle, why in _MECHANICAL_ARTIFACTS:
         if needle in prop.description:
             return why
+    # An uninitialised read of a variable that exists in neither the code
+    # under test nor the harness is inside the checker's own model of a
+    # library call: parson's read_file was reported for `nread`, a name that
+    # occurs nowhere in parson.c -- it is a local in ESBMC's fread/fseek
+    # model, attributed to the calling line.
+    foreign = _uninitialised_outside_the_code(prop, harness_path)
+    if foreign is not None:
+        return foreign
     # A pointer that came from an allocator with no body is unconstrained, so
     # touching it fails whatever the library does. Requiring the allocator to
     # be genuinely stubbed keeps real use-after-free and wild-pointer findings
@@ -264,6 +272,58 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
             "the code under test"
         )
     return None
+
+
+_UNINITIALISED_RE = re.compile(r"use of uninitiali[sz]ed variable:\s*(\w+)")
+
+
+def _uninitialised_outside_the_code(prop: ViolatedProperty, harness_path: Path) -> str | None:
+    """Why an uninitialised-variable failure is the checker's, when it is.
+
+    ESBMC models the C library in C of its own, and a read of a variable
+    that model never set is reported against the line under test that
+    called into it. A name that occurs in neither the failing file nor the
+    harness cannot be the code's variable.
+    """
+    m = _UNINITIALISED_RE.match(prop.description or "")
+    if m is None:
+        return None
+    name = m.group(1)
+    pattern = re.compile(rf"\b{re.escape(name)}\b")
+    # The code that could own the variable: the harness, every file it
+    # includes by absolute path (the source under test), and the file the
+    # property names when that is a real file. ESBMC reports a failure in
+    # its library model at a path under /esbmc-vfs/, which does not exist
+    # here; the model is not the code under test, so it is not searched.
+    try:
+        harness_text = harness_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None  # cannot tell; say nothing
+    candidates = [harness_text]
+    for included in re.findall(r'^\s*#\s*include\s*"([^"]+)"', harness_text, re.M):
+        path = Path(included)
+        if not path.is_absolute():
+            path = harness_path.parent / included
+        try:
+            candidates.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    failing = Path(prop.loc.file) if prop.loc.file else None
+    if failing is not None and failing.is_file():
+        try:
+            candidates.append(failing.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            return None
+    if any(pattern.search(scrub(text)) for text in candidates):
+        return None
+    where = (f"the checker's library model ({failing.name})"
+             if failing is not None and str(failing).startswith("/esbmc-vfs/")
+             else "the checker's own model of a library function this line calls")
+    return (
+        f"the uninitialised variable `{name}` is declared in neither the code "
+        f"under test nor the harness: it is a local of {where}, not something "
+        "the code under test left unset"
+    )
 
 
 @dataclass

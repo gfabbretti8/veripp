@@ -17,6 +17,12 @@ run, and refuses to back results from one that cannot detect a planted bug.
   the ones people use.
 
 ### Changed: harness modelling
+- **An uninitialised read inside the checker's library model is filed as an
+  artifact.** ESBMC reports a failure in its own model of fread or fseek
+  (`/esbmc-vfs/libc/library/io.c`) for a variable that exists in neither
+  the code under test nor the harness; parson's `read_file` was listed as a
+  counterexample for `nread`, a name that occurs nowhere in parson.c. A name
+  the code declares is still the code's.
 - **A plural array beside a bare count is paired.** `JSON_Value **items`
   next to `size_t count` used to be left null (its pointee not a type the
   harness constructs) with the count unbounded, and every getter was

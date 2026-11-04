@@ -236,3 +236,63 @@ class TestAlignmentArtifact:
                      "array bounds violated: array `t' upper bound",
                      "division by zero"):
             assert mechanical_artifact(self._result(real), tmp_path / "h.c") is None, real
+
+
+class TestUninitialisedInsideTheLibraryModel:
+    """parson's read_file was reported for `use of uninitialized variable:
+    nread`, and `nread` occurs nowhere in parson.c: it is a local in ESBMC's
+    model of fread/fseek, attributed to the calling line."""
+
+    def _prop(self, tmp_path, source_text, name="nread"):
+        from veripp.esbmc import SourceLoc, ViolatedProperty
+
+        src = tmp_path / "p.c"
+        src.write_text(source_text, encoding="utf-8")
+        harness = tmp_path / "veripp_harness_f.c"
+        harness.write_text('#include "p.c"\nint main(void) { return 0; }\n', encoding="utf-8")
+        prop = ViolatedProperty(loc=SourceLoc(str(src), 1),
+                                description=f"use of uninitialized variable: {name}")
+        return prop, harness
+
+    def test_a_name_absent_from_the_file_and_the_harness_is_the_checkers(self, tmp_path):
+        from veripp.triage import mechanical_artifact
+
+        prop, harness = self._prop(tmp_path, "int f(void) { FILE *fp = fopen(\"x\", \"r\"); return fseek(fp, 0, 2); }\n")
+        result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), properties=[prop])
+        why = mechanical_artifact(result, harness)
+        assert why is not None and "`nread`" in why and "model" in why
+
+    def test_a_name_the_code_declares_is_the_codes(self, tmp_path):
+        from veripp.triage import mechanical_artifact
+
+        prop, harness = self._prop(tmp_path, "int f(void) { int nread; return nread; }\n")
+        result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), properties=[prop])
+        assert mechanical_artifact(result, harness) is None
+
+    def test_a_failure_located_inside_the_checkers_model_is_judged_the_same_way(self, tmp_path):
+        """ESBMC puts the location at /esbmc-vfs/libc/library/io.c:203 in
+        fread -- a path that does not exist here. The harness and the source
+        it includes are what gets searched."""
+        from veripp.esbmc import SourceLoc, ViolatedProperty
+        from veripp.triage import mechanical_artifact
+
+        src = tmp_path / "p.c"
+        src.write_text("int f(void) { FILE *fp = fopen(\"x\", \"r\"); return fseek(fp, 0, 2); }\n",
+                       encoding="utf-8")
+        harness = tmp_path / "veripp_harness_f.c"
+        harness.write_text(f'#include "{src}"\nint main(void) {{ return f(); }}\n', encoding="utf-8")
+        prop = ViolatedProperty(loc=SourceLoc("/esbmc-vfs/libc/library/io.c", 203, function="fread"),
+                                description="use of uninitialized variable: nread")
+        result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), properties=[prop])
+        why = mechanical_artifact(result, harness)
+        assert why is not None and "library model (io.c)" in why
+
+        src.write_text("int f(void) { int nread; return nread; }\n", encoding="utf-8")
+        assert mechanical_artifact(result, harness) is None, "the source declares it"
+
+    def test_a_name_only_in_a_comment_does_not_count_as_declared(self, tmp_path):
+        from veripp.triage import mechanical_artifact
+
+        prop, harness = self._prop(tmp_path, "/* nread */ int f(void) { return fgetc(0); }\n")
+        result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), properties=[prop])
+        assert mechanical_artifact(result, harness) is not None
