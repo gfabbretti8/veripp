@@ -8,14 +8,10 @@ built on it into a false proof, which is worse than having no checker.
 """
 
 import os
-import sys
 import zipfile
 from pathlib import Path
 
-#: What the checker is called here. managed_esbmc() looks for esbmc.exe on
-#: Windows, so a payload named `esbmc` there is invisible to it -- which is
-#: correct behaviour, and made this test fail on Windows alone.
-EXE = "esbmc.exe" if sys.platform == "win32" else "esbmc"
+EXE = "esbmc"
 
 import pytest
 
@@ -39,9 +35,10 @@ class TestPlatformSelection:
         major, minor = (int(x) for x in ESBMC_RELEASE.lstrip("v").split(".")[:2])
         assert (major, minor) >= (8, 6)
 
-    def test_windows_gets_an_exe(self):
+    def test_windows_is_refused_and_sent_to_wsl_or_the_image(self):
         src = source_for("Windows", "AMD64")
-        assert src.available and src.binary_name == "esbmc.exe"
+        assert not src.available
+        assert "WSL" in src.unavailable_reason and "docker" in src.unavailable_reason
 
     def test_macos_refuses_rather_than_shipping_a_broken_unzip(self):
         src = source_for("Darwin", "arm64")

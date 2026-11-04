@@ -54,7 +54,6 @@ multiarch binutils, since `strip` has to understand the binary. The wheels
 measure about 61 MB for x86_64 and 43 MB for aarch64; the weight is Clang,
 which ESBMC uses as its C/C++ frontend. PyPI's per-file default is 100 MB.
 
-macOS and Windows wheels are not built. ESBMC's Windows release zip is
-relocatable and `veripp install-checker` fetches it; the macOS zip links
-Homebrew's libraries by absolute path, so there the route is
-`brew install --HEAD esbmc`.
+No macOS wheel is built: ESBMC's macOS zip links Homebrew's libraries by
+absolute path, so there the route is `brew install --HEAD esbmc`. Windows is
+not supported at all; WSL gets the Linux wheel.

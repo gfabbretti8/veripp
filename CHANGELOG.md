@@ -9,6 +9,13 @@ run, and refuses to back results from one that cannot detect a planted bug.
 
 ## Unreleased
 
+### Removed
+- **Windows.** The CLI is no longer tested on Windows and
+  `veripp install-checker` no longer fetches a Windows checker; on Windows
+  it says to use WSL, where the Linux wheel applies, or the container.
+  Nothing was ever packaged for Windows, and the Linux and macOS routes are
+  the ones people use.
+
 ### Changed: harness modelling
 - **A plural array beside a bare count is paired.** `JSON_Value **items`
   next to `size_t count` used to be left null (its pointee not a type the

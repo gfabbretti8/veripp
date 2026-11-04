@@ -46,8 +46,7 @@ veripp doctor          # checks the setup and probes the checker for known sound
 
 On Linux (x86_64 and arm64) that is the whole installation: the wheel
 carries the [ESBMC 8.6](https://github.com/esbmc/esbmc/releases/tag/v8.6)
-checker inside it. On Windows, or when installing from source, fetch one
-with:
+checker inside it. When installing from source, fetch one with:
 
 ```bash
 veripp install-checker
@@ -56,7 +55,8 @@ veripp install-checker
 It downloads the same release binary for your architecture, checks it
 against the digest veripp pins, and keeps it only if the checker rejects
 every one of a set of known-failing programs. On macOS the only sound route
-is `brew install --HEAD esbmc`. Avoid the ESBMC 8.4 release, including
+is `brew install --HEAD esbmc`. Windows is not supported; use WSL or the
+container. Avoid the ESBMC 8.4 release, including
 `brew install esbmc`: it silently misses some out-of-bounds writes
 ([esbmc#6508](https://github.com/esbmc/esbmc/issues/6508)). `doctor` detects
 this.

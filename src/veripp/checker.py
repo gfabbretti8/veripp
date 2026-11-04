@@ -73,9 +73,7 @@ def managed_dir() -> Path:
     """
     if override := os.environ.get("VERIPP_CHECKER_DIR"):
         return Path(override).expanduser()
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
-    elif sys.platform == "darwin":
+    if sys.platform == "darwin":
         base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
@@ -91,8 +89,7 @@ def state_dir() -> Path:
 
 def managed_esbmc() -> str | None:
     """The checker veripp installed, if there is one and it can be executed."""
-    name = "esbmc.exe" if sys.platform == "win32" else "esbmc"
-    candidate = managed_dir() / "bin" / name
+    candidate = managed_dir() / "bin" / "esbmc"
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
     return None
@@ -114,7 +111,18 @@ def source_for(system: str | None = None, machine: str | None = None) -> Source:
     if system == "Linux" and machine in ("aarch64", "arm64", "armv8", "armv8l"):
         return _release("esbmc-linux-armv8.zip")
     if system == "Windows":
-        return _release("esbmc-windows.zip", binary_name="esbmc.exe")
+        # Not a platform veripp supports: the CLI is not tested there and
+        # nothing is packaged for it. WSL is Linux x86_64 or arm64, and gets
+        # the Linux route.
+        return Source(
+            url=None,
+            unavailable_reason=(
+                "veripp does not support Windows. Run it under WSL, where the "
+                "Linux checker is bundled with `pip install veripp`, or use "
+                'the container: docker run --rm -v "$PWD:/src" '
+                "ghcr.io/gfabbretti8/veripp scan src/parser.c"
+            ),
+        )
     if system == "Darwin":
         # The macOS release zip links against Homebrew's z3/gmp/mpfr by
         # absolute path, so it is not relocatable: unzipping it elsewhere
@@ -317,7 +325,7 @@ def install_hint() -> str:
     Architecture still matters: the Linux release comes as one binary per
     architecture, and handing an arm64 user the x86_64 URL gets them a
     download that will not execute. Where veripp can fetch and probe the
-    right one itself -- Linux x86_64 and arm64, Windows -- that is the whole
+    right one itself -- Linux x86_64 and arm64 -- that is the whole
     instruction.
     """
     # One command, and it refuses to keep a download that fails the probes.
@@ -371,8 +379,7 @@ def bundled_esbmc(bundled_dir: Path | None = None) -> str | None:
     veripp stays usable on them: `doctor` says what to run.
     """
     directory = bundled_dir or BUNDLED_DIR
-    name = "esbmc.exe" if sys.platform == "win32" else "esbmc"
-    candidate = directory / name
+    candidate = directory / "esbmc"
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
     return None
