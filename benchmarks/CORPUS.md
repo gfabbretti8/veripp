@@ -29,6 +29,31 @@ libyaml needs its build run once first: it generates `config.h`, and veripp
 says so rather than surfacing the compiler's complaint about an undefined
 macro.
 
+## Re-measured with ESBMC 8.6 (2026-11-04)
+
+The table above was measured with an ESBMC built from master in mid-2026.
+veripp 0.7 pins the 8.6 release, so three of the rows were re-run with it,
+on a 4-core x86_64 container with `--timeout 10 -j 4` and no LLM. The
+harnessable share and the proved counts hold; what moved is the split of
+the rest, because two things changed in veripp between the measurements:
+counterexamples the harness itself causes are now filed as artifacts rather
+than counted as leads, and the machine is slower than the M1 the table used,
+so more functions hit the 10-second timeout.
+
+| library | functions | proved | counterexamples | artifacts | inconclusive | harnessable |
+|---|---:|---:|---:|---:|---:|---:|
+| cJSON | 117 | 36 | 2 | 25 | 41 | 89% |
+| parson | 144 | 29 | 24 | 15 | 63 | 91% |
+| tinyexpr | 45 | 19 | 0 | 5 | 18 | 93% |
+
+cJSON's 25 artifacts are the `hooks->allocate` alignment class triaged
+below, which the table's run counted among its 19 leads; its two remaining
+counterexamples are `cJSON_SetValuestring` (a pointer comparison across
+objects) and `update_offset`. Every inconclusive result in all three runs is
+a timeout, none a vacuous or unconfirmed proof. A longer `--timeout` on a
+faster machine is expected to move most of them into one of the settled
+columns, as the table's figures did.
+
 ## How many findings are real? (cJSON, triaged)
 
 The table above counts counterexamples. A counterexample is not a bug: it

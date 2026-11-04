@@ -173,6 +173,10 @@ def build(findings: list[dict], *, root: Path, version: str,
         message = description
         if function:
             message = f"{description} in `{function}`"
+            # An entry point, or a static helper with this many call sites:
+            # the first thing a reviewer wants to know, said where they look.
+            if finding.get("reach"):
+                message += f" ({finding['reach']})"
         # The bounds this finding was obtained under, which a retry may have
         # widened past the ones the scan started from.
         obtained = finding.get("bounds") or bounds
@@ -210,6 +214,8 @@ def build(findings: list[dict], *, root: Path, version: str,
         # rule can -- an out-of-bounds write is CWE-787, a read CWE-125.
         if finding.get("cwes"):
             result["properties"] = {"cwe": list(finding["cwes"])}
+        if finding.get("reach"):
+            result.setdefault("properties", {})["reach"] = finding["reach"]
         if (uri, function, description) in suppressed:
             result["suppressions"] = [{
                 "kind": "external",

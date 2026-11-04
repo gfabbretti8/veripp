@@ -22,7 +22,8 @@ run, and refuses to back results from one that cannot detect a planted bug.
   `static`, reached only through this file) and the number of call sites
   found in the scanned unit and anything linked with it. Entry points are
   listed before static helpers; a static helper with no callers found is
-  flagged as such. In the summary, the JSON report and the MCP result.
+  flagged as such. In the summary, the JSON report, the SARIF message (so a
+  pull-request annotation says it) and the MCP result.
 
 ### Added
 - **`veripp mcp`**: the CLI's `verify`, `scan`, `harness` and `doctor` as

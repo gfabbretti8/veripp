@@ -1065,6 +1065,8 @@ def _write_sarif(args, reports) -> None:
                 # Each result's own, not the scan's starting config: a tree
                 # scan has no single config, and a retry may have widened it.
                 "bounds": result.bounds,
+                # Who can reach it, since the reviewer sees only the message.
+                "reach": result.reach_note(),
             })
 
     try:

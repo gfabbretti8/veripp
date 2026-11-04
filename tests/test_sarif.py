@@ -125,6 +125,23 @@ class TestDocumentShape:
         assert "unwind=512" in first and "unwind=32" not in first
         assert "incremental BMC" in second
 
+    def test_each_result_says_who_can_reach_it(self) -> None:
+        """The reviewer sees only the message, and the first thing they ask
+        of a finding in a static helper is who calls it."""
+        from veripp.sarif import build
+
+        log = build([
+            {"file": "a.c", "line": 1, "function": "helper", "property": "overflow",
+             "cwes": [], "reach": "static, 2 callers here"},
+            {"file": "a.c", "line": 2, "function": "api", "property": "overflow",
+             "cwes": []},
+        ], root=Path("."), version="0")
+        first, second = log["runs"][0]["results"]
+        assert "in `helper` (static, 2 callers here)" in first["message"]["text"]
+        assert first["properties"]["reach"] == "static, 2 callers here"
+        assert "(static" not in second["message"]["text"]
+        assert "reach" not in second.get("properties", {})
+
     def test_each_result_carries_the_cwes_esbmc_gave_it(self) -> None:
         """The rule names the class; ESBMC names the weakness, and a write
         (CWE-787) is not a read (CWE-125)."""

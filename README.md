@@ -274,6 +274,13 @@ what it means, so an agent reads a verdict and the assumptions it rests on
 instead of parsing prose. Triage is off unless the call names a model: the
 agent on the other end is the one doing the reading.
 
+With nothing installed, the image serves the same tools; paths in tool calls
+are then relative to the mounted directory:
+
+```bash
+claude mcp add veripp -- docker run -i --rm -v "$PWD:/src" ghcr.io/gfabbretti8/veripp mcp
+```
+
 ## As a skill for coding agents
 
 ```bash
