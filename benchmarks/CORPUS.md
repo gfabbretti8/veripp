@@ -67,6 +67,15 @@ field-by-field harness reported a NULL dereference in seconds. The
 constructors cost solver time; the field-by-field harness costs false
 leads.
 
+The `items` class was then fixed in the harness itself: a plural array
+field beside a bare `count` is now paired with it, so `items` gets a
+bounded array of null pointers and `count` is bounded to match. Re-run with
+that change and no `--constructors`, the eight `json_array_get_*` and
+`json_object_get_name` all **prove** at `--timeout 20`, in seconds. The
+`cell_capacity` class (the nine `json_object_get_*`) remains: a hash table
+whose capacity is 0 is an invariant the harness cannot know, and
+`--constructors` is the honest answer there.
+
 ## How many findings are real? (cJSON, triaged)
 
 The table above counts counterexamples. A counterexample is not a bug: it
