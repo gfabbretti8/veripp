@@ -77,6 +77,24 @@ class TestScanReport:
         out = render("1", self.REPORT, tmp_path).stdout
         assert "boom" in out and "array bounds violated" in out
 
+    def test_findings_say_who_can_reach_them_and_whose_null_it_is(self, tmp_path) -> None:
+        """The two facts that decide whether a finding is worth a look, in
+        the one place a reviewer sees first."""
+        report = {
+            "candidates": 3, "proved": [], "inconclusive": [], "artifacts": [],
+            "not_harnessable": {},
+            "counterexamples": [
+                {"function": "api", "property": "NULL pointer", "linkage": "external",
+                 "callers": 0, "harness_null": "dereferences `items`, which the harness left null (x)"},
+                {"function": "helper", "property": "overflow", "linkage": "static", "callers": 1},
+                {"function": "old_shape", "property": "overflow"},
+            ],
+        }
+        out = render("1", report, tmp_path).stdout
+        assert "external, no callers in this unit; dereferences `items`" in out
+        assert "static, 1 caller here" in out
+        assert "`old_shape` — overflow" in out
+
     def test_long_lists_are_truncated(self, tmp_path) -> None:
         report = dict(self.REPORT, counterexamples=[{"function": f"f{i}"} for i in range(50)])
         out = render("1", report, tmp_path).stdout

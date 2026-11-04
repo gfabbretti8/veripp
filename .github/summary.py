@@ -97,6 +97,21 @@ def main() -> int:
                     where_file = item.get("file")
                     why = item.get("reason") or item.get("property") or ""
                     label = f"`{where_file}` → `{name}`" if where_file else f"`{name}`"
+                    # Who can reach it, and whether the null is the harness's:
+                    # the two facts that decide whether this is worth a look.
+                    notes = []
+                    linkage = item.get("linkage")
+                    callers = item.get("callers")
+                    if linkage:
+                        if isinstance(callers, int):
+                            where = "here" if linkage == "static" else "in this unit"
+                            notes.append(f"{linkage}, {callers or 'no'} caller{'' if callers == 1 else 's'} {where}")
+                        else:
+                            notes.append(str(linkage))
+                    if item.get("harness_null"):
+                        notes.append(str(item["harness_null"]))
+                    if notes:
+                        why = f"{why} _({'; '.join(notes)})_" if why else f"_({'; '.join(notes)})_"
                 else:
                     label, why = f"`{item}`", ""
                 out += [f"- {label}" + (f" — {why}" if why else "")]
