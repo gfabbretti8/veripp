@@ -148,6 +148,50 @@ def access_kind(prop: ViolatedProperty) -> str | None:
     return None
 
 
+_NULL_FIELD_RE = re.compile(r"pointer field `([^`]+)` is null")
+
+
+def harness_null_field(prop: ViolatedProperty | None, assumptions: list[str]) -> tuple[str, str] | None:
+    """The pointer field the harness itself left null, when the failing line
+    dereferences exactly that field.
+
+    The harness cuts pointer fields to null at --max-struct-depth, and leaves
+    one null when it cannot construct what it points to; each is recorded as
+    an assumption. A NULL dereference of that very field on the failing line
+    is then the harness's null, not one a caller is shown to produce. Returns
+    (field, why) with why "depth" or "type", or None: when no such field is
+    named on the line, the null is the code's to explain.
+    """
+    if prop is None or "NULL pointer" not in prop.description:
+        return None
+    nulled = []
+    for assumption in assumptions:
+        m = _NULL_FIELD_RE.search(assumption)
+        if m:
+            field = m.group(1).rsplit(".", 1)[-1]
+            nulled.append((field, "depth" if "depth bound" in assumption else "type"))
+    if not nulled:
+        return None
+    line = _source_line(prop)
+    if line is None:
+        return None
+    for field, why in nulled:
+        if re.search(rf"(?:->|\.)\s*{re.escape(field)}\b", scrub(line)):
+            return field, why
+    return None
+
+
+def harness_null_note(prop: ViolatedProperty | None, assumptions: list[str]) -> str | None:
+    """`harness_null_field` worded for a report, or None."""
+    found = harness_null_field(prop, assumptions)
+    if found is None:
+        return None
+    field, why = found
+    reason = ("cut at --max-struct-depth" if why == "depth"
+              else "its type could not be constructed")
+    return f"dereferences `{field}`, which the harness left null ({reason})"
+
+
 def _source_line(prop: ViolatedProperty) -> str | None:
     if not prop.loc.file or not prop.loc.line:
         return None

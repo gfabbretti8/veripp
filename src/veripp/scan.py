@@ -32,8 +32,8 @@ from .harness import (
 from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
 from .triage import (
-    TargetInfo, access_kind, find_call_sites, mechanical_artifact,
-    precondition_violations,
+    TargetInfo, access_kind, find_call_sites, harness_null_note,
+    mechanical_artifact, precondition_violations,
 )
 
 
@@ -80,6 +80,12 @@ class FunctionResult:
     #: entry point is reachable by definition, a static helper only through
     #: the callers counted below, which may guard every input it rejects.
     linkage: str = ""
+    #: Set when a NULL dereference is of a pointer field the harness itself
+    #: left null (a depth cut, or a type it could not construct). Not an
+    #: artifact -- an unchecked pointer is a real bug class, and only a
+    #: caller can say whether that field is ever null -- but the null is the
+    #: harness's, so it is said, and such findings rank after the others.
+    harness_null: str | None = None
     #: Call sites whose literal arguments break an accepted precondition,
     #: e.g. "line 42: d = 0 violates `d != 0`". A precondition the solver
     #: accepted is satisfiable and sufficient; it is not a proof that callers
@@ -295,6 +301,8 @@ class ScanReport:
             # is reached only through the call sites counted here, each of
             # which may guard the input the counterexample needs.
             linkage_rank = {"external": 0, "": 1, "static": 2}
+            # A null the harness put there ranks after nulls the code
+            # produced on its own, whoever can reach the function.
             tags = {"real_bug": "triage: real bug",
                     "missing_assumption":
                         "triage: needs a precondition, none accepted yet",
@@ -302,11 +310,12 @@ class ScanReport:
             ordered = sorted(
                 self.counterexamples,
                 key=lambda r: (rank.get(r.triage_kind, 1),
+                               1 if r.harness_null else 0,
                                linkage_rank.get(r.linkage, 1),
                                access_rank.get(r.access, 1), r.name),
             )
             for r in ordered[:20]:
-                parts = [part for part in (r.access, r.reach_note(),
+                parts = [part for part in (r.access, r.reach_note(), r.harness_null,
                                            tags.get(r.triage_kind)) if part]
                 lines.append(f"    {r.name}: {r.detail}"
                              + (f"  [{'; '.join(parts)}]" if parts else ""))
@@ -604,6 +613,7 @@ def scan(
             column=(prop.loc.column if prop and prop.loc else 0),
             cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
             access=access_kind(prop) if prop else None,
+            harness_null=harness_null_note(prop, harness.assumptions),
             bounds=result.config.describe(),
             linkage="static" if sig.is_static else "external",
             callers=_caller_count(name, text, scrubbed, linked),
@@ -758,6 +768,7 @@ def _retry_pass(
             r.column = prop.loc.column if prop and prop.loc else 0
             r.cwes = list(getattr(prop, "cwes", []) or []) if prop else []
             r.bounds = final.config.describe()
+            r.harness_null = harness_null_note(prop, r.assumptions)
             # Derived from the property, so it has to be recomputed here with
             # everything else. Leaving it behind labelled a read as a write,
             # which is the one thing this field must not do.

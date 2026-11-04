@@ -117,13 +117,25 @@ class AgentReport:
         It is not safe to call it an artifact -- an unchecked pointer is a
         real bug class -- but the reader should know which nulls are ours.
         """
+        from .triage import harness_null_field
+
         prop = self.final.violated_property
         if prop is None or "NULL pointer" not in prop.description:
             return None
         nulled = [a for a in self.assumptions if "is null" in a]
         if not nulled:
             return None
-        deeper = any("depth bound" in a for a in nulled)
+        # The field the failing line actually dereferences, when it is one
+        # of ours; otherwise the first null field, as the best available hint.
+        matched = harness_null_field(prop, self.assumptions)
+        if matched is not None:
+            field, why = matched
+            deeper = why == "depth"
+            what = f"the failing line dereferences `{field}`, which the harness left null"
+        else:
+            deeper = any("depth bound" in a for a in nulled)
+            field = nulled[0].split("`")[1] if "`" in nulled[0] else "see assumptions"
+            what = f"the harness left a pointer field null ({field})"
         advice = (
             "re-run with a larger --max-struct-depth to tell the two apart"
             if deeper
@@ -131,10 +143,8 @@ class AgentReport:
             "target a function that does not take it"
         )
         return (
-            "  NOTE: the harness left a pointer field null "
-            f"({nulled[0].split('`')[1] if '`' in nulled[0] else 'see assumptions'}"
-            f"), so this null may be the harness's rather than something a "
-            f"caller can produce. {advice.capitalize()}."
+            f"  NOTE: {what}, so this null may be the harness's rather than "
+            f"something a caller can produce. {advice.capitalize()}."
         )
 
     def summary(self) -> str:

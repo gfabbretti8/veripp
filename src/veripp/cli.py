@@ -1564,7 +1564,9 @@ def _scan(args) -> int:
                  "triage_error": r.triage_error,
                  # Who can reach it: an entry point, or a helper with this
                  # many call sites in the scanned unit(s).
-                 "linkage": r.linkage, "callers": r.callers}
+                 "linkage": r.linkage, "callers": r.callers,
+                 # Set when the null dereferenced is one the harness left.
+                 "harness_null": r.harness_null}
                 for r in report.counterexamples
             ],
             "preconditioned": [

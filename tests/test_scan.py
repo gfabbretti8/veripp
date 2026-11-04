@@ -442,7 +442,7 @@ class TestRetryKeepsDerivedFieldsInSync:
         source = inspect.getsource(scan_mod._retry_pass)
         block = source[source.index("if settled:"):]
         for field in ("r.detail", "r.file", "r.line", "r.column", "r.cwes",
-                      "r.access", "r.artifact"):
+                      "r.access", "r.artifact", "r.harness_null"):
             assert field in block, (
                 f"{field} is derived from the counterexample but the retry "
                 "path does not refresh it; a settled retry would keep a "

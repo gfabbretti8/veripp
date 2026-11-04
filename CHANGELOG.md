@@ -10,6 +10,13 @@ run, and refuses to back results from one that cannot detect a planted bug.
 ## Unreleased
 
 ### Changed
+- **A null the harness left is named as such.** When a NULL dereference is
+  of a pointer field the harness itself set to null (cut at
+  `--max-struct-depth`, or a type it could not construct), `scan` tags the
+  counterexample with that field and ranks it after nulls the code produced
+  on its own, and `verify`'s note names the field the failing line
+  dereferences instead of the first null field it finds. Still reported:
+  only a caller can say whether that field is ever null.
 - **An accepted precondition is checked against the callers.** Where a call
   site passes an integer literal for a parameter the precondition names,
   veripp evaluates the precondition on it; a caller that breaks it is
