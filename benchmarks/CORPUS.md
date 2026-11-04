@@ -43,7 +43,8 @@ so more functions hit the 10-second timeout.
 | library | functions | proved | counterexamples | artifacts | inconclusive | harnessable |
 |---|---:|---:|---:|---:|---:|---:|
 | cJSON | 117 | 36 | 2 | 25 | 41 | 89% |
-| parson | 144 | 29 | 24 | 15 | 63 | 91% |
+| parson, before the pairing fix below | 144 | 29 | 24 | 15 | 63 | 91% |
+| parson, after it | 144 | 38 | 5 | 16 | 72 | 91% |
 | tinyexpr | 45 | 19 | 0 | 5 | 18 | 93% |
 
 cJSON's 25 artifacts are the `hooks->allocate` alignment class triaged
@@ -71,10 +72,15 @@ The `items` class was then fixed in the harness itself: a plural array
 field beside a bare `count` is now paired with it, so `items` gets a
 bounded array of null pointers and `count` is bounded to match. Re-run with
 that change and no `--constructors`, the eight `json_array_get_*` and
-`json_object_get_name` all **prove** at `--timeout 20`, in seconds. The
-`cell_capacity` class (the nine `json_object_get_*`) remains: a hash table
-whose capacity is 0 is an invariant the harness cannot know, and
-`--constructors` is the honest answer there.
+`json_object_get_name` all **prove** at `--timeout 20`, in seconds, and the
+whole-file numbers move from 29 proved and 24 counterexamples to 38 proved
+and 5 (the second parson row above; cJSON is unchanged by the fix). The
+`cell_capacity` class (the nine `json_object_get_*`) is now a set of
+timeouts rather than counterexamples: with `names`, `cells`, `hashes` and
+`values` paired to their counts the solver has real arrays to reason about
+and does not finish in 10 s on this machine. A hash table whose capacity
+is 0 is still an invariant the harness cannot know, and `--constructors` is
+the honest answer there.
 
 ## How many findings are real? (cJSON, triaged)
 
