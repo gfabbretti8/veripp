@@ -10,6 +10,11 @@ run, and refuses to back results from one that cannot detect a planted bug.
 ## Unreleased
 
 ### Changed
+- **`scan` suggests `--constructors` when the findings call for it.** When
+  most counterexamples are in functions handed an object the harness filled
+  field by field, the next-step line says so and gives the command: those
+  states are often ones no caller produces, and the library's constructors
+  rule them out.
 - **A null the harness left is named as such.** When a NULL dereference is
   of a pointer field the harness itself set to null (cut at
   `--max-struct-depth`, or a type it could not construct), `scan` tags the

@@ -346,11 +346,29 @@ class ScanReport:
                 self.counterexamples,
                 key=lambda r: (rank.get(r.triage_kind, 1), r.name),
             )[0]
-            return (
+            nudge = (
                 f"  next:  veripp verify {where} --function {first.name}\n"
                 "         to see the failing input. A counterexample holds in the\n"
                 "         generated harness; check a caller can really reach it."
             )
+            # When most of the counterexamples are in functions handed an
+            # object the harness filled field by field, the likelier story
+            # is an object state no caller produces -- parson's hash table
+            # with a capacity of 0, say -- and the library's own constructor
+            # is the way to rule those out.
+            filled = [r for r in self.counterexamples
+                      if r.harness_null or any(
+                          "with every field nondeterministic" in a
+                          for a in r.assumptions)]
+            if len(filled) >= 2 and 2 * len(filled) >= len(self.counterexamples):
+                nudge += (
+                    f"\n         {len(filled)} of {len(self.counterexamples)} take an "
+                    "object the harness filled field by field, which admits\n"
+                    "         states no caller produces. --constructors builds it with\n"
+                    "         the library's own constructors instead:\n"
+                    f"         veripp scan {where} --constructors"
+                )
+            return nudge
         if self.preconditioned:
             return (
                 "  next:  the preconditions above are load-bearing. Make each one\n"

@@ -553,3 +553,46 @@ class TestWhoCanReachIt:
         assert found["helper"].linkage == "static" and found["helper"].callers == 1
         summary = report.summary()
         assert summary.index("api: ") < summary.index("helper: ")
+
+
+class TestNextStepSuggestsConstructors:
+    """parson: 23 of 24 counterexamples were in functions handed a JSON_Object
+    or JSON_Array the harness filled field by field, and the failing states
+    (a hash table with capacity 0, an items array left null) are ones the
+    library's constructors never produce. The nudge should say so."""
+
+    def _report(self, filled, plain):
+        from veripp.scan import FunctionResult, ScanReport
+
+        report = ScanReport(source=Path("parson.c"), candidates=filled + plain)
+        report.results = [
+            FunctionResult(name=f"get_{i}", outcome="counterexample", detail="d",
+                           assumptions=["`object` points to one `JSON_Object` with every "
+                                        "field nondeterministic: field combinations no real "
+                                        "caller can produce are included"])
+            for i in range(filled)
+        ] + [
+            FunctionResult(name=f"calc_{i}", outcome="counterexample", detail="d",
+                           assumptions=["`n` is any int"])
+            for i in range(plain)
+        ]
+        return report
+
+    def test_mostly_filled_objects_get_the_constructors_hint(self):
+        summary = self._report(filled=3, plain=1).summary()
+        assert "3 of 4 take an object the harness filled field by field" in summary
+        assert "veripp scan parson.c --constructors" in summary
+
+    def test_a_harness_null_counts_as_a_filled_object(self):
+        from veripp.scan import FunctionResult
+
+        report = self._report(filled=1, plain=1)
+        report.results.append(FunctionResult(
+            name="get_x", outcome="counterexample", detail="d",
+            harness_null="dereferences `items`, which the harness left null (x)"))
+        assert "--constructors" in report.summary()
+
+    def test_scalar_counterexamples_do_not_get_it(self):
+        summary = self._report(filled=1, plain=3).summary()
+        assert "--constructors" not in summary
+        assert "next:  veripp verify parson.c --function" in summary
