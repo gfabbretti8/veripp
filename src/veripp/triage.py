@@ -181,6 +181,33 @@ def harness_null_field(prop: ViolatedProperty | None, assumptions: list[str]) ->
     return None
 
 
+_VOID_BOUND_RE = re.compile(r"`(\w+)` is a `void \*` with no length beside it")
+_BOUNDS_WORDS = ("array bounds violated", "out of bounds", "memory segment",
+                 "invalid pointer", "dereference failure: array")
+
+
+def harness_bound_note(prop: ViolatedProperty | None, assumptions: list[str]) -> str | None:
+    """A bounds failure in a function handed a `void *` the harness could
+    only give a few arbitrary bytes.
+
+    lz4 hands `void* tableBase` to its hash-table helpers and indexes it by a
+    hash; the real table is a caller's 16 KB, the harness's is the array
+    bound. An out-of-bounds access there is reported, but it is the
+    harness's bound being crossed, and that is said. Returns the note, or
+    None when the failure is not a bounds one or no such parameter exists.
+    """
+    if prop is None or not any(word in prop.description for word in _BOUNDS_WORDS):
+        return None
+    names = [m.group(1) for a in assumptions for m in [_VOID_BOUND_RE.search(a)] if m]
+    if not names:
+        return None
+    return (
+        f"takes `{names[0]}`, a `void *` the harness could only give a few "
+        "arbitrary bytes with no length to go by; a bounds failure here may "
+        "be that bound, not a caller's memory"
+    )
+
+
 def harness_null_note(prop: ViolatedProperty | None, assumptions: list[str]) -> str | None:
     """`harness_null_field` worded for a report, or None."""
     found = harness_null_field(prop, assumptions)

@@ -1565,8 +1565,9 @@ def _scan(args) -> int:
                  # Who can reach it: an entry point, or a helper with this
                  # many call sites in the scanned unit(s).
                  "linkage": r.linkage, "callers": r.callers,
-                 # Set when the null dereferenced is one the harness left.
-                 "harness_null": r.harness_null}
+                 # Set when the null dereferenced is one the harness left, or
+                 # the bound crossed is one it chose.
+                 "harness_null": r.harness_null, "harness_bound": r.harness_bound}
                 for r in report.counterexamples
             ],
             "preconditioned": [

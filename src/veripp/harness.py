@@ -203,6 +203,28 @@ _NONDET_BY_TYPE = {
     "uint32_t": "(uint32_t)VERIPP_NONDET_UINT()",
     "int64_t": "(int64_t)VERIPP_NONDET_LONG()",
     "uint64_t": "(uint64_t)VERIPP_NONDET_ULONG()",
+    # The rest of <stdint.h>, each cast from the nondet of a type at least
+    # as wide: the cast is where the value is narrowed, nondeterministically.
+    "int_least8_t": "(int_least8_t)VERIPP_NONDET_CHAR()",
+    "uint_least8_t": "(uint_least8_t)VERIPP_NONDET_CHAR()",
+    "int_least16_t": "(int_least16_t)VERIPP_NONDET_INT()",
+    "uint_least16_t": "(uint_least16_t)VERIPP_NONDET_UINT()",
+    "int_least32_t": "(int_least32_t)VERIPP_NONDET_INT()",
+    "uint_least32_t": "(uint_least32_t)VERIPP_NONDET_UINT()",
+    "int_least64_t": "(int_least64_t)VERIPP_NONDET_LONG()",
+    "uint_least64_t": "(uint_least64_t)VERIPP_NONDET_ULONG()",
+    "int_fast8_t": "(int_fast8_t)VERIPP_NONDET_INT()",
+    "uint_fast8_t": "(uint_fast8_t)VERIPP_NONDET_UINT()",
+    "int_fast16_t": "(int_fast16_t)VERIPP_NONDET_LONG()",
+    "uint_fast16_t": "(uint_fast16_t)VERIPP_NONDET_ULONG()",
+    "int_fast32_t": "(int_fast32_t)VERIPP_NONDET_LONG()",
+    "uint_fast32_t": "(uint_fast32_t)VERIPP_NONDET_ULONG()",
+    "int_fast64_t": "(int_fast64_t)VERIPP_NONDET_LONG()",
+    "uint_fast64_t": "(uint_fast64_t)VERIPP_NONDET_ULONG()",
+    "intmax_t": "(intmax_t)VERIPP_NONDET_LONG()",
+    "uintmax_t": "(uintmax_t)VERIPP_NONDET_ULONG()",
+    "intptr_t": "(intptr_t)VERIPP_NONDET_LONG()",
+    "uintptr_t": "(uintptr_t)VERIPP_NONDET_ULONG()",
 }
 
 _LENGTH_NAMES = {

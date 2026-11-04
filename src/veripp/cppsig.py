@@ -143,6 +143,12 @@ def _collect_scalar_typedefs_cached(source: str) -> tuple[tuple[str, str], ...]:
         "long long", "unsigned long long", "float", "double", "size_t",
         "ptrdiff_t", "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t",
         "uint32_t", "int64_t", "uint64_t",
+        # The rest of <stdint.h>: nanopb's pb_byte_t is uint_least8_t.
+        "int_least8_t", "uint_least8_t", "int_least16_t", "uint_least16_t",
+        "int_least32_t", "uint_least32_t", "int_least64_t", "uint_least64_t",
+        "int_fast8_t", "uint_fast8_t", "int_fast16_t", "uint_fast16_t",
+        "int_fast32_t", "uint_fast32_t", "int_fast64_t", "uint_fast64_t",
+        "intmax_t", "uintmax_t", "intptr_t", "uintptr_t",
     }
     resolved: dict[str, str] = {}
     for alias in raw:
@@ -983,7 +989,8 @@ def find_struct(source: str, name: str) -> StructInfo:
         raise SignatureError(
             f"`{name}` has preprocessor-conditional members, so which fields "
             "exist depends on build configuration and the layout cannot be "
-            "modelled; harness a function that does not take one"
+            "modelled from the text; --preprocess reads it as the compiler "
+            "sees it, with one configuration's fields"
         )
 
     info = StructInfo(name=name, is_union=_is_union(scrubbed, rng))

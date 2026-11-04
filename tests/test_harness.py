@@ -1061,3 +1061,20 @@ class TestEnumsUnderThreads:
         report = scan_module.scan(src, VerifyConfig(), jobs=8, retry_budget=0)
         assert not report.refused, [r.detail for r in report.refused]
         assert len(report.proved) == 12
+
+
+class TestTheRestOfStdint:
+    """nanopb's pb_byte_t is uint_least8_t, and a parameter of that type was
+    refused as one veripp cannot build a nondeterministic value for."""
+
+    @pytest.mark.parametrize("type_", [
+        "uint_least8_t", "int_least32_t", "uint_fast16_t", "int_fast64_t",
+        "intmax_t", "uintmax_t", "intptr_t", "uintptr_t",
+    ])
+    def test_each_has_a_nondet_and_resolves_as_a_scalar(self, type_):
+        from veripp.cppsig import collect_scalar_typedefs
+        from veripp.harness import nondet_for
+
+        assert nondet_for(type_) is not None
+        typedefs = collect_scalar_typedefs(f"typedef {type_} pb_byte_t;\n")
+        assert nondet_for("pb_byte_t", typedefs) is not None

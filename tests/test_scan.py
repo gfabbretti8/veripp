@@ -442,7 +442,7 @@ class TestRetryKeepsDerivedFieldsInSync:
         source = inspect.getsource(scan_mod._retry_pass)
         block = source[source.index("if settled:"):]
         for field in ("r.detail", "r.file", "r.line", "r.column", "r.cwes",
-                      "r.access", "r.artifact", "r.harness_null"):
+                      "r.access", "r.artifact", "r.harness_null", "r.harness_bound"):
             assert field in block, (
                 f"{field} is derived from the counterexample but the retry "
                 "path does not refresh it; a settled retry would keep a "
@@ -596,3 +596,76 @@ class TestNextStepSuggestsConstructors:
         summary = self._report(filled=1, plain=3).summary()
         assert "--constructors" not in summary
         assert "next:  veripp verify parson.c --function" in summary
+
+
+class TestNextStepSuggestsPreprocess:
+    """nanopb: 66 of 84 functions refused for a struct with #ifdef members;
+    zlib: 39 for `} FAR deflate_state;`. Both are the text, not the code."""
+
+    def _report(self, refused, proved, preprocessed=False,
+                detail="parameter `s` points to `deflate_state`, which the generator cannot construct; write the harness by hand."):
+        from veripp.scan import FunctionResult, ScanReport
+
+        report = ScanReport(source=Path("deflate.c"), candidates=refused + proved,
+                            preprocessed=preprocessed)
+        report.results = [FunctionResult(name=f"r{i}", outcome="refused", detail=detail)
+                          for i in range(refused)]
+        report.results += [FunctionResult(name=f"p{i}", outcome="verified") for i in range(proved)]
+        return report
+
+    def test_mostly_unconstructible_types_get_the_hint(self):
+        summary = self._report(refused=39, proved=20).summary()
+        assert "veripp scan deflate.c --preprocess" in summary
+        assert "39 functions were refused" in summary
+
+    def test_not_when_already_preprocessed(self):
+        assert "--preprocess" not in self._report(refused=39, proved=20, preprocessed=True).summary()
+
+    def test_not_when_refusals_are_a_minority(self):
+        assert "--preprocess" not in self._report(refused=3, proved=20).summary()
+
+    def test_not_for_refusals_the_preprocessor_cannot_help(self):
+        summary = self._report(refused=10, proved=2, detail="variadic functions are not supported").summary()
+        assert "--preprocess" not in summary
+
+
+class TestHarnessBoundNote:
+    """lz4 hands `void* tableBase` to its hash helpers and indexes it by a
+    hash: the real table is a caller's 16 KB, the harness's is four bytes.
+    A bounds failure there is reported with that said, and ranked after."""
+
+    ASSUMPTIONS = ["`tableBase` is a `void *` with no length beside it and no cast in the body "
+                   "to say what it is: it points to 4 nondeterministic bytes (harness bound). ..."]
+
+    def _prop(self, description):
+        from veripp.esbmc import SourceLoc, ViolatedProperty
+
+        return ViolatedProperty(loc=SourceLoc("lz4.c", 10), description=description)
+
+    def test_a_bounds_failure_with_such_a_parameter_is_noted(self):
+        from veripp.triage import harness_bound_note
+
+        note = harness_bound_note(self._prop("dereference failure: array bounds violated"), self.ASSUMPTIONS)
+        assert note is not None and "`tableBase`" in note and "harness's bound" in note or "that bound" in note
+
+    def test_other_failures_and_other_parameters_are_not(self):
+        from veripp.triage import harness_bound_note
+
+        assert harness_bound_note(self._prop("arithmetic overflow on add"), self.ASSUMPTIONS) is None
+        assert harness_bound_note(self._prop("dereference failure: array bounds violated"),
+                                  ["`n` is any int"]) is None
+        assert harness_bound_note(None, self.ASSUMPTIONS) is None
+
+    def test_it_ranks_after_findings_the_harness_had_no_hand_in(self):
+        from veripp.scan import FunctionResult, ScanReport
+
+        report = ScanReport(source=Path("lz4.c"), candidates=2)
+        report.results = [
+            FunctionResult(name="a_hash", outcome="counterexample", detail="bounds",
+                           linkage="external", harness_bound="takes `tableBase`, a `void *` ..."),
+            FunctionResult(name="b_real", outcome="counterexample", detail="bounds",
+                           linkage="static", callers=1),
+        ]
+        summary = report.summary()
+        assert summary.index("b_real: ") < summary.index("a_hash: ")
+        assert "takes `tableBase`" in summary

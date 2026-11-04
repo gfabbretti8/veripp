@@ -32,8 +32,8 @@ from .harness import (
 from .llm import LLMClient, NullLLM
 from .paths import scratch_dir
 from .triage import (
-    TargetInfo, access_kind, find_call_sites, harness_null_note,
-    mechanical_artifact, precondition_violations,
+    TargetInfo, access_kind, find_call_sites, harness_bound_note,
+    harness_null_note, mechanical_artifact, precondition_violations,
 )
 
 
@@ -86,6 +86,11 @@ class FunctionResult:
     #: caller can say whether that field is ever null -- but the null is the
     #: harness's, so it is said, and such findings rank after the others.
     harness_null: str | None = None
+    #: Set when a bounds failure is in a function handed a `void *` the
+    #: harness could only size arbitrarily (no length beside it, no cast to
+    #: build from). The same standing as `harness_null`: reported, said,
+    #: ranked after findings the harness had no hand in.
+    harness_bound: str | None = None
     #: Call sites whose literal arguments break an accepted precondition,
     #: e.g. "line 42: d = 0 violates `d != 0`". A precondition the solver
     #: accepted is satisfiable and sufficient; it is not a proof that callers
@@ -204,6 +209,9 @@ class ScanReport:
     #: header. Very common for single-header libraries, and scanning it finds
     #: nothing at all.
     implementation_hint: str | None = None
+    #: Whether the source was read through the preprocessor (--preprocess),
+    #: which decides whether suggesting it is useful.
+    preprocessed: bool = False
 
     def summary(self) -> str:
         total = self.candidates or len(self.results)
@@ -310,13 +318,13 @@ class ScanReport:
             ordered = sorted(
                 self.counterexamples,
                 key=lambda r: (rank.get(r.triage_kind, 1),
-                               1 if r.harness_null else 0,
+                               1 if (r.harness_null or r.harness_bound) else 0,
                                linkage_rank.get(r.linkage, 1),
                                access_rank.get(r.access, 1), r.name),
             )
             for r in ordered[:20]:
                 parts = [part for part in (r.access, r.reach_note(), r.harness_null,
-                                           tags.get(r.triage_kind)) if part]
+                                           r.harness_bound, tags.get(r.triage_kind)) if part]
                 lines.append(f"    {r.name}: {r.detail}"
                              + (f"  [{'; '.join(parts)}]" if parts else ""))
             if len(self.counterexamples) > 20:
@@ -392,8 +400,22 @@ class ScanReport:
                 "         these failed on how the harness was built, not on the\n"
                 "         code; read it to see what it assumed."
             )
-        if self.proved and not self.refusal_reasons():
-            return None
+        refused = len(self.refused)
+        if (refused and not self.preprocessed
+                and refused >= max(len(self.proved), len(self.counterexamples), 1)
+                and any("cannot construct" in r.detail or "conditional" in r.detail
+                        or "not modelled" in r.detail for r in self.refused)):
+            # nanopb: 66 of 84 functions refused for a struct with #ifdef
+            # members; zlib: 39 for a typedef written `} FAR deflate_state;`.
+            # Both are the text, not the code, and the preprocessor settles
+            # them: 21% -> 86% and 52% -> 74% harnessable.
+            return (
+                f"  next:  veripp scan {where} --preprocess\n"
+                f"         {refused} functions were refused for a type veripp could not\n"
+                "         construct from the text. Read through the preprocessor,\n"
+                "         structs with #if members and macro-decorated typedefs\n"
+                "         resolve to the build's own layout."
+            )
         return None
 
 
@@ -530,7 +552,8 @@ def scan(
     # Callers are counted in the unit and in anything linked with it: the
     # same text the checker sees, so a static helper's callers are all here.
     linked = _linked_text(options)
-    report = ScanReport(source=source, candidates=len(names))
+    report = ScanReport(source=source, candidates=len(names),
+                        preprocessed=options.preprocess)
     # Independent of harnessing, and of the solver: a length-shaped parameter
     # the body never reads is the shape that produced three of this
     # project's findings. It costs one signature parse per function and it
@@ -633,6 +656,7 @@ def scan(
             cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
             access=access_kind(prop) if prop else None,
             harness_null=harness_null_note(prop, harness.assumptions),
+            harness_bound=harness_bound_note(prop, harness.assumptions),
             bounds=result.config.describe(),
             linkage="static" if sig.is_static else "external",
             callers=_caller_count(name, text, scrubbed, linked),
@@ -788,6 +812,7 @@ def _retry_pass(
             r.cwes = list(getattr(prop, "cwes", []) or []) if prop else []
             r.bounds = final.config.describe()
             r.harness_null = harness_null_note(prop, r.assumptions)
+            r.harness_bound = harness_bound_note(prop, r.assumptions)
             # Derived from the property, so it has to be recomputed here with
             # everything else. Leaving it behind labelled a read as a write,
             # which is the one thing this field must not do.

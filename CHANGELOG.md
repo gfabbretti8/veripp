@@ -17,6 +17,19 @@ run, and refuses to back results from one that cannot detect a planted bug.
   the ones people use.
 
 ### Changed: harness modelling
+- **The rest of `<stdint.h>` is scalar.** `uint_least8_t` (nanopb's
+  `pb_byte_t`), the `int_fast*` and `int_least*` families, `intmax_t` and
+  `intptr_t` get nondeterministic values like `uint8_t` always did.
+- **A bounds failure on a length-less `void *` says the bound is the
+  harness's.** lz4 indexes `void* tableBase` by a hash; the caller's table
+  is 16 KB and the harness's is four bytes. Such counterexamples carry the
+  note and rank after findings the harness had no hand in.
+- **`scan` suggests `--preprocess` when the text is what blocks it.** When
+  most functions are refused for a type veripp cannot construct from the
+  source (a struct with `#if` members, a typedef written `} FAR name;`),
+  the next-step line gives the command. nanopb goes from 21% to 86%
+  harnessable with it, zlib from 52% to 74%; the refusal message for a
+  struct with conditional members says the same.
 - **`void *` parameters are modelled instead of refused.** Beside a length
   (`const void* src, int srcSize`) a void pointer is that many
   nondeterministic bytes, the shape of memcpy. When the body casts it
