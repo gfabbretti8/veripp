@@ -233,6 +233,83 @@ class TestCountedPointerFields:
         assert "_next_items" not in code  # not turned into an array
 
 
+class TestPluralArraysBesideABareCount:
+    """parson's JSON_Array: `JSON_Value *wrapping_value; JSON_Value **items;
+    size_t count; size_t capacity;`. `items` matched no `items_count`, was
+    left null as a type the harness could not construct, and all eight
+    json_array_get_* were reported for the null the harness put there."""
+
+    PARSON = (
+        '#include "veripp/contracts.hpp"\n'
+        "#include <stddef.h>\n"
+        "typedef struct json_value_t { int type; } JSON_Value;\n"
+        "typedef struct json_array_t {\n"
+        "  JSON_Value *wrapping_value; JSON_Value **items; size_t count; size_t capacity;\n"
+        "} JSON_Array;\n"
+        "JSON_Value *json_array_get_value(const JSON_Array *array, size_t index) {\n"
+        "  if (array == NULL || index >= array->count) return NULL;\n"
+        "  return array->items[index];\n"
+        "}\n"
+    )
+
+    def test_items_pairs_with_the_bare_count(self):
+        from veripp.cppsig import find_struct
+        from veripp.harness import _pair_struct_fields
+
+        info = find_struct(self.PARSON, "JSON_Array")
+        pairs = _pair_struct_fields(info, {})
+        assert pairs == {"items": "count"}, pairs  # wrapping_value is a link, left alone
+
+    def test_a_plural_array_takes_its_singular_stem_count_first(self):
+        from veripp.cppsig import find_struct
+        from veripp.harness import _pair_struct_fields
+
+        src = ("typedef struct { char **names; size_t *cells; unsigned long *hashes;\n"
+               "  size_t count; size_t cell_capacity; } JSON_Object;\n")
+        pairs = _pair_struct_fields(find_struct(src, "JSON_Object"), {})
+        assert pairs["cells"] == "cell_capacity"
+        assert pairs["names"] == "count" and pairs["hashes"] == "count"
+
+    def test_a_pointer_to_one_struct_is_a_link_not_an_array(self):
+        from veripp.cppsig import find_struct
+        from veripp.harness import _pair_struct_fields
+
+        src = ("typedef struct V { int x; } V;\n"
+               "typedef struct { V *owner; V *other; size_t count; } Holder;\n")
+        assert _pair_struct_fields(find_struct(src, "Holder"), {}) == {}
+
+    def test_two_generic_counts_pair_nothing_rather_than_guess(self):
+        from veripp.cppsig import find_struct
+        from veripp.harness import _pair_struct_fields
+
+        src = "typedef struct { int **a; int **b; size_t count; size_t len; } T;\n"
+        assert _pair_struct_fields(find_struct(src, "T"), {}) == {}
+
+    def test_the_harness_gives_items_an_array_and_bounds_count(self, tmp_path):
+        p = tmp_path / "parson_like.c"
+        p.write_text(self.PARSON, encoding="utf-8")
+        harness = generate(p, "json_array_get_value")
+        assert "array_obj_items_items[4]" in harness.code
+        assert "VERIPP_ASSUME(array_obj.count <= 4);" in harness.code
+        assert not any("`array_obj.items` is null" in a for a in harness.assumptions)
+
+    @pytest.mark.esbmc
+    def test_the_getter_now_proves(self, tmp_path):
+        from veripp.agent import verify_with_agent
+        from veripp.esbmc import VerifyConfig
+        from veripp.llm import NullLLM
+        from veripp.paths import contracts_include_dir
+
+        p = tmp_path / "parson_like.c"
+        p.write_text(self.PARSON, encoding="utf-8")
+        harness = generate(p, "json_array_get_value")
+        target = harness.write(tmp_path)
+        config = VerifyConfig(timeout_s=120, include_dirs=[contracts_include_dir()])
+        report = verify_with_agent(target, config, llm=NullLLM(),
+                                   assumptions=harness.assumptions, harness=target)
+        assert report.verified, report.summary()
+
+
 class TestElaboratedTypeFields:
     """C spells types `struct Node* next;`, and that is a field.
 

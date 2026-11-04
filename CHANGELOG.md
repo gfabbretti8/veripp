@@ -9,6 +9,17 @@ run, and refuses to back results from one that cannot detect a planted bug.
 
 ## Unreleased
 
+### Changed: harness modelling
+- **A plural array beside a bare count is paired.** `JSON_Value **items`
+  next to `size_t count` used to be left null (its pointee not a type the
+  harness constructs) with the count unbounded, and every getter was
+  reported for the null the harness put there. An array-like pointer field
+  (to pointers or scalars, not a link to one struct) now takes its
+  singular-stem count (`cells` with `cell_capacity`) or the struct's one
+  generic count, gets a bounded array, and the count is bounded to match.
+  Where two generic counts compete nothing is paired. parson's
+  `json_array_get_*` go from eight NULL-pointer counterexamples to proofs.
+
 ### Changed
 - **Triage is told the mechanical facts first.** The context an LLM sees
   for a counterexample now states the function's linkage and caller count,

@@ -2597,7 +2597,43 @@ def _pair_struct_fields(
             match = next((c for c in integers if _is_length_name(c)), None)
         if match is not None:
             pairs[f.name] = match
+    # A second pass for the plural-named arrays beside a bare count. parson's
+    # JSON_Array is `JSON_Value *wrapping_value; JSON_Value **items; size_t
+    # count; size_t capacity;`: `items` matched nothing above (its count is
+    # not called items_count), was left null as a type the harness could not
+    # construct, and every getter was reported for the null the harness put
+    # there. An array-like pointer -- to pointers or to scalars, not a link to
+    # one struct -- takes its singular-stem count (`cells` -> `cell_capacity`)
+    # or, failing that, the struct's one generic count field.
+    generic = sorted(
+        c for c in integers
+        if c.lower() in ("count", "n", "len", "length", "size", "num",
+                         "nitems", "nmemb", "nelems", "nelem", "items")
+        and c not in pairs.values()
+    )
+    for f in pointers:
+        if f.name in pairs or not _array_like(f, typedefs):
+            continue
+        match = None
+        if f.name.endswith("s") and len(f.name) > 1:
+            stem = f.name[:-1]
+            singular = {f"{stem}_{s}" for s in ("num", "count", "size", "len", "n", "capacity")}
+            match = next((c for c in integers if c in singular), None)
+        if match is None and len(generic) == 1:
+            match = generic[0]
+        if match is not None:
+            pairs[f.name] = match
     return pairs
+
+
+def _array_like(f: Field, typedefs: dict[str, str]) -> bool:
+    """A pointer field that reads as an array rather than a link to one object:
+    a pointer to pointers (`char **names`, `JSON_Value **items`) or to a
+    scalar (`unsigned long *hashes`). A pointer to a struct is a link."""
+    pointee = f.pointee()
+    if pointee.rstrip().endswith("*"):
+        return True
+    return nondet_for(pointee, typedefs) is not None
 
 
 #: What a struct calls its cursor into its own buffer.
