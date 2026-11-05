@@ -115,3 +115,28 @@ class TestEndToEnd:
         out = capsys.readouterr().out
         assert code == 1
         assert "the failing line dereferences `next`, which the harness left null" in out
+
+
+class TestNullEntriesReachedThroughALocal:
+    """parson: `key_to_check = object->names[cell]; ... strlen(key_to_check)`.
+    `names` is filled with null entries -- the one pointer value safe to free
+    -- and the NULL dereference is inside strlen, through a local."""
+
+    def test_the_local_is_traced_back_to_the_field(self, tmp_path):
+        src = tmp_path / "p.c"
+        src.write_text(
+            "size_t f(JSON_Object *object, size_t cell) {\n"
+            "    const char *key_to_check = NULL;\n"
+            "    key_to_check = object->names[cell];\n"
+            "    return strlen(key_to_check);\n}\n", encoding="utf-8")
+        prop = ViolatedProperty(loc=SourceLoc(str(src), 4), description="dereference failure: NULL pointer")
+        assumptions = ["`object_obj.names` points to 4 null `char *` elements, and `object_obj.count` is bounded"]
+        assert harness_null_field(prop, assumptions) == ("names", "elements")
+        assert "filled with nulls" in harness_null_note(prop, assumptions)
+
+    def test_an_unrelated_local_is_not(self, tmp_path):
+        src = tmp_path / "p.c"
+        src.write_text("size_t f(const char *s) {\n    return strlen(s);\n}\n", encoding="utf-8")
+        prop = ViolatedProperty(loc=SourceLoc(str(src), 2), description="dereference failure: NULL pointer")
+        assumptions = ["`object_obj.names` points to 4 null `char *` elements"]
+        assert harness_null_field(prop, assumptions) is None

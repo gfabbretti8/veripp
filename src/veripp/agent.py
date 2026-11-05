@@ -131,7 +131,9 @@ class AgentReport:
         if matched is not None:
             field, why = matched
             deeper = why == "depth"
-            what = f"the failing line dereferences `{field}`, which the harness left null"
+            what = (f"the failing line reads an entry of `{field}`, which the harness filled with nulls"
+                    if why == "elements" else
+                    f"the failing line dereferences `{field}`, which the harness left null")
         else:
             deeper = any("depth bound" in a for a in nulled)
             field = nulled[0].split("`")[1] if "`" in nulled[0] else "see assumptions"

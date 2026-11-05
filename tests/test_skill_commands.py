@@ -342,6 +342,7 @@ class TestSkillStaysTrue:
     NOT_FOR_AGENTS = {
         "--help", "--version", "--quiet", "--no-llm", "--llm-base-url",
         "--no-cache", "--no-compile-commands", "--no-initializers",
+        "--no-inferred-invariants",
         "--no-overflow-check", "--allow-unsound", "--keep-harness", "--dir",
         "--reason", "--escalations", "--max-struct-depth", "--include-file",
         "--std", "--define", "--include", "--force", "--dry-run", "--global",

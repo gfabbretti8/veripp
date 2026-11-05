@@ -170,15 +170,44 @@ def harness_null_field(prop: ViolatedProperty | None, assumptions: list[str]) ->
         if m:
             field = m.group(1).rsplit(".", 1)[-1]
             nulled.append((field, "depth" if "depth bound" in assumption else "type"))
+        m = _NULL_ELEMENTS_RE.search(assumption)
+        if m:
+            nulled.append((m.group(1).rsplit(".", 1)[-1], "elements"))
     if not nulled:
         return None
     line = _source_line(prop)
     if line is None:
         return None
+    scrubbed_line = scrub(line)
     for field, why in nulled:
-        if re.search(rf"(?:->|\.)\s*{re.escape(field)}\b", scrub(line)):
+        if re.search(rf"(?:->|\.)\s*{re.escape(field)}\b", scrubbed_line):
             return field, why
+    # Through a local: `key = object->names[cell]; ... strlen(key)`. The
+    # failing line names the local, and a line shortly above loads it from
+    # the field the harness filled with nulls.
+    before = _lines_before(prop, 15)
+    for local in set(re.findall(r"\b([A-Za-z_]\w*)\b", scrubbed_line)):
+        for field, why in nulled:
+            if re.search(rf"\b{re.escape(local)}\s*=\s*\w+\s*(?:->|\.)\s*"
+                         rf"{re.escape(field)}\s*\[", before):
+                return field, why
     return None
+
+
+#: `` `object_obj.names` points to 4 null `char *` elements `` -- an array of
+#: pointers the harness filled with nulls, the one value safe to free.
+_NULL_ELEMENTS_RE = re.compile(r"`([^`]+)` points to \d+ null `")
+
+
+def _lines_before(prop: ViolatedProperty, count: int) -> str:
+    """The scrubbed `count` lines above the failing line, joined."""
+    loc = prop.user_loc
+    try:
+        lines = Path(loc.file).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    start = max(0, loc.line - 1 - count)
+    return scrub("\n".join(lines[start: loc.line - 1]))
 
 
 _VOID_BOUND_RE = re.compile(r"`(\w+)` is a `void \*` with no length beside it")
@@ -214,6 +243,10 @@ def harness_null_note(prop: ViolatedProperty | None, assumptions: list[str]) -> 
     if found is None:
         return None
     field, why = found
+    if why == "elements":
+        return (f"reads an entry of `{field}`, which the harness filled with "
+                "nulls (the one pointer value safe to free); a real object "
+                "holds valid pointers there")
     reason = ("cut at --max-struct-depth" if why == "depth"
               else "its type could not be constructed")
     return f"dereferences `{field}`, which the harness left null ({reason})"

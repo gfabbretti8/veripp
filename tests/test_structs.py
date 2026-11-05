@@ -1267,3 +1267,147 @@ class TestVoidPointerParameters:
         report = verify_with_agent(target, config, llm=NullLLM(),
                                    assumptions=harness.assumptions, harness=target)
         assert report.verified, report.summary()
+
+
+class TestInvariantsReadFromTheLibrary:
+    """parson's JSON_Object is a hash table indexed `hash & (cell_capacity -
+    1)` and grown when `count >= item_capacity`. Filled field by field, the
+    harness handed every getter a table with capacity 0 and a count past
+    its capacity, and nine json_object_get_* were reported for it. The code
+    states both invariants; the harness now reads them from it."""
+
+    PARSON = (
+        '#include "veripp/contracts.hpp"\n#include <stddef.h>\n'
+        "typedef struct json_object_t {\n"
+        "  char **names; size_t *cells; unsigned long *hashes;\n"
+        "  size_t count; size_t item_capacity; size_t cell_capacity;\n"
+        "} JSON_Object;\n"
+        "static int grow(JSON_Object *object) {\n"
+        "  if (object->count >= object->item_capacity) { return 1; }\n"
+        "  return 0;\n}\n"
+        "size_t slot(const JSON_Object *object, unsigned long hash) {\n"
+        "  return hash & (object->cell_capacity - 1);\n}\n"
+    )
+
+    def _harness(self, tmp_path, fn="slot", **kw):
+        p = tmp_path / "parson_like.c"
+        p.write_text(self.PARSON, encoding="utf-8")
+        return generate(p, fn, HarnessOptions(**kw))
+
+    def test_the_mask_makes_the_field_a_nonzero_power_of_two(self, tmp_path):
+        h = self._harness(tmp_path)
+        assert ("VERIPP_ASSUME(object_obj.cell_capacity != 0 && "
+                "(object_obj.cell_capacity & (object_obj.cell_capacity - 1)) == 0);") in h.code
+        (note,) = [a for a in h.assumptions if "power of two" in a]
+        assert "hash & (object->cell_capacity - 1)" in note
+
+    def test_the_growth_check_keeps_count_within_capacity(self, tmp_path):
+        h = self._harness(tmp_path)
+        assert "VERIPP_ASSUME(object_obj.count <= object_obj.item_capacity);" in h.code
+        (note,) = [a for a in h.assumptions if "growth check" in a]
+        assert "object->count >= object->item_capacity" in note
+
+    def test_a_reversed_comparison_is_the_same_invariant(self, tmp_path):
+        from veripp.cppsig import find_struct
+        from veripp.harness import inferred_invariants
+
+        src = ("typedef struct { size_t used; size_t cap; } V;\n"
+               "int full(V *v) { return v->cap <= v->used; }\n")
+        found = inferred_invariants(find_struct(src, "V"), src, "v_obj", {})
+        assert [c for c, _ in found] == ["VERIPP_ASSUME(v_obj.used <= v_obj.cap);"]
+
+    def test_two_counts_or_two_fields_of_different_objects_infer_nothing(self):
+        from veripp.cppsig import find_struct
+        from veripp.harness import inferred_invariants
+
+        src = ("typedef struct { size_t a; size_t b; size_t cap; } V;\n"
+               "int f(V *v, V *w) { return v->a < v->b || v->a < w->cap; }\n")
+        assert inferred_invariants(find_struct(src, "V"), src, "v_obj", {}) == []
+
+    LOOKUP = (
+        "#define OBJECT_INVALID_IX ((size_t)-1)\n"
+        "size_t find(const JSON_Object *object, unsigned long hash) {\n"
+        "  size_t i, ix, cell;\n"
+        "  for (i = 0; i < object->cell_capacity; i++) {\n"
+        "    ix = (hash + i) & (object->cell_capacity - 1);\n"
+        "    cell = object->cells[ix];\n"
+        "    if (cell == OBJECT_INVALID_IX) { return ix; }\n"
+        "    if (object->hashes[cell] == hash) { return ix; }\n"
+        "  }\n"
+        "  return OBJECT_INVALID_IX;\n}\n"
+    )
+
+    def test_an_index_array_holds_indices_or_the_sentinel(self, tmp_path):
+        p = tmp_path / "find.c"
+        p.write_text(self.PARSON + self.LOOKUP, encoding="utf-8")
+        h = generate(p, "find")
+        assert ("VERIPP_ASSUME(object_obj_cells_items[veripp_i] == OBJECT_INVALID_IX || "
+                "object_obj_cells_items[veripp_i] < object_obj.count);") in h.code
+        (note,) = [a for a in h.assumptions if "is an index into" in a]
+        assert "cell = object->cells[ix];" in note and "object->hashes[cell]" in note
+
+    def test_no_sentinel_check_means_just_the_bound(self):
+        from veripp.cppsig import find_struct
+        from veripp.harness import _pair_struct_fields, inferred_invariants
+
+        src = ("typedef struct { int *order; int *vals; size_t order_count; size_t count; } T;\n"
+               "int at(T *t, size_t k) { size_t j = t->order[k]; return t->vals[j]; }\n")
+        info = find_struct(src, "T")
+        found = inferred_invariants(info, src, "t_obj", {}, _pair_struct_fields(info, {}))
+        (constraint,) = [c for c, _ in found if "order_items" in c]
+        assert "== " not in constraint and "t_obj_order_items[veripp_i] < t_obj.count" in constraint
+
+    @pytest.mark.esbmc
+    def test_the_hash_lookup_proves_with_all_three(self, tmp_path):
+        from veripp.agent import verify_with_agent
+        from veripp.esbmc import VerifyConfig
+        from veripp.llm import NullLLM
+        from veripp.paths import contracts_include_dir
+
+        p = tmp_path / "find.c"
+        p.write_text(self.PARSON + self.LOOKUP, encoding="utf-8")
+        harness = generate(p, "find")
+        target = harness.write(tmp_path)
+        config = VerifyConfig(timeout_s=120, include_dirs=[contracts_include_dir()])
+        report = verify_with_agent(target, config, llm=NullLLM(),
+                                   assumptions=harness.assumptions, harness=target)
+        assert report.verified, report.summary()
+
+    def test_it_can_be_turned_off(self, tmp_path):
+        h = self._harness(tmp_path, infer_invariants=False)
+        assert "power of two" not in "\n".join(h.assumptions)
+        assert "cell_capacity != 0" not in h.code
+
+    def test_the_flag_reaches_the_harness(self, tmp_path, capsys):
+        from veripp.cli import main
+
+        p = tmp_path / "parson_like.c"
+        p.write_text(self.PARSON, encoding="utf-8")
+        main(["harness", str(p), "--function", "slot"])
+        assert "power of two" in capsys.readouterr().out
+        main(["harness", str(p), "--function", "slot", "--no-inferred-invariants"])
+        assert "power of two" not in capsys.readouterr().out
+
+    @pytest.mark.esbmc
+    def test_the_lookup_proves_with_it_and_fails_without(self, tmp_path):
+        from veripp.agent import verify_with_agent
+        from veripp.esbmc import Outcome, VerifyConfig
+        from veripp.llm import NullLLM
+        from veripp.paths import contracts_include_dir
+
+        src = self.PARSON + (
+            "size_t lookup(const JSON_Object *object, unsigned long hash) {\n"
+            "  return object->cells[hash & (object->cell_capacity - 1)];\n}\n"
+        )
+        p = tmp_path / "lookup.c"
+        p.write_text(src, encoding="utf-8")
+        config = VerifyConfig(timeout_s=120, include_dirs=[contracts_include_dir()])
+        outcomes = {}
+        for infer in (True, False):
+            harness = generate(p, "lookup", HarnessOptions(infer_invariants=infer))
+            target = harness.write(tmp_path / str(infer))
+            report = verify_with_agent(target, config, llm=NullLLM(),
+                                       assumptions=harness.assumptions, harness=target)
+            outcomes[infer] = report.final.outcome
+        assert outcomes[False] is Outcome.COUNTEREXAMPLE
+        assert outcomes[True] is Outcome.VERIFIED

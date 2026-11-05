@@ -34,6 +34,21 @@ veripp over MCP.
   the ones people use.
 
 ### Changed: harness modelling
+- **Invariants are read from the library's own code.** A harness fills
+  fields independently and so hands functions states the library never
+  builds. Three of the commonest are now inferred, each quoted in the
+  assumptions with the line it came from: a count within the capacity it
+  is grown against (`if (object->count >= object->item_capacity)`), a
+  field used as an `n - 1` mask being a nonzero power of two
+  (`hash & (object->cell_capacity - 1)`), and the entries of an array that
+  indexes another being below its count or the sentinel the code tests for
+  (`cell = object->cells[ix]; if (cell == OBJECT_INVALID_IX) ...;
+  object->hashes[cell]`). parson's hash lookups no longer fail on a table
+  with capacity 0 or an arbitrary index. `--no-inferred-invariants` turns
+  this off.
+- **A null entry in a pointer array the harness filled is named as such**,
+  also when the code reaches it through a local (`key = object->names[i];
+  strlen(key)`).
 - **The rest of `<stdint.h>` is scalar.** `uint_least8_t` (nanopb's
   `pb_byte_t`), the `int_fast*` and `int_least*` families, `intmax_t` and
   `intptr_t` get nondeterministic values like `uint8_t` always did.

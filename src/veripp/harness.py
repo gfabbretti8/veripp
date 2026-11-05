@@ -115,6 +115,12 @@ class HarnessOptions:
     #: every harness, which costs solver time, and the field-filling default
     #: asks the broader question.
     use_constructors: bool = False
+    #: Assume invariants the library's own code states about struct fields:
+    #: a count within the capacity it is grown against, a field used as a
+    #: `n - 1` mask being a nonzero power of two. Each is quoted in the
+    #: assumptions with the line it came from. --no-inferred-invariants
+    #: turns this off.
+    infer_invariants: bool = True
     #: Translation units compiled alongside the harness (--link). Their
     #: definitions resolve callees, so they must be visible here too or veripp
     #: would warn about stubs the run does not actually have.
@@ -2735,6 +2741,143 @@ _CURSOR_FIELD_NAMES = ("offset", "pos", "position", "index", "ix", "cursor",
                        "read", "used", "consumed")
 
 
+#: A field name that says "how much room there is", as opposed to how much
+#: is used: the side of a growth check that is allowed to be larger.
+_CAPACITY_WORDS = ("capacity", "cap", "alloc", "allocated", "reserved", "max", "limit")
+
+
+def _is_capacity_name(name: str) -> bool:
+    lowered = name.lower()
+    return any(lowered == w or lowered.endswith("_" + w) or lowered.startswith(w + "_")
+               or lowered.endswith(w) for w in _CAPACITY_WORDS)
+
+
+def _snippet(text: str, start: int, end: int) -> str:
+    """The source line holding text[start:end], trimmed, for quoting."""
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    line = text[line_start: line_end if line_end != -1 else len(text)]
+    return re.sub(r"\s+", " ", line).strip()[:100]
+
+
+def inferred_invariants(
+    info: StructInfo, source_text: str, prefix: str, typedefs: dict[str, str],
+    pairs: dict[str, str] | None = None, cap: int = 4,
+) -> list[tuple[str, str]]:
+    """Invariants the library's own code states about this struct's fields.
+
+    A harness fills fields independently, so it hands a function states the
+    library never builds. Two of the commonest are visible in the code that
+    maintains the object:
+
+    * A growth check -- `if (object->count >= object->item_capacity) grow()`
+      -- compares a used count with a capacity on the same object. The code
+      keeps `count <= capacity`; a state past it is one it never produces.
+    * A mask -- `hash & (object->cell_capacity - 1)` -- only indexes the
+      table correctly if the field is a power of two, and only stays in it
+      if the field is nonzero. parson's nine json_object_get_* were reported
+      for exactly the capacity-0 table this rules out.
+
+    Each one is returned with the line it was read from, so the assumption
+    says why it is there. Nothing is inferred from a field the code never
+    uses this way; anything subtler is left to --assume or --constructors.
+    """
+    if not source_text:
+        return []
+    pairs = pairs or {}
+    scrubbed = scrub(source_text)
+    integral = {
+        f.name for f in info.fields
+        if not f.is_pointer and f.array_len is None and _is_integral(f.type, typedefs)
+    }
+    if not integral:
+        return []
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    access = r"(?:->|\.)\s*"
+
+    # Growth checks: <obj>->A (>=|>|<|<=) <obj>->B, same object expression.
+    compare = re.compile(
+        rf"\b(\w+)\s*{access}(\w+)\s*(>=|<=|>|<)\s*\1\s*{access}(\w+)\b"
+    )
+    for m in compare.finditer(scrubbed):
+        a, op, b = m.group(2), m.group(3), m.group(4)
+        if a not in integral or b not in integral or a == b:
+            continue
+        # Put the capacity on the right: `cap > count` is the same check.
+        if _is_capacity_name(a) and not _is_capacity_name(b):
+            a, b = b, a
+        if not _is_capacity_name(b) or _is_capacity_name(a):
+            continue
+        key = f"{a}<={b}"
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append((
+            f"VERIPP_ASSUME({prefix}.{a} <= {prefix}.{b});",
+            f"`{prefix}.{a}` is at most `{prefix}.{b}`, inferred from the "
+            f"library's own growth check `{_snippet(source_text, m.start(), m.end())}`: "
+            "the code keeps the count within the capacity, so a state past it "
+            "is one it never builds (disable with --no-inferred-invariants)",
+        ))
+
+    # Masks: x & (<obj>->F - 1) makes F a nonzero power of two.
+    mask = re.compile(rf"&\s*\(\s*\w+\s*{access}(\w+)\s*-\s*1\s*\)")
+    for m in mask.finditer(scrubbed):
+        f = m.group(1)
+        if f not in integral or f"pow2:{f}" in seen:
+            continue
+        seen.add(f"pow2:{f}")
+        field = f"{prefix}.{f}"
+        found.append((
+            f"VERIPP_ASSUME({field} != 0 && ({field} & ({field} - 1)) == 0);",
+            f"`{field}` is a nonzero power of two, inferred from the library "
+            f"masking with it: `{_snippet(source_text, m.start(), m.end())}`. "
+            "A mask of `n - 1` only indexes an n-entry table when n is a power "
+            "of two, and only stays inside it when n is not 0 "
+            "(disable with --no-inferred-invariants)",
+        ))
+
+    # Index arrays: `cell = obj->cells[ix]; ... obj->hashes[cell]` makes each
+    # entry of `cells` an index into `hashes` -- below its count -- or the
+    # sentinel the code tests for in between. parson's hash table is exactly
+    # this, and with `cells` filled arbitrarily every lookup indexed `hashes`
+    # out of bounds on its first probe.
+    load = re.compile(rf"\b(\w+)\s*=\s*(\w+)\s*{access}(\w+)\s*\[[^\];]*\]\s*;")
+    for m in load.finditer(scrubbed):
+        var, obj, index_array = m.group(1), m.group(2), m.group(3)
+        if index_array not in pairs or f"idx:{index_array}" in seen:
+            continue
+        window = scrubbed[m.end(): m.end() + 800]
+        use = re.search(rf"\b{re.escape(obj)}\s*{access}(\w+)\s*\[\s*{re.escape(var)}\s*\]", window)
+        if use is None or use.group(1) not in pairs or use.group(1) == index_array:
+            continue
+        target_array = use.group(1)
+        bound = pairs[target_array]
+        sentinel_m = re.search(
+            rf"\bif\s*\(\s*{re.escape(var)}\s*==\s*([A-Za-z_]\w*)\s*\)", window[: use.start()]
+        )
+        sentinel = sentinel_m.group(1) if sentinel_m else None
+        seen.add(f"idx:{index_array}")
+        storage = f"{prefix.replace('.', '_')}_{index_array}_items"
+        element = f"{storage}[{_LOOP_VAR}]"
+        condition = f"{element} < {prefix}.{bound}"
+        if sentinel:
+            condition = f"{element} == {sentinel} || {condition}"
+        found.append((
+            f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR}) "
+            f"VERIPP_ASSUME({condition});",
+            f"every entry of `{prefix}.{index_array}` is an index into "
+            f"`{prefix}.{target_array}`, below `{prefix}.{bound}`"
+            + (f", or `{sentinel}`" if sentinel else "")
+            + f", inferred from the library loading one and indexing the other "
+            f"with it: `{_snippet(source_text, m.start(), m.end())}` then "
+            f"`{_snippet(source_text, m.end() + use.start(), m.end() + use.end())}` "
+            "(disable with --no-inferred-invariants)",
+        ))
+    return found
+
+
 def _cursor_fields(info: StructInfo, pairs: dict[str, str],
                    typedefs: dict[str, str]) -> list[tuple[str, str]]:
     """Cursor fields paired with the length they may not pass.
@@ -2891,6 +3034,12 @@ def _fill_fields(
             "struct parser does not model this shape, so it was previously "
             "left uninitialised, and calling it failed whatever the code did"
         )
+
+    if options.infer_invariants:
+        for constraint, note in inferred_invariants(info, source_text, prefix, typedefs,
+                                                    pairs, options.max_array_len):
+            constraints.append(constraint)
+            assumptions.append(note)
 
     for cursor, length in _cursor_fields(info, pairs, typedefs):
         constraints.append(f"VERIPP_ASSUME({prefix}.{cursor} <= {prefix}.{length});")

@@ -318,6 +318,11 @@ Shell completions: `eval "$(veripp completion bash)"` (or `zsh`, or
   harness adds itself. If that assertion doesn't fail, the result is
   `VACUOUS`; if the re-run can't settle (a timeout, a checker error), it is
   `UNCONFIRMED`. Neither is a proof, and both exit 3.
+- **Inferred invariants are quoted.** Where the library's own code states
+  an invariant about a struct (a count kept within a capacity, a capacity
+  used as a power-of-two mask, an array of indices into another), the
+  harness assumes it and prints the line it read it from.
+  `--no-inferred-invariants` explores the states they rule out.
 - **The LLM only proposes.** Harnesses and preconditions a model suggests
   are checked by ESBMC. A result that holds only under a proposed
   precondition is reported as `PRECONDITIONED`, never folded into `PROVED`,

@@ -608,6 +608,17 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False)
         ),
     )
     bounds.add_argument(
+        "--no-inferred-invariants",
+        action="store_true",
+        help=_adv(
+            "do not assume invariants read from the library's own code -- a "
+            "count within the capacity it is grown against, a field used as "
+            "an `n - 1` mask being a power of two. Each one is quoted in the "
+            "assumptions with the line it came from; this explores the "
+            "states it rules out."
+        ),
+    )
+    bounds.add_argument(
         "--no-initializers",
         action="store_true",
         help=_adv(
@@ -717,6 +728,7 @@ def _harness_options(args) -> HarnessOptions:
         link_sources=[s.resolve() for s in getattr(args, "link", [])],
         use_initializers=not getattr(args, "no_initializers", False),
         use_constructors=getattr(args, "constructors", False),
+        infer_invariants=not getattr(args, "no_inferred_invariants", False),
         preprocess=getattr(args, "preprocess", False),
         setup_calls=list(getattr(args, "setup_calls", []) or []),
         terminated_strings=not getattr(args, "unterminated", False),

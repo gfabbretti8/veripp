@@ -100,6 +100,21 @@ stream struct has `#ifdef` members; zlib's eight core modules are 52% and
 74%, because `deflate_state` is written `} FAR deflate_state;`. `scan` now
 suggests the flag when refusals of that kind dominate.
 
+### Invariants read from the code (2026-11-05)
+
+parson's nine object getters were the remaining false-lead class: its
+`JSON_Object` is a hash table, and a harness filling fields independently
+handed every lookup a table with `cell_capacity` 0 and `cells` entries
+pointing anywhere. veripp now reads three invariants from the library's own
+lines -- `count <= item_capacity` from its growth check, `cell_capacity` a
+nonzero power of two from `hash & (object->cell_capacity - 1)`, and every
+`cells` entry either `OBJECT_INVALID_IX` or below `count` from the load
+followed by `object->hashes[cell]` -- and each is quoted in the
+assumptions. The getters now settle in seconds and get past both states.
+They stop on the next layer, `names` filled with null entries (the one
+pointer value safe to free, and parson frees them), and each says so on its
+line. That layer is what `--constructors` is for.
+
 ## How many findings are real? (cJSON, triaged)
 
 The table above counts counterexamples. A counterexample is not a bug: it
