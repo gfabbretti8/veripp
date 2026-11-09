@@ -32,6 +32,8 @@ from .cppsig import (
     StructInfo,
     Signature,
     SignatureError,
+    split_top_level,
+    _parse_param,
     collect_enum_types,
     collect_pointer_typedefs,
     collect_scalar_typedefs,
@@ -362,7 +364,6 @@ def generate(
     # Rewrite `z_streamp p` to `z_stream* p` once, so everything downstream
     # sees an ordinary pointer.
     _expand_pointer_aliases(signature, typedefs.pointer_aliases)
-    _reject_conflicting_main(text, source)
 
     body: list[str] = []
     assumptions: list[str] = []
@@ -381,6 +382,15 @@ def generate(
     buffers = set(lengths)
     paired_cursor = set(cursors) | {other for other, _ in cursors.values()}
     by_name = {p.name: p for p in signature.params}
+    ranges = _pair_starts_with_ends(
+        [p for p in signature.params
+         if p.name not in buffers and p.name not in paired_cursor],
+        typedefs, signature.body,
+    )
+    for start_name, end_name in ranges.items():
+        body += _emit_range(by_name[start_name], by_name[end_name], options,
+                            assumptions, typedefs, signature.body)
+        paired_cursor |= {start_name, end_name}
     for cursor_name, (other_name, forwards) in cursors.items():
         body += _emit_backward_cursor(
             by_name[cursor_name], by_name[other_name], forwards, options,
@@ -388,6 +398,16 @@ def generate(
         )
     for param in signature.params:
         if param.name in buffers or param.name in paired_cursor:
+            continue
+        callback = _emit_callback_param(
+            param, signature, expanded, typedefs, assumptions,
+            # Only asked for when a typedef is written more than one way.
+            lambda: preprocessed or preprocess_source(source, options),
+        )
+        if callback is not None:
+            lines, stub = callback
+            body += lines
+            stub_preamble.append(stub)
             continue
         body += _emit_scalar(param, signature, assumptions, options, typedefs,
                              expanded, teardown, macro_text=with_headers)
@@ -453,8 +473,9 @@ def generate(
             " (link the defining source with --link)"
         )
     return Harness(
-        code=_render(source, signature, body, assumptions,
-                     stub_preamble + hook_preamble),
+        code=_set_aside_main(
+            _render(source, signature, body, assumptions,
+                    stub_preamble + hook_preamble), text),
         signature=signature,
         assumptions=assumptions,
         source=source,
@@ -656,25 +677,47 @@ def _expand_pointer_aliases(signature: Signature, aliases: dict[str, str]) -> No
             param.type = expansion
 
 
-def _reject_conflicting_main(text: str, source: Path) -> None:
-    """A source with an unguarded main() cannot be #included by a harness."""
+#: What a source file's own main() is called inside a harness.
+_SET_ASIDE_MAIN = "veripp_original_main"
+
+
+def _has_unguarded_main(text: str) -> bool:
+    """Whether the source defines a main() the harness's own would clash with."""
     scrubbed = scrub(text)
     match = re.search(r"\bmain\s*\(", scrubbed)
     if match is None:
-        return
+        return False
     if "VERIPP_HAS_OWN_MAIN" in scrubbed or "VERIPP_GENERATED_HARNESS" in scrubbed:
-        return  # the file guards its own main against harness builds
-    if _inside_conditional(scrubbed, match.start()):
-        # zlib's crc32.c carries a table-generator main under `#ifdef
-        # MAKECRCH`. The harness does not define that macro, so the main is
-        # not compiled -- and refusing on sight cost every function in the
-        # file.
-        return
-    raise HarnessError(
-        f"{source} defines main() unguarded, so a generated harness cannot "
-        "include it. Wrap that main in `#if defined(VERIPP_HAS_OWN_MAIN)` "
-        "(see veripp/contracts.hpp), or verify the file directly without "
-        "--function."
+        return False  # the file guards its own main against harness builds
+    # zlib's crc32.c carries a table-generator main under `#ifdef MAKECRCH`.
+    # The harness does not define that macro, so the main is not compiled.
+    return not _inside_conditional(scrubbed, match.start())
+
+
+def _set_aside_main(code: str, text: str) -> str:
+    """Rename the source's own main() for the length of its #include.
+
+    A file with a main is a program: a command-line tool, an example, a test
+    driver. Those used to be refused whole, with advice to edit the source,
+    which is the one thing a first run on someone else's code cannot do --
+    every function in inih's examples and tests was lost to it. The harness
+    needs its own main and has no use for theirs, so theirs is compiled under
+    another name and never called.
+    """
+    if not _has_unguarded_main(text):
+        return code
+    include = re.search(r'^#include "[^"\n]+"\n(?=\n#if !defined\(__ESBMC__\))',
+                        code, re.M)
+    if include is None:
+        return code
+    return (
+        code[: include.start()]
+        + f"// The source has a main() of its own; it is compiled as\n"
+        f"// {_SET_ASIDE_MAIN} and never called, so the harness can have one.\n"
+        f"#define main {_SET_ASIDE_MAIN}\n"
+        + include.group(0)
+        + "#undef main\n"
+        + code[include.end():]
     )
 
 
@@ -910,6 +953,97 @@ def _pair_cursors_with_starts(
             continue  # direction unknown: refuse rather than guess a layout
         pairs[param.name] = (nxt.name, forwards)
     return pairs
+
+
+def _names_an_end(name: str) -> bool:
+    lowered = name.lower().lstrip("_")
+    return lowered in _END_NAMES or lowered.endswith(("_end", "end", "_limit"))
+
+
+def _pair_starts_with_ends(
+    params: list[Param], typedefs: dict[str, str] | None = None,
+    body: str = "",
+) -> dict[str, str]:
+    """Map a pointer to the parameter marking the end of the same buffer.
+
+    `ini_rstrip(char* s, char* end)` and every `(const char *p, const char
+    *end)` parser take two pointers into ONE buffer. Built as two separate
+    objects, the first `end > s` is undefined behaviour of the harness's own
+    making, and it was reported against inih as a counterexample no caller
+    can produce.
+
+    Paired only on evidence from both the name and the body: the second
+    pointer is called an end, and the body compares or subtracts the two
+    directly. Two pointers that merely share a type stay separate.
+    """
+    if not body:
+        return {}
+    scrubbed = scrub(body)
+    singles = [
+        p for p in params
+        if p.is_pointer and p.type.replace("const", "").count("*") == 1
+        and nondet_for(p.pointee(), typedefs) is not None
+    ]
+    pairs: dict[str, str] = {}
+    for end in singles:
+        if not _names_an_end(end.name) or end.name in pairs.values():
+            continue
+        e = re.escape(end.name)
+        for start in singles:
+            if start is end or start.name in pairs or _names_an_end(start.name):
+                continue
+            if normalize_type(start.pointee(), typedefs) != normalize_type(
+                    end.pointee(), typedefs):
+                continue
+            b = re.escape(start.name)
+            related = (
+                rf"\b{e}\b\s*(?:<=?|>=?|-(?![-=>]))\s*\(?\s*\b{b}\b(?!\s*\()"
+                rf"|\b{b}\b\s*(?:<=?|>=?)\s*\(?\s*\b{e}\b"
+            )
+            if re.search(related, scrubbed):
+                pairs[start.name] = end.name
+                break
+    return pairs
+
+
+def _emit_range(
+    start: Param, end: Param, options: HarnessOptions,
+    assumptions: list[str], typedefs: dict[str, str], body: str,
+) -> list[str]:
+    """One buffer with `start` at its beginning and `end` somewhere after."""
+    cap = options.max_array_len
+    inner = start.pointee()
+    nondet = nondet_for(inner, typedefs)
+    storage = f"{start.name}_buf"
+    offset = f"{end.name}_offset"
+    terminated = (
+        normalize_type(inner, typedefs) in _CURSOR_POINTEES
+        and (_walks_to_terminator(start.name, body)
+             or _walks_to_terminator(end.name, body))
+    )
+    assumptions.append(
+        f"`{start.name}` and `{end.name}` point into one buffer of {cap} "
+        f"`{inner}`: `{start.name}` at its start and `{end.name}` anywhere "
+        f"from there to one past its last element (harness bound). The body "
+        "compares the two, which is only defined for pointers into the same "
+        "object"
+        + (f"; a NUL follows the buffer, since the body reads to a terminator"
+           if terminated else "")
+    )
+    lines = [
+        f"{inner} {storage}[{cap + 1 if terminated else cap}];",
+        f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+        f"    {storage}[{_LOOP_VAR}] = {nondet};",
+    ]
+    if terminated:
+        lines.append(f"{storage}[{cap}] = 0;")
+    lines += [
+        f"unsigned long {offset} = VERIPP_NONDET_ULONG();",
+        f"VERIPP_ASSUME({offset} <= {cap});",
+        f"{_decl_type(start.type)} {start.name} = {storage};",
+        f"{_decl_type(end.type)} {end.name} = {storage} + {offset};",
+    ]
+    return lines
 
 
 def _cursor_direction(name: str, body: str) -> bool | None:
@@ -1773,6 +1907,117 @@ def _callback_stub(source_text: str, type_name: str, typedefs: dict[str, str]) -
     return _stub_definition(returns, f"{_STUB_PREFIX}{type_name}", params, typedefs)
 
 
+def _function_pointer_typedefs(source_text: str, name: str) -> list[tuple[str, str]]:
+    """Every distinct (return type, parameters) `name` is typedef'd as.
+
+    More than one means the definition sits under `#if`, as inih's
+    `ini_handler` does: with or without a trailing `int lineno`.
+    """
+    found: list[tuple[str, str]] = []
+    for m in re.finditer(
+        _FUNCTION_POINTER_TYPEDEF_RE.format(name=re.escape(name)), source_text
+    ):
+        shape = (" ".join(m.group(1).split()), " ".join(m.group(2).split()))
+        if shape not in found:
+            found.append(shape)
+    return found
+
+
+def _named_stub_params(params: str) -> str:
+    """The parameter list with a name on every parameter.
+
+    A typedef may leave them out (`int (*)(void *, int)`); a C definition
+    before C23 may not.
+    """
+    if params.strip() in ("", "void"):
+        return "void"
+    named = []
+    for idx, raw in enumerate(split_top_level(params)):
+        if raw == "...":
+            named.append(raw)
+            continue
+        parsed = _parse_param(raw, idx)
+        if parsed.name != f"_arg{idx}" or "[" in raw or "(" in raw:
+            named.append(raw)  # named already, or the name goes inside
+        else:
+            named.append(f"{raw} veripp_a{idx}")
+    return ", ".join(named)
+
+
+def _emit_callback_param(
+    param: Param, signature: Signature, source_text: str,
+    typedefs: dict[str, str], assumptions: list[str],
+    preprocessed,
+) -> tuple[list[str], str] | None:
+    """A callable for a function-pointer parameter, or None if it is not one.
+
+    A library's entry points are where callbacks live: inih's `ini_parse_*`
+    take the handler every line is reported to, and qsort-shaped helpers take
+    a comparator. Refusing them left exactly the functions that receive
+    outside input unverified. The stand-in returns any value its return type
+    can hold, so both the "keep going" and the "stop" paths of the caller are
+    explored, and it touches none of its arguments -- which is the part a
+    real callback may differ in, and is said.
+    """
+    inline = param.function_pointer
+    if inline is not None:
+        returns, params = inline
+        described = "callback"
+        declaration = f"{returns} (*{param.name})({params})"
+    else:
+        if param.is_pointer or param.is_reference:
+            return None
+        type_name = normalize_type(param.type)
+        if nondet_for(param.type, typedefs) is not None:
+            return None
+        shapes = _function_pointer_typedefs(source_text, type_name)
+        if len(shapes) > 1:
+            # Written differently under #if: only the preprocessor knows
+            # which one the compiler sees, and a stub of the wrong arity
+            # does not compile.
+            resolved = preprocessed()
+            shapes = (_function_pointer_typedefs(resolved, type_name)
+                      if resolved else [])
+            if len(shapes) != 1:
+                raise HarnessError(
+                    f"cannot build a callback for parameter `{param.type} "
+                    f"{param.name}` of `{signature.qualified_name}`: "
+                    f"`{type_name}` is defined more than one way under #if, "
+                    "and running the C preprocessor to see which the compiler "
+                    "picks did not settle it (is a compiler installed, and "
+                    "are the include paths given with -I?)"
+                )
+        if not shapes:
+            return None
+        returns, params = shapes[0]
+        described = f"`{type_name}`"
+        declaration = f"{_decl_type(param.type)} {param.name}"
+    stub_name = f"{_STUB_PREFIX}param_{param.name}"
+    unexplored = ""
+    if returns.strip() == "void":
+        result = "returns"
+    elif nondet_for(returns, typedefs) is not None:
+        result = "returns any value"
+    elif returns.rstrip().endswith("*"):
+        # There is no object for it to point at that the caller would
+        # accept, and a pointer to nowhere fails whatever the code does.
+        result = "ALWAYS returns NULL"
+        unexplored = (", and neither is anything the function does with a "
+                      "non-null result: a proof here covers the NULL path "
+                      "only")
+    else:
+        return None  # a struct by value: nothing honest to return
+    assumptions.append(
+        f"`{param.name}` is a non-null {described} that {result} and touches "
+        "none of its arguments. What a real one does with them (write "
+        "through them, free them, call back in) is NOT modelled"
+        + unexplored
+    )
+    stub = _stub_definition(returns, stub_name, _named_stub_params(params),
+                            typedefs)
+    return [f"{declaration} = {stub_name};"], stub
+
+
 def _stub_definition(
     returns: str, name: str, params: str, typedefs: dict[str, str]
 ) -> str:
@@ -2090,7 +2335,6 @@ def generate_sequence(
     typedefs = type_info(expanded)
     for method in info.methods:
         _expand_pointer_aliases(method, typedefs.pointer_aliases)
-    _reject_conflicting_main(text, source)
 
     callable_methods: list[Signature] = []
     unsupported: dict[str, str] = dict(info.skipped)
@@ -2146,7 +2390,9 @@ def generate_sequence(
         name=class_name, return_type="", params=[], class_name=class_name
     )
     return Harness(
-        code=_render_sequence(source, info, callable_methods, body, assumptions, options),
+        code=_set_aside_main(
+            _render_sequence(source, info, callable_methods, body,
+                             assumptions, options), text),
         signature=signature,
         assumptions=assumptions,
         source=source,
@@ -2215,7 +2461,6 @@ def generate_c_sequence(
     )
     expanded = "\n".join([expanded, *_linked_text(options)])
     typedefs = type_info(expanded)
-    _reject_conflicting_main(text, source)
 
     bare = re.sub(
         r"^\s*(?:(?:const|volatile|struct|union|class)\s+)+", "", handle_type
@@ -2312,10 +2557,10 @@ def generate_c_sequence(
 
     signature = Signature(name=bare, return_type="", params=[])
     return Harness(
-        code=_render_c_sequence(
+        code=_set_aside_main(_render_c_sequence(
             source, handle_type, [m for m, _ in methods], body, assumptions,
             options, hook_preamble,
-        ),
+        ), text),
         signature=signature,
         assumptions=assumptions,
         source=source,

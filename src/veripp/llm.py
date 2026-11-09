@@ -105,9 +105,10 @@ class NullLLM:
 
     def explain(self, context: TriageContext) -> str:
         return (
-            f"{context.violated_property or 'Property violated'}. "
-            "Offline mode: the counterexample was not analysed against the "
-            "function's call sites; enable an LLM for triage."
+            "nothing has checked whether a real caller can pass these inputs. "
+            "Read the assumptions above first: an input no caller produces is "
+            "the usual cause of a false alarm. --repro FILE writes a program "
+            "to run under the sanitizers, and --model adds triage."
         )
 
     def propose_precondition(self, context: TriageContext) -> str | None:

@@ -292,41 +292,8 @@ class ScanReport:
                     )
         if self.counterexamples:
             lines += ["", "  counterexamples (most likely to matter first):"]
-            # With triage the ordering is informed: the model's judgement
-            # ranks, and only ranks -- an untriaged counterexample sorts
-            # above a "harness issue" verdict because a label from a model
-            # outranks nothing, and nothing outranks a solver.
-            rank = {"real_bug": 0, None: 1, "harness_issue": 2,
-                    "missing_assumption": 2}
-            # Within a triage verdict, writes first. lwIP's allocator puts a
-            # zeroed header after every block, so a read running off a buffer
-            # stops almost at once while a write off the same buffer lands in
-            # the heap's own metadata. Same property to the solver, different
-            # thing afterwards.
-            access_rank = {"write": 0, None: 1, "read": 2}
-            # Then who can reach it. An external function is an entry point
-            # for every caller in every other translation unit; a static one
-            # is reached only through the call sites counted here, each of
-            # which may guard the input the counterexample needs.
-            linkage_rank = {"external": 0, "": 1, "static": 2}
-            # A null the harness put there ranks after nulls the code
-            # produced on its own, whoever can reach the function.
-            tags = {"real_bug": "triage: real bug",
-                    "missing_assumption":
-                        "triage: needs a precondition, none accepted yet",
-                    "harness_issue": "triage: harness issue"}
-            ordered = sorted(
-                self.counterexamples,
-                key=lambda r: (rank.get(r.triage_kind, 1),
-                               1 if (r.harness_null or r.harness_bound) else 0,
-                               linkage_rank.get(r.linkage, 1),
-                               access_rank.get(r.access, 1), r.name),
-            )
-            for r in ordered[:20]:
-                parts = [part for part in (r.access, r.reach_note(), r.harness_null,
-                                           r.harness_bound, tags.get(r.triage_kind)) if part]
-                lines.append(f"    {r.name}: {r.detail}"
-                             + (f"  [{'; '.join(parts)}]" if parts else ""))
+            for r in ranked_counterexamples(self.counterexamples)[:20]:
+                lines.append(f"    {r.name}: {r.detail}{finding_tags(r)}")
             if len(self.counterexamples) > 20:
                 lines.append(f"    ... and {len(self.counterexamples) - 20} more")
             failed = [r for r in self.counterexamples if r.triage_error]
@@ -461,11 +428,57 @@ def _unused_length_report(
     return found
 
 
+def ranked_counterexamples(found: list["FunctionResult"]) -> list["FunctionResult"]:
+    """Counterexamples, most likely to matter first."""
+    # With triage the ordering is informed: the model's judgement ranks,
+    # and only ranks -- an untriaged counterexample sorts above a "harness
+    # issue" verdict because a label from a model outranks nothing, and
+    # nothing outranks a solver.
+    rank = {"real_bug": 0, None: 1, "harness_issue": 2,
+            "missing_assumption": 2}
+    # Within a triage verdict, writes first. lwIP's allocator puts a zeroed
+    # header after every block, so a read running off a buffer stops almost
+    # at once while a write off the same buffer lands in the heap's own
+    # metadata. Same property to the solver, different thing afterwards.
+    access_rank = {"write": 0, None: 1, "read": 2}
+    # Then who can reach it. An external function is an entry point for
+    # every caller in every other translation unit; a static one is reached
+    # only through the call sites counted here, each of which may guard the
+    # input the counterexample needs.
+    linkage_rank = {"external": 0, "": 1, "static": 2}
+    # A null the harness put there ranks after nulls the code produced on
+    # its own, whoever can reach the function.
+    return sorted(
+        found,
+        key=lambda r: (rank.get(r.triage_kind, 1),
+                       1 if (r.harness_null or r.harness_bound) else 0,
+                       linkage_rank.get(r.linkage, 1),
+                       access_rank.get(r.access, 1), r.name),
+    )
+
+
+_TRIAGE_TAGS = {
+    "real_bug": "triage: real bug",
+    "missing_assumption": "triage: needs a precondition, none accepted yet",
+    "harness_issue": "triage: harness issue",
+}
+
+
+def finding_tags(r: "FunctionResult") -> str:
+    """`  [write; static, 2 callers here]`, or nothing."""
+    parts = [part for part in (r.access, r.reach_note(), r.harness_null,
+                               r.harness_bound, _TRIAGE_TAGS.get(r.triage_kind))
+             if part]
+    return f"  [{'; '.join(parts)}]" if parts else ""
+
+
 def _reason(detail: str) -> str:
     """Collapse a refusal message to its class, for counting."""
     for needle, label in (
         ("cannot build a nondeterministic value", "parameter type not modelled"),
         ("cannot construct", "parameter is a type veripp cannot construct"),
+        ("defined more than one way under #if",
+         "callback type written more than one way under #if"),
         ("defined", "overloaded (disambiguate with --function 'f(types)')"),
         ("destructor", "destructor"),
         ("constructor", "constructor"),
@@ -865,7 +878,7 @@ def _triage_pass(
         if diagnosis is not None:
             if diagnosis.llm_error:
                 r.triage_error = diagnosis.llm_error
-            else:
+            elif diagnosis.triaged:
                 r.triage_kind = diagnosis.kind
                 r.triage_note = diagnosis.explanation
         if (

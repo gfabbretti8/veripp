@@ -82,6 +82,9 @@ Assumptions (a result is only as good as these):
   - `a` points to exactly `n` valid elements, with n <= 4 (harness bound on array length)
 Violated property: dereference failure: array bounds violated
   at examples/off_by_one.cpp:7:9 in sum_array
+    6 |     for (unsigned i = 0; i <= n; ++i)  // BUG: <= reads one past the end
+  > 7 |         s += a[i];
+                ^
 Counterexample inputs:
   n = 4
   ...
@@ -98,6 +101,7 @@ Scan a whole file or a whole tree. The summary counts functions that were
 proved, gave a counterexample, were inconclusive, or could not be harnessed:
 
 ```bash
+veripp scan                  # everything under the current directory
 veripp scan src/lodepng.cpp
 veripp scan src/
 ```
@@ -323,6 +327,13 @@ Shell completions: `eval "$(veripp completion bash)"` (or `zsh`, or
   used as a power-of-two mask, an array of indices into another), the
   harness assumes it and prints the line it read it from.
   `--no-inferred-invariants` explores the states they rule out.
+- **Stand-ins are named.** A callback parameter gets a function that
+  returns any value and touches nothing, two pointers the body compares are
+  placed in one buffer, and a file's own `main()` is set aside so the
+  harness can have one. Each is an assumption printed with the result, and
+  a callback that can only return NULL says its proof covers that path only.
+- **Nothing is called a bug that nobody looked at.** Without a model, a
+  counterexample is printed as not triaged, with the line it fails on.
 - **The LLM only proposes.** Harnesses and preconditions a model suggests
   are checked by ESBMC. A result that holds only under a proposed
   precondition is reported as `PRECONDITIONED`, never folded into `PROVED`,
