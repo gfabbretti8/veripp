@@ -194,6 +194,12 @@ class Param:
     def is_const(self) -> bool:
         return bool(re.match(r"^\s*const\b", self.type))
 
+    @property
+    def function_pointer(self) -> tuple[str, str] | None:
+        """(return type, parameter list) of a callback declared in place."""
+        m = re.match(r"^(.+?) \(\*\)\((.*)\)$", self.type, re.S)
+        return (m.group(1), m.group(2)) if m else None
+
     def pointee(self) -> str:
         """Type pointed/referred to, with the outer `*`/`&` and `const` removed."""
         t = self._bare
@@ -758,7 +764,23 @@ def _parse_params(text: str) -> list[Param]:
 _ARRAY_SUFFIX_RE = re.compile(r"\[\s*(\w*)\s*\]\s*$")
 
 
+#: `int (*cmp)(const void *, const void *)`: a callback declared in place.
+_FUNCTION_POINTER_PARAM_RE = re.compile(
+    r"^(?P<ret>[^()]+?)\(\s*\*\s*(?:const\s+)?(?P<name>[A-Za-z_]\w*)?\s*\)"
+    r"\s*\((?P<params>.*)\)$",
+    re.S,
+)
+
+
 def _parse_param(decl: str, idx: int) -> Param:
+    callback = _FUNCTION_POINTER_PARAM_RE.match(decl.strip())
+    if callback:
+        # The name sits inside the declarator, so it is lifted out and the
+        # type keeps the hole: `int (*)(const void *, const void *)`.
+        returns = " ".join(callback.group("ret").split())
+        params = " ".join(callback.group("params").split())
+        return Param(type=f"{returns} (*)({params})",
+                     name=callback.group("name") or f"_arg{idx}")
     array = _ARRAY_SUFFIX_RE.search(decl)
     if array:  # `int a[4]` decays to `int*` for our purposes
         decl = decl[: array.start()].strip()

@@ -12,6 +12,7 @@ Design invariants:
 from __future__ import annotations
 
 import difflib
+import os
 import re
 import shutil
 import tempfile
@@ -254,7 +255,15 @@ class AgentReport:
         prop = self.final.violated_property
         if prop:
             lines.append(f"Violated property: {prop.description}")
-            lines.append(f"  at {prop.loc}")
+            lines.append(f"  at {display_loc(prop.loc)}")
+            if prop.loc.in_checker_model:
+                lines.append(
+                    f"  called from {display_loc(prop.caller)}"
+                    if prop.caller is not None else
+                    "  (inside the checker's model of a library call; the "
+                    "trace does not show which line called it)"
+                )
+            lines += source_excerpt(prop.user_loc)
             if prop.expression:
                 lines.append(f"  guard: {prop.expression}")
             if prop.cwes:
@@ -268,12 +277,65 @@ class AgentReport:
                 lines += [f"  {line}" for line in inputs]
         if self.final.error:
             lines.append(f"Error: {self.final.error}")
-        if self.diagnosis:
+        if self.diagnosis and not self.diagnosis.triaged:
+            # No model read it, so there is no diagnosis to print -- and the
+            # conservative default it carries is not one.
+            lines.append(f"Not triaged: {self.diagnosis.explanation}")
+        elif self.diagnosis:
             lines.append(f"Diagnosis: {self.diagnosis.kind}: {self.diagnosis.explanation}")
         if self.narrative:
             lines.append(self.narrative)
         lines.append(f"Attempts: {len(self.attempts)}")
         return "\n".join(lines)
+
+
+def display_path(file: str) -> str:
+    """`file` relative to the working directory when it lies beneath it.
+
+    The checker reports absolute paths, and a path three directories deep
+    in a CI workspace pushes the line number -- the part being looked for --
+    off the right of the terminal.
+    """
+    try:
+        relative = os.path.relpath(file)
+    except ValueError:
+        return file
+    return file if relative.startswith("..") else relative
+
+
+def display_loc(loc) -> str:
+    text = f"{display_path(loc.file)}:{loc.line}"
+    if loc.column is not None:
+        text += f":{loc.column}"
+    return f"{text} in {loc.function}" if loc.function else text
+
+
+def source_excerpt(loc, context: int = 1) -> list[str]:
+    """The failing line as written, with the line before it and a caret.
+
+    Empty when the file cannot be read (the checker's own library model, a
+    file since moved): the location line above already says where.
+    """
+    try:
+        text = Path(loc.file).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    if not 1 <= loc.line <= len(text):
+        return []
+    first = max(1, loc.line - context)
+    width = len(str(loc.line))
+    out = []
+    for number in range(first, loc.line + 1):
+        mark = ">" if number == loc.line else " "
+        line = text[number - 1].expandtabs(4).rstrip()
+        out.append(term.style(f"  {mark} {number:>{width}} | {line}",
+                              *(() if number == loc.line else ("dim",))))
+    if loc.column:
+        raw = text[loc.line - 1]
+        indent = len(raw[: loc.column - 1].expandtabs(4))
+        out.append(" " * (len(f"  > {loc.line:>{width}} | ") + indent)
+                   + term.style("^", "red", "bold"))
+    return out
 
 
 # Escalation ladder for "not conclusive yet": widen the bound, then try to

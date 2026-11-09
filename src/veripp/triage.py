@@ -404,6 +404,9 @@ class Diagnosis:
     explanation: str
     proposed_precondition: str | None = None
     llm_error: str | None = None  # set when triage degraded to offline defaults
+    #: False when no model looked at it. `kind` is then the conservative
+    #: default, not a judgement, and must not be presented as one.
+    triaged: bool = True
 
 
 def build_context(
@@ -564,6 +567,9 @@ def triage_counterexample(
             ),
         )
 
+    if getattr(llm, "PROVIDER", None) == "none":
+        return Diagnosis(kind=llm.classify(context),
+                         explanation=llm.explain(context), triaged=False)
     try:
         kind = llm.classify(context)
         explanation = llm.explain(context)

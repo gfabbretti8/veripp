@@ -24,7 +24,15 @@ posix_only = pytest.mark.skipif(sys.platform == "win32", reason="fake checkers a
 @pytest.fixture(autouse=True)
 def own_state(tmp_path, monkeypatch):
     """Remembered results live beside the managed checker; keep them here."""
+    from veripp.esbmc import find_esbmc
+
+    # Moving the directory also hides a checker `veripp install-checker` put
+    # there, which is the only one a contributor following CONTRIBUTING.md
+    # has. Name it outright first, so the tests marked `esbmc` still find it.
+    real = find_esbmc()
     monkeypatch.setenv("VERIPP_CHECKER_DIR", str(tmp_path / "state" / "checker"))
+    if real:
+        monkeypatch.setenv("VERIPP_ESBMC", real)
 
 
 def _fake_checker(tmp_path: Path, output: str, name: str = "esbmc") -> Path:

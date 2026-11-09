@@ -14,7 +14,58 @@ the install on Linux arm64 as well as x86_64, counterexamples say who can
 reach them and when the harness had a hand in them, and an agent can drive
 veripp over MCP.
 
+### Changed: reach
+What a first `veripp scan` on someone else's code could not touch. Measured
+on inih, three hundred lines and one of the most-copied C libraries there is:
+9 of its 42 functions were harnessable and 3 proved; now 28 and 15, and one
+of its two counterexamples, which no caller could produce, is gone.
+
+- **Callback parameters are modelled instead of refused.** A function
+  pointer parameter, through a typedef (`ini_handler handler`) or written in
+  place (`int (*cmp)(const void *, const void *)`), gets a stand-in with its
+  signature that returns any value its return type holds and touches none
+  of its arguments, so both the "keep going" and the "stop" path of the
+  caller are explored. A library's entry points are where callbacks live,
+  so these were exactly the functions that receive outside input. What a
+  real callback does with its arguments is not modelled, and the
+  assumptions say so. One returning a pointer always returns NULL, and the
+  assumption says the proof covers the NULL path only; one returning a
+  struct by value is still refused. A typedef written two ways under `#if`
+  is settled by running the preprocessor.
+- **A start and an end pointer are one buffer.** `ini_rstrip(char* s,
+  char* end)` and every `(const char *p, const char *end)` parser take two
+  pointers into the same memory. Built as two objects, the first `end > s`
+  is undefined behaviour of the harness's own making, and it was reported.
+  They are paired only on evidence from both the name and the body: the
+  second is called an end, and the body compares or subtracts the two.
+- **A source with its own `main()` is harnessed.** Command-line tools,
+  examples and test drivers were refused whole, with advice to wrap their
+  `main` in `#if defined(VERIPP_HAS_OWN_MAIN)` -- an edit to the code under
+  test, before anything had run. Their `main` is now compiled under another
+  name for the length of the `#include` and never called.
+- **`veripp scan` and `veripp accept` default to the current directory.**
+
 ### Changed: reporting
+- **A counterexample shows the line it fails on**, with the line before it
+  and a caret at the column, and paths under the working directory are
+  printed relative to it.
+- **An untriaged counterexample is no longer labelled `real_bug`.** With no
+  model configured, `verify` printed `Diagnosis: real_bug:` followed by the
+  property a second time. Nothing had diagnosed anything: it was the
+  conservative default. It now reads `Not triaged:` and says what to do
+  about it. The JSON keeps `kind` and gains `"triaged": false`.
+- **A scan of a directory accounts for every function.** The summary left
+  out the functions that could not be harnessed, so inih's read 3 proved, 2
+  counterexamples, 4 inconclusive, of 42. It now has the NOT HARNESSABLE row
+  and the reasons, as a single-file scan always did, and lists the
+  counterexamples themselves, ranked across files, each with its line --
+  instead of file names and one command to run per finding.
+- **The harness's own `main` is not a caller.** When the function under
+  test assigns nothing before a failing library call, the last state in the
+  trace outside the checker's model is the harness filling its inputs, and
+  the finding was filed at that line of a temporary file. It now says the
+  trace does not show the caller.
+- **A harness refused for its own `main` is not counted as "overloaded".**
 - **A library call after `return` is no longer listed as an unmodelled
   callee.** `return memcmp(a, buf, n);` was read as a declaration of
   `memcmp`, which has none in the unit and a body in the checker's model,

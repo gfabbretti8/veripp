@@ -134,11 +134,10 @@ class TestHarness:
         with pytest.raises(HarnessError, match="cannot build a nondeterministic value"):
             generate(src, "f")
 
-    def test_unguarded_main_is_refused(self, tmp_path):
+    def test_unguarded_main_is_set_aside(self, tmp_path):
         src = tmp_path / "s.cpp"
         src.write_text("int f(int x) { return x; }\nint main() { return f(1); }", encoding="utf-8")
-        with pytest.raises(HarnessError, match="defines main\\(\\) unguarded"):
-            generate(src, "f")
+        assert "#define main veripp_original_main" in generate(src, "f").code
 
     def test_examples_guard_their_own_main(self, examples):
         for name in ("ring_buffer.cpp", "off_by_one.cpp"):
@@ -379,11 +378,11 @@ class TestRealWorldCPreprocessor:
         , encoding="utf-8")
         assert "useful(x)" in generate(p, "useful").code
 
-    def test_an_unguarded_main_is_still_refused(self, tmp_path):
-        p = tmp_path / "s.c"
-        p.write_text("int f(int x) { return x; }\nint main(void) { return f(1); }\n", encoding="utf-8")
-        with pytest.raises(HarnessError, match="defines main"):
-            generate(p, "f")
+    def test_a_main_under_an_untaken_conditional_needs_no_renaming(self, tmp_path):
+        p = tmp_path / "crc.c"
+        p.write_text("int f(int x) { return x; }\n#ifdef MAKECRCH\n"
+                     "int main(void) { return f(1); }\n#endif\n", encoding="utf-8")
+        assert "veripp_original_main" not in generate(p, "f").code
 
     def test_a_macro_that_expands_to_nothing_is_stripped_from_a_typedef(self):
         """zlib writes `typedef Byte FAR Bytef;` where FAR is `#define FAR`."""

@@ -217,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         "scan",
         help="verify every function in a file that veripp can harness",
     )
-    _add_common_args(s)
+    _add_common_args(s, source_optional=True)
     s.add_argument(
         "--jobs", "-j", type=int, default=4,
         help=_adv("parallel verifications"),
@@ -331,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
                    help=f"where to write it (default: {DEFAULT_BASELINE})")
     a.add_argument("--reason", default="",
                    help="why these are being accepted; recorded on every entry")
-    _add_common_args(a)
+    _add_common_args(a, source_optional=True)
     a.add_argument("--jobs", type=int, default=4, help="parallel verifications")
     a.add_argument("--escalations", type=int, default=1,
                    help=_adv("extra attempts with larger bounds"))
@@ -489,8 +489,16 @@ def _adv(help_text: str) -> str:
     return help_text if _SHOW_ADVANCED else argparse.SUPPRESS
 
 
-def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False) -> None:
-    p.add_argument("source", type=Path)
+def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False,
+                     source_optional: bool = False) -> None:
+    if source_optional:
+        # `veripp scan` in a checkout is the whole first run; asking for the
+        # dot is asking someone to read the usage line before anything works.
+        p.add_argument("source", type=Path, nargs="?", default=Path("."),
+                       help="a file or a directory (default: the current "
+                       "directory)")
+    else:
+        p.add_argument("source", type=Path)
     p.add_argument(
         "--help-all",
         action="store_true",
@@ -1458,18 +1466,39 @@ def _scan_tree(args) -> int:
 def _tree_summary(root: Path, reports: list) -> str:
     total_cx = sum(len(r.counterexamples) for r in reports)
     total_pre = sum(len(r.preconditioned) for r in reports)
+    total = sum(r.candidates or len(r.results) for r in reports)
+    refused = sum(len(r.refused) for r in reports)
+    reasons: dict[str, int] = {}
+    for r in reports:
+        for reason, count in r.refusal_reasons().items():
+            reasons[reason] = reasons.get(reason, 0) + count
     lines = [
         "",
         f"Scanned {len(reports)} file{'s' if len(reports) != 1 else ''} under {root}",
-        f"  {sum(r.candidates for r in reports)} function definitions found",
+        f"  {total} function definitions found"
+        + (f", {total - refused} harnessable ({100 * (total - refused) / total:.0f}%)"
+           if total else ""),
         "",
-        f"  PROVED           {sum(len(r.proved) for r in reports):4d}",
-        f"  COUNTEREXAMPLE   {total_cx:4d}",
+        f"  PROVED           {sum(len(r.proved) for r in reports):4d}  "
+        "free of undefined behaviour, within the stated bounds and assumptions",
+        f"  COUNTEREXAMPLE   {total_cx:4d}  "
+        "a property fails for some input -- triage each one",
         *([f"  PRECONDITIONED   {total_pre:4d}  safe under a solver-accepted "
            "precondition -- confirm callers guarantee it"] if total_pre else []),
-        f"  INCONCLUSIVE     {sum(len(r.inconclusive) for r in reports):4d}",
-        f"  HARNESS ARTIFACT {sum(len(r.artifacts) for r in reports):4d}",
+        f"  HARNESS ARTIFACT {sum(len(r.artifacts) for r in reports):4d}  "
+        "failed because of how the harness was built, not the code",
+        f"  INCONCLUSIVE     {sum(len(r.inconclusive) for r in reports):4d}  "
+        "timed out, hit the unwind bound, the frontend refused it, or a "
+        "proof reached nothing",
+        # Every function found is in one of these rows. Leaving this one out
+        # made 33 of inih's 42 functions vanish from the arithmetic.
+        f"  NOT HARNESSABLE  {refused:4d}  "
+        "veripp could not build inputs for the signature",
     ]
+    if reasons:
+        lines += ["", "  why functions were not harnessable:"]
+        for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            lines.append(f"    {count:4d}  {reason}")
     if total_pre:
         lines += ["", "  preconditions the solver accepted:"]
         for report in reports:
@@ -1479,19 +1508,30 @@ def _tree_summary(root: Path, reports: list) -> str:
                     + " && ".join(f.preconditions)
                 )
     if total_cx:
-        lines += ["", "  files with findings:"]
-        for report in reports:
-            if report.counterexamples:
-                names = ", ".join(f.name for f in report.counterexamples[:4])
-                if len(report.counterexamples) > 4:
-                    names += f", and {len(report.counterexamples) - 4} more"
-                lines.append(f"    {report.source}: {names}")
-        first = next(r for r in reports if r.counterexamples)
+        # Across the whole tree, in the order worth reading them: a list
+        # of file names sends the reader off to run one command per finding
+        # before learning what any of them is.
+        from .agent import display_path
+        from .scan import finding_tags, ranked_counterexamples
+
+        owner = {id(f): r.source for r in reports for f in r.counterexamples}
+        ordered = ranked_counterexamples(
+            [f for r in reports for f in r.counterexamples])
+        lines += ["", "  counterexamples (most likely to matter first):"]
+        for f in ordered[:20]:
+            in_model = not f.file or f.file.startswith("/esbmc-vfs/")
+            where = display_path(str(owner[id(f)]) if in_model else f.file)
+            if f.line and not in_model:
+                where += f":{f.line}"
+            lines.append(f"    {where}  {f.name}: {f.detail}{finding_tags(f)}")
+        if len(ordered) > 20:
+            lines.append(f"    ... and {len(ordered) - 20} more")
         lines += [
             "",
-            f"  next:  veripp verify {first.source} "
-            f"--function {first.counterexamples[0].name}",
-            "         to see the failing input.",
+            f"  next:  veripp verify {owner[id(ordered[0])]} "
+            f"--function {ordered[0].name}",
+            "         to see the failing input. A counterexample holds in the",
+            "         generated harness; check a caller can really reach it.",
         ]
     return "\n".join(lines)
 

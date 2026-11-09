@@ -565,6 +565,13 @@ def _caller_outside_the_model(output: str, before: int) -> SourceLoc | None:
     for m in _STATE_RE.finditer(output, 0, before):
         if m.group("file").startswith(MODEL_PATH_PREFIX):
             continue
+        if (m.group("function") == "main"
+                and os.path.basename(m.group("file")).startswith("veripp_harness_")):
+            # The harness's own main, filling inputs. When the function
+            # under test assigns nothing before the library call, this is
+            # the last state there is, and it is not a caller of anything:
+            # a memcmp was once filed at `char a_str[5];` in a temp file.
+            continue
         caller = SourceLoc(
             file=m.group("file"),
             line=int(m.group("line")),
