@@ -1302,6 +1302,73 @@ def _try_object(param, signature, assumptions, options, typedefs, source_text,
         return None
 
 
+def _emit_pointer_slot(
+    param: Param, assumptions: list[str], options: HarnessOptions,
+    typedefs: dict[str, str], body: str,
+) -> list[str] | None:
+    """`char **out`, `const char **cursor`, `int **table`: a pointer to a
+    pointer to scalars, or None for anything deeper or stranger.
+
+    Two different contracts share the type, and the body says which. An
+    out-parameter is only ever assigned through (`*out = malloc(n)`), and
+    what it pointed at before does not matter. A cursor is read through
+    (`**p`, `(*p)++`, `strtol(s, &end, 10)`'s cousin) and has to point at
+    something. Starting an out-parameter at a buffer would be harmless;
+    starting a cursor at null fails on the first read whatever the code
+    does, so the buffer is the default and null needs the evidence.
+    """
+    pointee = param.pointee()
+    if not pointee.rstrip().endswith("*"):
+        return None
+    inner = re.sub(r"^\s*const\b\s*", "", pointee.rstrip()[:-1].strip())
+    fill = nondet_for(inner, typedefs)
+    if fill is None or normalize_type(inner, typedefs) == "void":
+        return None
+    slot = f"{param.name}_slot"
+    # From the parameter's own spelling, so `const char **` keeps a
+    # `const char *` behind it: pointee() drops the qualifier, and a
+    # `char *` slot does not convert.
+    declared = f"{_decl_type(param._bare).rstrip()[:-1].rstrip()} {slot}"
+    n = re.escape(param.name)
+    scrubbed = scrub(body) if body else ""
+    # Read THROUGH, not merely read: `*out ? 0 : -1` looks at the slot the
+    # function just filled, `**p` at what the slot points to.
+    reads_through = re.search(
+        rf"\*\s*\*\s*{n}\b|\*\s*\(\s*\*\s*{n}\b"
+        rf"|\(\s*\*\s*{n}\s*\)\s*(?:\[|\+\+|--|->)"
+        rf"|(?:\+\+|--)\s*\(?\s*\*\s*{n}\b|\*\s*{n}\s*(?:\+=|-=|\[)",
+        scrubbed)
+    # Handed on as it is: whoever receives it may read through it.
+    passed_on = re.search(rf"[(,]\s*{n}\s*[,)]", scrubbed) and not re.search(
+        rf"\b(?:if|while)\s*\(\s*{n}\s*\)", scrubbed)
+    only_assigned = bool(scrubbed) and not reads_through and not passed_on
+    if only_assigned:
+        assumptions.append(
+            f"`{param.name}` points to one pointer the function may set; it "
+            "starts null, since the body never reads through it"
+        )
+        return [f"{declared} = 0;",
+                f"{_decl_type(param.type)} {param.name} = &{slot};"]
+    cap = options.max_array_len
+    storage = f"{param.name}_buf"
+    text = normalize_type(inner, typedefs) in _CURSOR_POINTEES
+    assumptions.append(
+        f"`{param.name}` points to a pointer to "
+        + (f"a NUL-terminated string of at most {cap} characters"
+           if text else f"{cap} valid `{inner}` elements")
+        + " (harness bound), since the body reads through it; the function "
+        "may move that pointer, as an in/out cursor is meant to be"
+    )
+    return [
+        f"{inner} {storage}[{cap + 1 if text else cap}];",
+        f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {cap}; ++{_LOOP_VAR})",
+        f"    {storage}[{_LOOP_VAR}] = {fill};",
+        *([f"{storage}[{cap}] = 0;"] if text else []),
+        f"{declared} = {storage};",
+        f"{_decl_type(param.type)} {param.name} = &{slot};",
+    ]
+
+
 def _emit_lone_pointer(
     param: Param,
     assumptions: list[str],
@@ -1372,6 +1439,9 @@ def _emit_lone_pointer(
         ]
     nondet = nondet_for(pointee, typedefs)
     if nondet is None:
+        slot = _emit_pointer_slot(param, assumptions, options, typedefs, body)
+        if slot is not None:
+            return slot
         raise HarnessError(
             f"parameter `{param.type} {param.name}` points to `{pointee}`, which "
             "the generator cannot construct; write the harness by hand."
