@@ -2231,8 +2231,12 @@ def _emit_leak_roots(
         if returned.endswith("*") or resolved.endswith("*"):
             call[-1:] = [f"static const void *{LEAK_ROOT_PREFIX}result;",
                          f"{LEAK_ROOT_PREFIX}result = (const void *){invocation};"]
-        elif nondet_for(returned, typedefs) is None:
+        elif nondet_for(returned, typedefs) is None and re.fullmatch(
+                r"(?:const\s+)?(?:(?:struct|union)\s+)?[A-Za-z_]\w*", returned):
             # A struct by value can carry the pointer out just the same.
+            # Only a return type that reads as one name: parson's
+            # `while (0) int`, left behind by a macro before the function,
+            # is not something to declare a variable with.
             plain = _elaborated(returned)
             call[-1:] = [f"static {plain} {LEAK_ROOT_PREFIX}result;",
                          f"{LEAK_ROOT_PREFIX}result = {invocation};"]

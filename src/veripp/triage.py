@@ -323,8 +323,14 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
     # A leak is the exception to the rule below. The checker reports one
     # where the program ends, so it is always "in the harness" -- and when
     # the harness keeps everything a caller could still reach reachable,
-    # what is left was allocated during the call and lost by it.
-    if "forgotten memory" in prop.description and _keeps_leak_roots(harness_path):
+    # what is left was allocated during the call and lost by it. Only when
+    # the trace shows the allocation in the code under test, though: one
+    # that happens nowhere but inside the checker's own model -- its realloc
+    # handed the harness's stack buffer, in inih's test allocator -- is not
+    # a line anyone can be pointed at, and stays with the rule below.
+    if ("forgotten memory" in prop.description
+            and prop.allocated_at is not None
+            and _keeps_leak_roots(harness_path)):
         return None
     # A property that fails inside the generated file, rather than in the code
     # under test, is by definition about the harness. `veripp verify FILE`
@@ -350,7 +356,7 @@ def _keeps_leak_roots(harness_path: Path) -> bool:
         code = harness_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    return LEAK_ROOT_PREFIX in code or "--no-reachable-leak-roots" in code
+    return LEAK_ROOT_PREFIX in code
 
 
 _UNINITIALISED_RE = re.compile(r"use of uninitiali[sz]ed variable:\s*(\w+)")
