@@ -131,6 +131,31 @@ veripp verify src/parser.c --function parse --assume 'len > 0' --link src/helper
 `--assume` states what real callers guarantee. `--link` brings in callees
 defined in other files. `--repro` is used only when there is a counterexample.
 
+### Is the counterexample real? Run it.
+
+```bash
+$ veripp verify src/parser.c --function parse_u8 --replay
+...
+Violated property: dereference failure: array bounds violated
+  at src/parser.c:9:5 in parse_u8
+    8 |     int v = 0;
+  > 9 |     while (*p >= '0' && *p <= '9' && p < end) {
+          ^
+Counterexample inputs:
+  p_buf = { 56, 56, 56, 56 }
+  end = &p_buf[0] + 4
+Replayed natively: CONFIRMED. AddressSanitizer: stack-buffer-overflow at parser.c:9 -- the line the checker named.
+```
+
+`--replay` builds the counterexample's inputs into a program, compiles it
+with AddressSanitizer and UBSan, and runs it. `CONFIRMED` means the compiled
+function fails on those inputs too, so the failure is not an artifact of the
+checker's model; whether a real caller can pass them is still the question
+the assumptions answer. A clean run is a reason to doubt the counterexample,
+not a refutation. `veripp scan --replay` does it for every finding and lists
+the confirmed ones first. This is the only thing veripp does that **executes
+the code under test**, which is why it is a flag.
+
 `--repro` writes a standalone program built from the counterexample's inputs,
 plus the command to compile it under AddressSanitizer and UBSan. If that
 program runs cleanly under the sanitizers, the counterexample is most likely
@@ -357,6 +382,11 @@ false-positive triage and reproduction commands are in
   help sort them.
 - **Verification is bounded.** A proof covers executions within the stated
   bounds only.
+- **Leaks are reported for C, not yet for C++.** A leak is memory the
+  function allocated and can no longer be reached through its return value,
+  its arguments or a global when it returns. A C++ harness cannot yet keep
+  those reachable, so a leak in a C++ function is filed as a harness
+  artifact rather than reported.
 - **Only C and C-like C++ work.** ESBMC's C++ frontend doesn't handle
   STL-heavy code. For example, tinyxml2 crashes it and jsoncpp won't parse.
 - **Coverage varies by file.** Types defined outside the translation unit

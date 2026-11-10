@@ -188,9 +188,23 @@ veripp scan . --changed origin/main
 # a counterexample as a program that crashes under the sanitizers
 veripp verify src/parser.c --function parse --repro repro.c
 
+# or have veripp build and run that program itself, and say what happened
+veripp verify src/parser.c --function parse --replay
+veripp scan src/ --replay
+
 # more wall-clock for re-trying inconclusives on a file with slow runs
 veripp scan src/parser.c --retry-budget 900
 ```
+
+`--replay` is the cheapest triage there is and needs no judgement: it
+compiles the counterexample's inputs with AddressSanitizer and UBSan and
+runs them. `CONFIRMED` means the compiled function fails on those inputs
+too, so the failure is not an artifact of the checker's model -- whether a
+real caller can pass them is still yours to answer from the assumptions.
+"Ran clean" is a reason to doubt the counterexample, not a refutation. It
+is the one veripp option that **executes the code under test**, so use it
+on code the user owns or already builds and runs, not on a download you
+have not read.
 
 ## When the default harness asks the wrong question
 

@@ -52,12 +52,14 @@ class TestRendering:
     def test_nondeterminism_is_replaced_by_the_concrete_values(self):
         out = _render()
         assert "VERIPP_NONDET" not in out
-        assert "unsigned n;" in out
+        # Zero, not nothing: a value the trace does not mention must not
+        # be whatever the stack held.
+        assert "unsigned n = 0;" in out
         assert "n = 4;" in out and "a_buf[3] = -248;" in out
 
     def test_declarations_and_the_call_survive(self):
         out = _render()
-        assert "int a_buf[4];" in out
+        assert "int a_buf[4] = {0};" in out
         assert "const int* a = a_buf;" in out
         assert "(void)sum_array(a, n);" in out
 
