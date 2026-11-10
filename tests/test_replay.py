@@ -185,6 +185,17 @@ class TestLeakRoots:
         assert "veripp_kept_result = (const void *)make_buf(n);" in code
         assert "(void)make_buf" not in code
 
+    def test_a_return_type_that_is_not_one_name_is_not_declared(self, tmp_path):
+        """parson: a macro ending in `while (0)` sits before the function,
+        and the return type read back was `while (0) int`."""
+        from veripp.cppsig import Signature
+        from veripp.harness import _emit_leak_roots
+
+        sig = Signature(name="f", return_type="while (0) int", params=[])
+        call = ["(void)f();"]
+        _emit_leak_roots([], call, sig, {})
+        assert call == ["(void)f();"]
+
     def test_a_file_that_cannot_allocate_is_left_alone(self, tmp_path):
         src = tmp_path / "pure.c"
         src.write_text("struct p { int x; };\nint get(struct p *p) { return p->x; }\n",
@@ -209,6 +220,27 @@ class TestLeakRoots:
         assert prop.allocated_at is not None
         assert (prop.allocated_at.file, prop.allocated_at.line) == ("/src/heap.c", 22)
         assert prop.user_loc.line == 22
+
+    def test_a_leak_with_no_allocation_in_the_code_stays_an_artifact(self, tmp_path):
+        """inih's test allocator: `return realloc(ptr, size)` on the
+        harness's stack buffer leaks inside the checker's realloc model."""
+        from veripp.esbmc import SourceLoc, ViolatedProperty, VerifyConfig, VerifyResult, Outcome
+        from veripp.triage import mechanical_artifact
+
+        harness = tmp_path / "veripp_harness_f.c"
+        harness.write_text("static const void *veripp_kept_result;\n", encoding="utf-8")
+
+        def result(allocated_at):
+            prop = ViolatedProperty(
+                loc=SourceLoc(str(harness), 39, 1, "main"),
+                description="dereference failure: forgotten memory: dynamic_2_array",
+                allocated_at=allocated_at)
+            return VerifyResult(outcome=Outcome.COUNTEREXAMPLE, config=VerifyConfig(),
+                                properties=[prop])
+
+        assert mechanical_artifact(result(None), harness) is not None
+        assert mechanical_artifact(
+            result(SourceLoc("/src/heap.c", 22, 5, "dup_len")), harness) is None
 
     @pytest.mark.esbmc
     def test_real_leaks_are_found_and_handed_back_memory_is_not(self, tmp_path):

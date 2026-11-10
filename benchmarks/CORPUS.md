@@ -115,6 +115,46 @@ They stop on the next layer, `names` filled with null entries (the one
 pointer value safe to free, and parson frees them), and each says so on its
 line. That layer is what `--constructors` is for.
 
+## What a first scan reaches (inih and parson, 2026-11-10)
+
+Two libraries scanned twice on the same 4-core x86_64 container with ESBMC
+8.6, `--timeout 30 --retry-budget 0 -j 4` and no LLM: once at commit
+`7c1a6c0`, once after callback parameters, start/end pointer pairs, sources
+with their own `main()` and reachability-aware leaks went in.
+
+| library | functions | | harnessable | proved | counterexamples | artifacts | inconclusive |
+|---|---:|---|---:|---:|---:|---:|---:|
+| [inih](https://github.com/benhoyt/inih) (whole tree, `611ab51`) | 42 | before | 9 | 3 | 2 | 0 | 4 |
+| | | after | 28 | **18** | 1 | 2 | 7 |
+| parson `parson.c` (`ec53fb6`) | 144 | before | 131 | 40 | 10 | 18 | 63 |
+| | | after | 133 | **55** | 10 | 5 | 63 |
+
+```bash
+veripp scan path/to/inih --timeout 30 --retry-budget 0 -j 4 --no-llm
+veripp scan path/to/parson/parson.c --timeout 30 --retry-budget 0 -j 4 --no-llm
+```
+
+inih is the shape of a first run: three hundred lines of library, and
+around it the examples, tests and a fuzz driver that each have a `main()`.
+Its public API takes a callback. Before, the summary listed 9 of 42
+functions and did not mention the other 33. The counterexample that went
+away was `ini_rstrip(char* s, char* end)`, failing on `end > s` because the
+harness had put the two pointers in different objects. The one that
+remains, `ini_strncpy0` with `size = 0`, is true of the function and false
+of its two callers, which both pass `sizeof` of a buffer. With
+`--timeout 300` the entry point itself, `ini_parse_string`, proves for
+every string of up to four characters and every handler result.
+
+Thirteen of parson's fifteen new proofs are one thing. They were artifacts:
+functions that allocate and hand the memory back (`json_value_init_*`,
+`json_array_make`, `parson_strdup`), whose "leak" at the end of the harness
+was discarded and took the rest of the function's checks with it. With the harness keeping
+what the caller holds reachable, there is no leak to discard and the
+function proves. The other two take a function pointer
+(`json_set_allocation_functions`, `json_set_number_serialization_function`)
+and were refused. The ten counterexamples are the same ten: the change that
+reports real leaks added no finding here.
+
 ## How many findings are real? (cJSON, triaged)
 
 The table above counts counterexamples. A counterexample is not a bug: it
