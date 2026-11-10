@@ -1130,19 +1130,18 @@ class TestInOutPointerParameters:
         assert any("in/out parameter" in a and "NOT modelled" in a
                    for a in assumptions)
 
-    def test_a_scalar_out_parameter_is_left_alone(self, tmp_path):
-        """`int **` is not an object handed back, and the backwards-cursor
-        machinery already owns `T **p` paired with a `T *start`. Widening
-        this to scalars would collide with that, so it stays refused --
-        unchanged, not newly broken."""
-        from veripp.harness import HarnessError
-
+    def test_a_scalar_in_out_parameter_gets_something_to_read(self, tmp_path):
+        """`int **` read through is a pointer to a pointer to ints. It was
+        refused for fear of colliding with the backwards-cursor machinery,
+        which owns `T **p` paired with a `T *start` -- but that pairing is
+        made first and never reaches here."""
         src = (
             '#include "veripp/contracts.hpp"\n'
             "int deref(int **p) { return **p; }\n"
         )
-        with pytest.raises(HarnessError):
-            self._harness(tmp_path, src=src, fn="deref")
+        code = self._harness(tmp_path, src=src, fn="deref").code
+        assert "int * p_slot = p_buf;" in code
+        assert "int ** p = &p_slot;" in code
 
     def test_a_triple_pointer_is_still_refused(self, tmp_path):
         """One level of in/out is a shape; three is a guess."""

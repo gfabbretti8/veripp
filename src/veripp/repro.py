@@ -428,9 +428,16 @@ def replay_counterexample(
         # inside loops, and stripping them leaves no sequence at all.
         return Replay("not_built", "call-sequence harnesses (--class, "
                                    "--sequence) cannot be replayed yet")
-    if not list(assignments) and _NONDET_ANY_RE.search(harness_code):
-        return Replay("unchecked", "the checker's trace gives no values for "
-                                   "the inputs, so there is nothing concrete "
-                                   "to run")
+    assignments = list(assignments)
     code = render(harness_code, source, function, assignments, violated_property)
-    return replay(code, source.suffix, violated_property, **build)
+    result = replay(code, source.suffix, violated_property, **build)
+    if (result.status == "clean" and not assignments
+            and _NONDET_ANY_RE.search(harness_code)):
+        # A crash on all-zero inputs is still a crash, and is what happens
+        # when the failure needs no particular value. A clean run of them
+        # is not doubt about anything.
+        return Replay("unchecked", "the checker's trace gives no values for "
+                                   "the inputs, so the run used zeroes and "
+                                   "exercised nothing in particular",
+                      stand_ins=result.stand_ins)
+    return result

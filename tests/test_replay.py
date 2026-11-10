@@ -114,10 +114,21 @@ class TestReplay:
         assert got.status == "not_built"
         assert "Not replayed" in got.summary()[0]
 
-    def test_a_trace_without_inputs_is_not_run_on_zeroes(self):
-        got = replay_counterexample(HARNESS, Path("/src/x.c"), "parse", [])
+    def test_a_clean_run_on_no_inputs_is_not_doubt(self, tmp_path):
+        """For a leak the trace names the allocation and no input values."""
+        src = tmp_path / "x.c"
+        src.write_text("static int parse(const char *p, unsigned long n)"
+                       " { return n ? p[0] : 0; }\n", encoding="utf-8")
+        got = replay_counterexample(HARNESS, src, "parse", [])
         assert got.status == "unchecked"
-        assert "nothing concrete to run" in got.detail
+        assert "used zeroes" in got.detail
+
+    def test_a_crash_on_no_inputs_is_still_a_crash(self, tmp_path):
+        src = tmp_path / "x.c"
+        src.write_text("static int parse(const char *p, unsigned long n)"
+                       " { return p[8 + n]; }\n", encoding="utf-8")
+        got = replay_counterexample(HARNESS, src, "parse", [])
+        assert got.status == "crashed"
 
     def test_a_sequence_harness_is_not_replayed(self):
         got = replay_counterexample("int main() { int veripp_step = 0; }",
@@ -275,3 +286,44 @@ class TestEndToEnd:
 
 def test_replay_summary_is_plain_about_no_compiler():
     assert "no C or C++ compiler" in Replay("no_compiler").summary()[0]
+
+
+DOUBLE = """\
+#include <stdlib.h>
+int make_out(char **out) { if (!out) return -1; *out = malloc(4); return *out ? 0 : -1; }
+int digit(const char **p) {
+    int v = 0;
+    if (**p >= '0' && **p <= '9') { v = **p - '0'; (*p)++; }
+    return v;
+}
+void skip8(const char **p) { *p += 8; if (**p == 'x') (*p)++; }
+"""
+
+
+class TestPointersToPointers:
+    """`char **out` and `const char **cursor` share a type and not a contract."""
+
+    def test_an_out_parameter_starts_null(self, tmp_path):
+        src = tmp_path / "dp.c"
+        src.write_text(DOUBLE, encoding="utf-8")
+        harness = generate(src, "make_out")
+        assert "char * out_slot = 0;" in harness.code
+        assert "char ** out = &out_slot;" in harness.code
+        assert any("starts null" in a for a in harness.assumptions)
+
+    def test_a_cursor_points_at_text(self, tmp_path):
+        src = tmp_path / "dp.c"
+        src.write_text(DOUBLE, encoding="utf-8")
+        harness = generate(src, "digit")
+        assert "const char * p_slot = p_buf;" in harness.code
+        assert any("reads through it" in a for a in harness.assumptions)
+
+    @pytest.mark.esbmc
+    def test_they_verify_and_the_overrun_does_not(self, tmp_path, capsys):
+        from veripp.cli import main
+
+        src = tmp_path / "dp.c"
+        src.write_text(DOUBLE, encoding="utf-8")
+        assert main(["verify", str(src), "--function", "make_out", "--no-llm"]) == 0
+        assert main(["verify", str(src), "--function", "digit", "--no-llm"]) == 0
+        assert main(["verify", str(src), "--function", "skip8", "--no-llm"]) == 1

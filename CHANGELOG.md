@@ -94,6 +94,11 @@ of its two counterexamples, which no caller could produce, is gone.
   is undefined behaviour of the harness's own making, and it was reported.
   They are paired only on evidence from both the name and the body: the
   second is called an end, and the body compares or subtracts the two.
+- **A pointer to a pointer to scalars is modelled.** `char **out` and
+  `const char **cursor` share a type and not a contract, and the body says
+  which: a function that reads through it (`**p`, `(*p)++`) gets a pointer
+  to a bounded buffer, a string for character types, and one that only
+  sets it gets a null to overwrite. Both were refused.
 - **A source with its own `main()` is harnessed.** Command-line tools,
   examples and test drivers were refused whole, with advice to wrap their
   `main` in `#if defined(VERIPP_HAS_OWN_MAIN)` -- an edit to the code under
