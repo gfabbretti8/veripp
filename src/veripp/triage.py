@@ -320,6 +320,12 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
             "allocator with --link, or point veripp at compile_commands.json, "
             "to check this properly"
         )
+    # A leak is the exception to the rule below. The checker reports one
+    # where the program ends, so it is always "in the harness" -- and when
+    # the harness keeps everything a caller could still reach reachable,
+    # what is left was allocated during the call and lost by it.
+    if "forgotten memory" in prop.description and _keeps_leak_roots(harness_path):
+        return None
     # A property that fails inside the generated file, rather than in the code
     # under test, is by definition about the harness. `veripp verify FILE`
     # with no --function has no generated harness -- the file under test IS
@@ -335,6 +341,16 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
             "the code under test"
         )
     return None
+
+
+def _keeps_leak_roots(harness_path: Path) -> bool:
+    from .harness import LEAK_ROOT_PREFIX
+
+    try:
+        code = harness_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return LEAK_ROOT_PREFIX in code or "--no-reachable-leak-roots" in code
 
 
 _UNINITIALISED_RE = re.compile(r"use of uninitiali[sz]ed variable:\s*(\w+)")

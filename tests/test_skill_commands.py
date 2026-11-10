@@ -222,6 +222,13 @@ class TestDocumentedInvocations:
         )
         assert out.is_file(), "a counterexample, and no reproducer written"
 
+    def test_replay_of_a_counterexample(self) -> None:
+        result = veripp("verify", "examples/off_by_one.cpp", "--function",
+                        "sum_array", "--replay")
+        check(result, "veripp verify FILE --function F --replay")
+        assert ("Replayed natively" in result.stdout
+                or "Not replayed" in result.stdout), result.stdout
+
     def test_scan_with_a_retry_budget(self, tmp_path) -> None:
         (tmp_path / "m.c").write_text("int f(int x){ return x; }\n", encoding="utf-8")
         check(veripp("scan", "m.c", "--retry-budget", "900", cwd=tmp_path),

@@ -102,6 +102,12 @@ class FunctionResult:
     #: for a static function means dead code, a function pointer, or a
     #: macro; for an external one it means its callers live elsewhere.
     callers: int | None = None
+    #: With --replay: what the counterexample did when compiled and run
+    #: under the sanitizers -- "crashed", "clean", "unchecked", or a reason
+    #: there is no answer. Empty when not replayed. A fact about the
+    #: compiled function, so it ranks ahead of any model's label.
+    replay: str = ""
+    replay_detail: str = ""
 
     triage_kind: str | None = None
 
@@ -448,9 +454,14 @@ def ranked_counterexamples(found: list["FunctionResult"]) -> list["FunctionResul
     linkage_rank = {"external": 0, "": 1, "static": 2}
     # A null the harness put there ranks after nulls the code produced on
     # its own, whoever can reach the function.
+    # What the compiled function did comes first of all: a crash under the
+    # sanitizers is not a judgement, and a clean run is the best single
+    # reason to doubt a counterexample.
+    replay_rank = {"crashed": 0, "clean": 2}
     return sorted(
         found,
-        key=lambda r: (rank.get(r.triage_kind, 1),
+        key=lambda r: (replay_rank.get(r.replay, 1),
+                       rank.get(r.triage_kind, 1),
                        1 if (r.harness_null or r.harness_bound) else 0,
                        linkage_rank.get(r.linkage, 1),
                        access_rank.get(r.access, 1), r.name),
@@ -466,8 +477,14 @@ _TRIAGE_TAGS = {
 
 def finding_tags(r: "FunctionResult") -> str:
     """`  [write; static, 2 callers here]`, or nothing."""
-    parts = [part for part in (r.access, r.reach_note(), r.harness_null,
-                               r.harness_bound, _TRIAGE_TAGS.get(r.triage_kind))
+    replayed = {
+        "crashed": f"CONFIRMED natively: {r.replay_detail}",
+        "clean": "ran clean natively -- doubtful",
+        "unchecked": f"not replayable: {r.replay_detail}",
+    }.get(r.replay)
+    parts = [part for part in (replayed, r.access, r.reach_note(),
+                               r.harness_null, r.harness_bound,
+                               _TRIAGE_TAGS.get(r.triage_kind))
              if part]
     return f"  [{'; '.join(parts)}]" if parts else ""
 
@@ -540,6 +557,7 @@ def scan(
     triage_progress=None,
     retry_budget: int = 120,
     retry_progress=None,
+    replay: bool = False,
 ) -> ScanReport:
     """Harness and verify every function in `source` that veripp can model.
 
@@ -642,6 +660,17 @@ def scan(
         prop = result.violated_property
         outcome = result.outcome.value
         detail = prop.description if prop else (result.error or "")
+        replayed = None
+        if (replay and result.outcome is Outcome.COUNTEREXAMPLE
+                and mechanical_artifact(result, path) is None):
+            from .repro import replay_counterexample
+
+            replayed = replay_counterexample(
+                harness.code, source.resolve(), sig.name,
+                result.input_assignments(), str(prop or ""),
+                include_dirs=[*config.include_dirs, source.resolve().parent],
+                defines=config.defines, link_sources=config.link_sources,
+            )
         if reachability == VACUOUS:
             outcome, detail = VACUOUS, (
                 "its assumptions cannot all hold, so the call is never "
@@ -676,6 +705,8 @@ def scan(
             bounds=result.config.describe(),
             linkage="static" if sig.is_static else "external",
             callers=_caller_count(name, text, scrubbed, linked),
+            replay=replayed.status if replayed else "",
+            replay_detail=replayed.detail if replayed else "",
         )
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:

@@ -210,6 +210,14 @@ def main(argv: list[str] | None = None) -> int:
         "reproduces it, with the build line for a sanitizer run",
     )
 
+    v.add_argument(
+        "--replay", action="store_true",
+        help="on a counterexample, compile its inputs into a program, run "
+        "it under AddressSanitizer and UBSan, and say whether the compiled "
+        "function fails too. This RUNS the function under test on this "
+        "machine; nothing else veripp does executes your code",
+    )
+
     h = sub.add_parser("harness", help="print the generated harness without verifying")
     _add_common_args(h, require_function=True)
 
@@ -245,6 +253,14 @@ def main(argv: list[str] | None = None) -> int:
         help="only files git reports as new or modified: against HEAD when "
         "given alone (what you are about to commit), or `REF...HEAD` when "
         "given a ref, e.g. --changed origin/main in a pull request",
+    )
+    s.add_argument(
+        "--replay", action="store_true",
+        help="compile each counterexample's inputs into a program and run "
+        "it under AddressSanitizer and UBSan; findings the compiled "
+        "function confirms are listed first, and ones that run clean are "
+        "marked doubtful. This RUNS the code under test on this machine; "
+        "nothing else veripp does executes your code",
     )
     s.add_argument(
         "--retry-budget", type=int, default=120, metavar="SECONDS",
@@ -285,8 +301,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument(
         "--json-out",
         metavar="PATH",
-        help="also write the JSON report here, keeping the readable output "
-             "on stdout (so CI can have both without verifying twice)",
+        help=_adv("also write the JSON report here, keeping the readable "
+                  "output on stdout (so CI can have both without verifying "
+                  "twice)"),
     )
     s.add_argument("--quiet", "-q", action="store_true", help="summary only, no progress")
     s.add_argument(
@@ -973,7 +990,14 @@ def _cache_for(args):
 _KEY_INCLUDE_DEPTH = 64
 
 
-def _cache_key(source: Path, config, options, cache=None) -> str:
+def _cache_key(source: Path, config, options, cache=None, args=None) -> str:
+    # A verdict cached without a replay has nothing to say about one, so a
+    # scan asked to replay must not be answered from it.
+    suffix = "+replay" if getattr(args, "replay", False) else ""
+    return _source_key(source, config, options, cache) + suffix
+
+
+def _source_key(source: Path, config, options, cache=None) -> str:
     from .cache import CHECKER_MEMO, checker_digest, key_for, package_digest
     from .esbmc import find_esbmc
     from .harness import local_include_closure
@@ -1400,7 +1424,7 @@ def _scan_tree(args) -> int:
             # --only asks for a subset, so its result is not this file's
             # verdict and must not be cached as one.
             cache = _cache_for(args) if selected is None else None
-            key = _cache_key(source, config, options, cache) if cache else ""
+            key = _cache_key(source, config, options, cache, args) if cache else ""
             cached = cache.get(key) if cache else None
             if cached is not None and not _cache_serves(
                 cached, llm, args.retry_budget
@@ -1418,7 +1442,8 @@ def _scan_tree(args) -> int:
                           only=selected, llm=llm,
                           triage_progress=_triage_progress(args),
                           retry_budget=args.retry_budget,
-                          retry_progress=_retry_progress(args))
+                          retry_progress=_retry_progress(args),
+                          replay=getattr(args, "replay", False))
             if cache:
                 cache.put(key, _cache_payload(report))
             reports.append(report)
@@ -1585,7 +1610,7 @@ def _scan(args) -> int:
 
     llm, llm_note = _scan_llm(args)
     cache = _cache_for(args) if selected is None else None
-    key = _cache_key(args.source, config, options, cache) if cache else ""
+    key = _cache_key(args.source, config, options, cache, args) if cache else ""
     cached = cache.get(key) if cache else None
     if cached is not None and not _cache_serves(cached, llm, args.retry_budget):
         cached = None
@@ -1600,7 +1625,8 @@ def _scan(args) -> int:
                       only=selected, llm=llm,
                       triage_progress=_triage_progress(args),
                       retry_budget=args.retry_budget,
-                      retry_progress=_retry_progress(args))
+                      retry_progress=_retry_progress(args),
+                      replay=getattr(args, "replay", False))
         if cache:
             cache.put(key, _cache_payload(report))
 
@@ -1614,6 +1640,9 @@ def _scan(args) -> int:
                  "file": r.file, "line": r.line, "column": r.column, "cwes": r.cwes,
                  "triage": r.triage_kind, "triage_note": r.triage_note,
                  "triage_error": r.triage_error,
+                 # "" when not replayed (--replay); else what the compiled
+                 # function did with these inputs under the sanitizers.
+                 "replay": r.replay, "replay_detail": r.replay_detail,
                  # Who can reach it: an entry point, or a helper with this
                  # many call sites in the scanned unit(s).
                  "linkage": r.linkage, "callers": r.callers,
@@ -1891,6 +1920,9 @@ def _verify(args) -> int:
         if written:
             print(written, file=sys.stderr)
 
+    if getattr(args, "replay", False):
+        report.replay = _replay(args, report, harness)
+
     if harness and not args.keep_harness:
         report.harness = None  # about to be removed; do not name it
     readable = report.summary()
@@ -2017,6 +2049,8 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         "trace": [asdict(step) for step in report.final.trace],
         "diagnosis": asdict(report.diagnosis) if report.diagnosis else None,
         "narrative": report.narrative,
+        # null = not asked for (--replay), or nothing to replay.
+        "replay": report.replay.as_dict() if report.replay else None,
         "error": report.final.error,
         "attempts": len(report.attempts),
         "duration_s": report.final.duration_s,
@@ -2056,6 +2090,23 @@ def _write_repro(args, report, harness) -> str | None:
         f"  build:  {build_command(destination, out=destination.stem, include_dirs=_include_dirs(args))}\n"
         "  a clean exit under the sanitizers means the harness allowed a "
         "state your callers cannot"
+    )
+
+
+def _replay(args, report, harness):
+    """Run the counterexample natively, when there is one to run."""
+    from .repro import replay_counterexample
+
+    if report.final.outcome is not Outcome.COUNTEREXAMPLE or harness is None:
+        return None
+    config = report.final.config
+    return replay_counterexample(
+        harness.code, args.source.resolve(), harness.signature.name,
+        report.final.input_assignments(),
+        str(report.final.violated_property or ""),
+        include_dirs=_include_dirs(args),
+        defines=list(getattr(config, "defines", []) or []),
+        link_sources=list(getattr(config, "link_sources", []) or []),
     )
 
 

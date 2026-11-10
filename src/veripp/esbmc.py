@@ -113,6 +113,13 @@ class VerifyConfig:
             args.append("--unsigned-overflow-check")
         if self.memory_leak_check:
             args.append("--memory-leak-check")
+            if source is not None and source.name.startswith("veripp_harness_"):
+                # In a generated harness "never freed" is not a finding:
+                # a function that returns what it allocated, or stores it in
+                # the caller's object, has leaked nothing. What it can no
+                # longer reach has been -- the harness keeps its own objects
+                # and the return value reachable for exactly this.
+                args.append("--no-reachable-memory-leak")
         if self.multi_property:
             args.append("--multi-property")
         if self.uninitialised_check:
@@ -248,11 +255,18 @@ class ViolatedProperty:
     #: to a failure inside it: the memcmp call, not memcmp's own line. None
     #: when the failure is in the code already, or the trace shows no caller.
     caller: SourceLoc | None = None
+    #: For a memory leak: where the forgotten object was allocated. The
+    #: checker reports every leak where the program ends, which in a
+    #: generated harness is the closing brace of a main() nobody wrote.
+    allocated_at: SourceLoc | None = None
 
     @property
     def user_loc(self) -> SourceLoc:
         """The location to report, annotate and read a source line at: the
-        caller in the code under test when the failure is in the model."""
+        caller in the code under test when the failure is in the model, and
+        the allocation when what failed is that it was never freed."""
+        if self.allocated_at is not None:
+            return self.allocated_at
         if self.loc.in_checker_model and self.caller is not None:
             return self.caller
         return self.loc
@@ -545,16 +559,48 @@ def _parse_properties(output: str) -> list[ViolatedProperty]:
             column=int(loc_match.group("column") or 0) or None,
             function=loc_match.group("function"),
         )
+        description = " ".join(detail) or "(no description)"
         properties.append(
             ViolatedProperty(
                 loc=loc,
-                description=" ".join(detail) or "(no description)",
+                description=description,
                 expression=expression,
                 cwes=cwes,
                 caller=_caller_outside_the_model(output, header.start()) if loc.in_checker_model else None,
+                allocated_at=_allocation_site(output, description),
             )
         )
     return properties
+
+
+_FORGOTTEN_RE = re.compile(r"forgotten memory:\s*(\w+)")
+
+
+def _allocation_site(output: str, description: str) -> SourceLoc | None:
+    """Where the object a leak report names was allocated, from the trace.
+
+    The first state outside the checker's model and the harness that stores
+    the object's address is the `p = malloc(n)` in the code under test.
+    """
+    forgotten = _FORGOTTEN_RE.search(description)
+    if forgotten is None:
+        return None
+    address = re.compile(rf"&{re.escape(forgotten.group(1))}\b")
+    states = list(_STATE_RE.finditer(output))
+    for index, m in enumerate(states):
+        end = states[index + 1].start() if index + 1 < len(states) else len(output)
+        if not address.search(output, m.end(), end):
+            continue
+        file = m.group("file")
+        if file.startswith(MODEL_PATH_PREFIX) or os.path.basename(file).startswith(
+                "veripp_harness_"):
+            continue
+        return SourceLoc(
+            file=file, line=int(m.group("line")),
+            column=int(m.group("column")) if m.group("column") else None,
+            function=m.group("function"),
+        )
+    return None
 
 
 def _caller_outside_the_model(output: str, before: int) -> SourceLoc | None:

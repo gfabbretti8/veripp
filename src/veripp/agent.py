@@ -60,6 +60,9 @@ class AgentReport:
     narrative: str = ""
     assumptions: list[str] = field(default_factory=list)
     harness: Path | None = None
+    #: What happened when the counterexample was compiled and run under the
+    #: sanitizers (--replay), or None when it was not.
+    replay: object | None = None
     #: Assertions an LLM inserted into the harness as loop invariants. Set
     #: only when the result was obtained on that modified harness, which
     #: `harness` then names. They were checked with everything else, never
@@ -255,8 +258,16 @@ class AgentReport:
         prop = self.final.violated_property
         if prop:
             lines.append(f"Violated property: {prop.description}")
-            lines.append(f"  at {display_loc(prop.loc)}")
-            if prop.loc.in_checker_model:
+            if prop.allocated_at is not None:
+                # The checker's own location for a leak is where the program
+                # ends, which in a harness is a line nobody wrote.
+                lines.append(
+                    f"  allocated at {display_loc(prop.allocated_at)}, and "
+                    "out of reach when the call returns: not freed, not "
+                    "returned, not left in an argument or a global")
+            else:
+                lines.append(f"  at {display_loc(prop.loc)}")
+            if prop.loc.in_checker_model and prop.allocated_at is None:
                 lines.append(
                     f"  called from {display_loc(prop.caller)}"
                     if prop.caller is not None else
@@ -285,6 +296,8 @@ class AgentReport:
             lines.append(f"Diagnosis: {self.diagnosis.kind}: {self.diagnosis.explanation}")
         if self.narrative:
             lines.append(self.narrative)
+        if self.replay is not None:
+            lines += self.replay.summary(prop.user_loc.line if prop else 0)
         lines.append(f"Attempts: {len(self.attempts)}")
         return "\n".join(lines)
 

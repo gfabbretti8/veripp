@@ -12,7 +12,63 @@ run, and refuses to back results from one that cannot detect a planted bug.
 Results fail closed where they used to fail open, the checker arrives with
 the install on Linux arm64 as well as x86_64, counterexamples say who can
 reach them and when the harness had a hand in them, and an agent can drive
-veripp over MCP.
+veripp over MCP. A counterexample can be replayed natively under the
+sanitizers, real memory leaks are reported instead of verified, and a first
+scan reaches the functions that take callbacks.
+
+### Fixed: a leak was reported as verified
+- **A function that leaks memory no longer verifies.** The checker reports
+  memory that is never freed where the program ends, which in a generated
+  harness is the last line of a `main` nobody wrote -- and a failure located
+  in the harness was filed as the harness's own and discarded. So this
+  verified, exit 0, with `memory-leak` in the list of checks it ran under:
+
+  ```c
+  int dup_len(const char *s) {
+      char *copy = malloc(strlen(s) + 1);
+      if (!copy) return -1;
+      strcpy(copy, s);
+      if (copy[0] == '#') return 0;      /* copy is lost here */
+      ...
+  ```
+
+  Discarding them had a reason: "never freed" is the wrong question for one
+  function. `char *dup(s)` is meant to return what it allocates and
+  `init(obj)` is meant to leave it in the object, and both are "leaks" at
+  the end of a harness. The right question is whether the function *lost*
+  the memory, and the checker can answer it (`--no-reachable-memory-leak`)
+  once what a caller still holds is reachable. A C harness now copies its
+  objects and the return value into statics after the call, so memory that
+  was returned, stored through an argument or left in a global is not
+  reported, and memory that was dropped is -- at the line that allocated
+  it, read back from the trace, rather than at the harness's closing brace.
+  The harness of a file that cannot allocate is unchanged.
+
+  Not yet for C++: copying an object there can run a copy constructor, so
+  a C++ harness keeps nothing reachable and a leak in a C++ function is
+  still filed as an artifact. The README's limits say so.
+
+### Added: replaying a counterexample
+- **`--replay` runs the counterexample.** On `verify` and `scan`, the
+  inputs are built into a program, compiled with AddressSanitizer and
+  UndefinedBehaviorSanitizer, and run. `CONFIRMED` means the compiled
+  function fails on those inputs too, with what the sanitizer said and
+  whether it was the line the checker named, so the failure is not an
+  artifact of the checker's model. A clean run is printed as a reason to
+  doubt the counterexample, not as a refutation. `scan --replay` lists
+  confirmed findings first and clean ones last, ahead of any model's label,
+  because what the compiled function did is not a judgement. Properties no
+  sanitizer checks (NaN, comparing pointers into different objects,
+  uninitialised reads) say that a clean run means nothing, and so does a
+  trace that carries no input values. It is the one thing veripp does that
+  executes the code under test, so it only happens when asked for.
+- **The program `--repro` writes reproduces more.** Array contents the
+  checker printed as an aggregate (`p_buf = { 56, 56, 56, 56 }`) were left
+  in a comment, so a parser that over-reads on four digits was handed four
+  zeroes and exited cleanly -- which the file's own header calls the sign
+  of a false alarm. They are assigned now, values the trace does not
+  mention are zero rather than whatever the stack held, and callback
+  stand-ins and a set-aside `main` come along so the file compiles.
 
 ### Changed: reach
 What a first `veripp scan` on someone else's code could not touch. Measured

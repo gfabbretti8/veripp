@@ -445,7 +445,12 @@ def generate(
             stub_preamble.append(stub)
 
     body.append("")
-    body += _emit_call(signature, assumptions)
+    call = _emit_call(signature, assumptions)
+    roots: list[str] = []
+    if source.suffix == ".c" and _ALLOCATES_RE.search(scrub(expanded)):
+        roots = _emit_leak_roots(body, call, signature, typedefs)
+    body += call
+    body += roots
     if teardown:
         body.append("")
         body += teardown
@@ -2074,6 +2079,97 @@ def _emit_call(signature: Signature, assumptions: list[str]) -> list[str]:
     if signature.returns_void:
         lines[-1] = lines[-1].replace("(void)", "", 1)
     return lines
+
+
+#: Whether anything in the translation unit can put memory on the heap. A
+#: file that cannot has no leak to look for, and its harness stays as short
+#: as it was.
+_ALLOCATES_RE = re.compile(r"\w*alloc\w*\s*\(|\bstrn?dup\s*\(")
+
+#: Prefix of the statics a harness keeps its objects reachable through.
+LEAK_ROOT_PREFIX = "veripp_kept_"
+
+#: A harness local: `struct S s_obj;`, `const int * a = a_buf;`,
+#: `JSON_Value * items[4];`. Statements never match -- they have one
+#: identifier before the `=`, not a type and a name.
+_HARNESS_LOCAL_RE = re.compile(
+    r"^(?P<type>[A-Za-z_]\w*(?:[ \t]+[A-Za-z_]\w*)*[ \t]*\**)[ \t]*"
+    r"(?<![\w])(?P<name>[A-Za-z_]\w*)[ \t]*(?:\[(?P<count>\d+)\])?[ \t]*(?:=[^;]*)?;$"
+)
+_NOT_A_TYPE = {"return", "else", "goto", "static", "typedef", "extern", "case"}
+
+#: Elements of an array of structs kept reachable. Each needs a static of
+#: its own -- the checker does not look inside a static array of structs.
+_MAX_ROOTED_ELEMENTS = 8
+
+
+def _emit_leak_roots(
+    body: list[str], call: list[str], signature: Signature,
+    typedefs: dict[str, str],
+) -> list[str]:
+    """Keep everything the caller could still reach, reachable.
+
+    The checker reports memory that is never freed where the program ends.
+    In a harness that is the wrong question twice over: `char *dup(s)` is
+    meant to return what it allocated, and `init(obj)` is meant to leave it
+    in the object -- so every leak used to be filed as the harness's own
+    and discarded, including the real ones. A function that mallocs,
+    returns early and frees nothing was reported verified.
+
+    The right question is whether the function LOST the memory. The checker
+    can answer it (--no-reachable-memory-leak) once the things a caller
+    still holds are reachable from statics: the harness's objects, copied
+    after the call, and the return value. Whatever is unreachable then was
+    allocated during the call and dropped by it.
+    """
+    lines: list[str] = []
+    for raw in body:
+        line = raw.strip()
+        m = _HARNESS_LOCAL_RE.match(line)
+        if m is None:
+            continue
+        type_ = " ".join(m.group("type").split())
+        name, count = m.group("name"), m.group("count")
+        if type_.split()[0] in _NOT_A_TYPE or name.startswith(LEAK_ROOT_PREFIX):
+            continue
+        kept = f"{LEAK_ROOT_PREFIX}{name}"
+        if type_.endswith("*"):
+            if count:
+                lines += [
+                    f"static const void *{kept}[{count}];",
+                    f"for (unsigned long {_LOOP_VAR} = 0; {_LOOP_VAR} < {count}; ++{_LOOP_VAR})",
+                    f"    {kept}[{_LOOP_VAR}] = (const void *){name}[{_LOOP_VAR}];",
+                ]
+            else:
+                lines += [f"static const void *{kept};",
+                          f"{kept} = (const void *){name};"]
+            continue
+        if nondet_for(type_, typedefs) is not None:
+            continue  # a number holds no pointer
+        plain = _elaborated(type_)
+        if count:
+            for index in range(min(int(count), _MAX_ROOTED_ELEMENTS)):
+                lines += [f"static {plain} {kept}_{index};",
+                          f"{kept}_{index} = {name}[{index}];"]
+        else:
+            lines += [f"static {plain} {kept};", f"{kept} = {name};"]
+
+    returned = signature.return_type.strip()
+    if call and not signature.returns_void and call[-1].startswith("(void)"):
+        invocation = call[-1][len("(void)"):].rstrip(";")
+        resolved = normalize_type(returned, typedefs)
+        if returned.endswith("*") or resolved.endswith("*"):
+            call[-1:] = [f"static const void *{LEAK_ROOT_PREFIX}result;",
+                         f"{LEAK_ROOT_PREFIX}result = (const void *){invocation};"]
+        elif nondet_for(returned, typedefs) is None:
+            # A struct by value can carry the pointer out just the same.
+            plain = _elaborated(returned)
+            call[-1:] = [f"static {plain} {LEAK_ROOT_PREFIX}result;",
+                         f"{LEAK_ROOT_PREFIX}result = {invocation};"]
+    if not lines and not any(LEAK_ROOT_PREFIX in c for c in call):
+        return []
+    return ["", "// what a caller still holds, kept reachable for the leak check",
+            *lines] if lines else []
 
 
 _REQUIRES_RE = re.compile(r"\bVERIPP_REQUIRES\s*\(")
