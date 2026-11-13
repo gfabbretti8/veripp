@@ -683,6 +683,15 @@ def scan(
                 "no violation, but the reachability probe did not settle"
                 + (f" ({note})" if note else "")
             )
+        where = ((prop.user_loc.file, prop.user_loc.line,
+                  prop.user_loc.column or 0) if prop else ("", 0, 0))
+        if (prop and "forgotten memory" in prop.description
+                and Path(where[0]).name.startswith("veripp_harness_")):
+            # A leak the trace gives no line for (the checker never shows a
+            # C++ `new`) is still a finding in this file, not in a harness
+            # that is deleted when the scan ends: file it at the function.
+            at = text.find(sig.body) if sig.body else -1
+            where = (str(source), text.count("\n", 0, at) + 1 if at >= 0 else 0, 0)
         return FunctionResult(
             name=name,
             terminates=terminates,
@@ -695,9 +704,7 @@ def scan(
             artifact=mechanical_artifact(result, path),
             # The caller's line when the failure is inside the checker's
             # library model: that is where a reader looks and SARIF points.
-            file=(prop.user_loc.file if prop else ""),
-            line=(prop.user_loc.line if prop else 0),
-            column=(prop.user_loc.column or 0 if prop else 0),
+            file=where[0], line=where[1], column=where[2],
             cwes=list(getattr(prop, "cwes", []) or []) if prop else [],
             access=access_kind(prop) if prop else None,
             harness_null=harness_null_note(prop, harness.assumptions),

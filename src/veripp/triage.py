@@ -323,14 +323,17 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
     # A leak is the exception to the rule below. The checker reports one
     # where the program ends, so it is always "in the harness" -- and when
     # the harness keeps everything a caller could still reach reachable,
-    # what is left was allocated during the call and lost by it. Only when
-    # the trace shows the allocation in the code under test, though: one
-    # that happens nowhere but inside the checker's own model -- its realloc
-    # handed the harness's stack buffer, in inih's test allocator -- is not
-    # a line anyone can be pointed at, and stays with the rule below.
+    # what is left was allocated during the call and lost by it.
+    #
+    # In C that also needs the trace to show the allocation in the code
+    # under test. One that happens nowhere but inside the checker's own
+    # model -- its realloc handed the harness's stack buffer, in inih's test
+    # allocator -- is not a line anyone can be pointed at, and stays with
+    # the rule below. C++ gets no such test: the checker's trace never
+    # shows a `new`, so asking for the line would discard every C++ leak.
     if ("forgotten memory" in prop.description
-            and prop.allocated_at is not None
-            and _keeps_leak_roots(harness_path)):
+            and _keeps_leak_roots(harness_path)
+            and (prop.allocated_at is not None or harness_path.suffix != ".c")):
         return None
     # A property that fails inside the generated file, rather than in the code
     # under test, is by definition about the harness. `veripp verify FILE`

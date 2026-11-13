@@ -447,8 +447,11 @@ def generate(
     body.append("")
     call = _emit_call(signature, assumptions)
     roots: list[str] = []
-    if source.suffix == ".c" and _ALLOCATES_RE.search(scrub(expanded)):
-        roots = _emit_leak_roots(body, call, signature, typedefs)
+    cxx = source.suffix != ".c"
+    if (_CXX_ALLOCATES_RE if cxx else _ALLOCATES_RE).search(scrub(expanded)):
+        roots = _emit_leak_roots(body, call, signature, typedefs, cxx=cxx)
+        if cxx and any("VERIPP_KEEP(" in line for line in [*roots, *call]):
+            stub_preamble.append(_CXX_KEEPER)
     body += call
     body += roots
     if teardown:
@@ -2156,6 +2159,28 @@ def _emit_call(signature: Signature, assumptions: list[str]) -> list[str]:
 #: as it was.
 _ALLOCATES_RE = re.compile(r"\w*alloc\w*\s*\(|\bstrn?dup\s*\(")
 
+_CXX_ALLOCATES_RE = re.compile(
+    _ALLOCATES_RE.pattern + r"|\bnew\b(?!\s*\()|\bmake_(?:unique|shared)\b")
+
+#: C++ cannot copy an arbitrary object into a static: a copy constructor
+#: may allocate, or be deleted. A trivially copyable one is copied exactly
+#: as C copies a struct. Anything else is left alone, on the ground that a
+#: class with a copy constructor of its own has a destructor of its own
+#: too, which runs when the harness's main returns and frees what the
+#: class owns -- and if it does not, that is the leak.
+_CXX_KEEPER = """\
+template <bool> struct veripp_keeper {
+    template <int, class T> static void keep(const T &) {}
+};
+template <> struct veripp_keeper<true> {
+    template <int, class T> static void keep(const T &x) {
+        static T veripp_kept_ = x;
+        (void)veripp_kept_;
+    }
+};
+#define VERIPP_KEEP(tag, x) \\
+    veripp_keeper<__is_trivially_copyable(__typeof__(x))>::keep<tag, __typeof__(x)>(x)"""
+
 #: Prefix of the statics a harness keeps its objects reachable through.
 LEAK_ROOT_PREFIX = "veripp_kept_"
 
@@ -2175,7 +2200,7 @@ _MAX_ROOTED_ELEMENTS = 8
 
 def _emit_leak_roots(
     body: list[str], call: list[str], signature: Signature,
-    typedefs: dict[str, str],
+    typedefs: dict[str, str], cxx: bool = False,
 ) -> list[str]:
     """Keep everything the caller could still reach, reachable.
 
@@ -2193,7 +2218,9 @@ def _emit_leak_roots(
     allocated during the call and dropped by it.
     """
     lines: list[str] = []
-    for raw in body:
+    tag = 0
+    # The receiver of a member call is declared with the call, not before.
+    for raw in [*body, *call[:-1]]:
         line = raw.strip()
         m = _HARNESS_LOCAL_RE.match(line)
         if m is None:
@@ -2217,12 +2244,15 @@ def _emit_leak_roots(
         if nondet_for(type_, typedefs) is not None:
             continue  # a number holds no pointer
         plain = _elaborated(type_)
-        if count:
-            for index in range(min(int(count), _MAX_ROOTED_ELEMENTS)):
-                lines += [f"static {plain} {kept}_{index};",
-                          f"{kept}_{index} = {name}[{index}];"]
-        else:
-            lines += [f"static {plain} {kept};", f"{kept} = {name};"]
+        elements = ([f"{name}[{i}]" for i in range(min(int(count), _MAX_ROOTED_ELEMENTS))]
+                    if count else [name])
+        for index, element in enumerate(elements):
+            if cxx:
+                tag += 1
+                lines.append(f"VERIPP_KEEP({tag}, {element});")
+            else:
+                slot = f"{kept}_{index}" if count else kept
+                lines += [f"static {plain} {slot};", f"{slot} = {element};"]
 
     returned = signature.return_type.strip()
     if call and not signature.returns_void and call[-1].startswith("(void)"):
@@ -2238,12 +2268,16 @@ def _emit_leak_roots(
             # `while (0) int`, left behind by a macro before the function,
             # is not something to declare a variable with.
             plain = _elaborated(returned)
-            call[-1:] = [f"static {plain} {LEAK_ROOT_PREFIX}result;",
-                         f"{LEAK_ROOT_PREFIX}result = {invocation};"]
-    if not lines and not any(LEAK_ROOT_PREFIX in c for c in call):
-        return []
-    return ["", "// what a caller still holds, kept reachable for the leak check",
-            *lines] if lines else []
+            call[-1:] = ([f"VERIPP_KEEP(0, {invocation});  // {LEAK_ROOT_PREFIX}result"]
+                         if cxx else
+                         [f"static {plain} {LEAK_ROOT_PREFIX}result;",
+                          f"{LEAK_ROOT_PREFIX}result = {invocation};"])
+    # Said even when there is nothing to keep -- `int count(int n)` holds no
+    # pointer and returns none -- because the line is also how a later
+    # reader, and the triage of this run, know the harness did its part: a
+    # leak reported past it was not left reachable by anything.
+    return ["", f"// what a caller still holds, kept reachable for the leak "
+                f"check ({LEAK_ROOT_PREFIX}*)", *lines]
 
 
 _REQUIRES_RE = re.compile(r"\bVERIPP_REQUIRES\s*\(")
@@ -2556,13 +2590,32 @@ def generate_sequence(
         body.append(f"    VERIPP_ASSERT({expr});")
     body.append("}")
 
+    # The object outlives the sequence and is destroyed when main returns,
+    # so what is still allocated then and reachable from nothing was lost by
+    # the class -- `push` replacing its buffer without freeing the old one.
+    # A plain struct with no destructor is kept reachable instead, since
+    # freeing what it holds is its owner's job. Not when a method hands
+    # memory back: each call's result would have to be kept, and one slot
+    # per call site forgets the earlier ones.
+    keeps_roots = _CXX_ALLOCATES_RE.search(scrub(expanded)) and all(
+        m.returns_void or nondet_for(m.return_type, typedefs) is not None
+        for m in callable_methods
+    )
+    if keeps_roots:
+        body += ["", f"// what a caller still holds, kept reachable for the "
+                     f"leak check ({LEAK_ROOT_PREFIX}*)",
+                 f"VERIPP_KEEP(1, {_RECEIVER});"]
+
     signature = Signature(
         name=class_name, return_type="", params=[], class_name=class_name
     )
+    rendered = _render_sequence(source, info, callable_methods, body,
+                                assumptions, options)
+    if keeps_roots:
+        rendered = rendered.replace("\nint main() {",
+                                    f"\n{_CXX_KEEPER}\n\nint main() {{", 1)
     return Harness(
-        code=_set_aside_main(
-            _render_sequence(source, info, callable_methods, body,
-                             assumptions, options), text),
+        code=_set_aside_main(rendered, text),
         signature=signature,
         assumptions=assumptions,
         source=source,

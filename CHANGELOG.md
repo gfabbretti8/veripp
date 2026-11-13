@@ -44,9 +44,20 @@ scan reaches the functions that take callbacks.
   it, read back from the trace, rather than at the harness's closing brace.
   The harness of a file that cannot allocate is unchanged.
 
-  Not yet for C++: copying an object there can run a copy constructor, so
-  a C++ harness keeps nothing reachable and a leak in a C++ function is
-  still filed as an artifact. The README's limits say so.
+  C++ takes one more step, because copying an object there can run a
+  copy constructor. A trivially copyable object is kept as C keeps a
+  struct; a class with copy semantics of its own is left to its destructor,
+  which runs when the harness returns and frees what the class owns -- and
+  if it does not, that is the leak. A `--class` sequence keeps its object
+  the same way, so a `push` that replaces its buffer without freeing the
+  old one is found on the second call. The checker's trace never shows a
+  `new`, so a C++ leak allocated that way is reported at the function
+  rather than at a line.
+
+  Two shapes are still filed as artifacts: a leak in C whose allocation
+  the trace shows only inside the checker's own library model, and any
+  leak in a `--sequence` harness or in a `--class` sequence whose methods
+  hand memory back.
 
 ### Added: replaying a counterexample
 - **`--replay` runs the counterexample.** On `verify` and `scan`, the
@@ -99,6 +110,10 @@ of its two counterexamples, which no caller could produce, is gone.
   which: a function that reads through it (`**p`, `(*p)++`) gets a pointer
   to a bounded buffer, a string for character types, and one that only
   sets it gets a null to overwrite. Both were refused.
+- **Library calls made as statements are not listed as unmodelled.**
+  `strcpy(copy, s);` follows a semicolon just as a declaration does, so
+  `strcpy`, `strlen` and `free` were named in the assumptions as callees
+  whose side effects are NOT modelled, on results that modelled every one.
 - **A source with its own `main()` is harnessed.** Command-line tools,
   examples and test drivers were refused whole, with advice to wrap their
   `main` in `#if defined(VERIPP_HAS_OWN_MAIN)` -- an edit to the code under

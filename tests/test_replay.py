@@ -241,6 +241,10 @@ class TestLeakRoots:
         assert mechanical_artifact(result(None), harness) is not None
         assert mechanical_artifact(
             result(SourceLoc("/src/heap.c", 22, 5, "dup_len")), harness) is None
+        # C++ is not asked for the line: the trace never shows a `new`.
+        cxx = tmp_path / "veripp_harness_f.cpp"
+        cxx.write_text("// kept reachable (veripp_kept_*)\n", encoding="utf-8")
+        assert mechanical_artifact(result(None), cxx) is None
 
     @pytest.mark.esbmc
     def test_real_leaks_are_found_and_handed_back_memory_is_not(self, tmp_path):
@@ -359,3 +363,95 @@ class TestPointersToPointers:
         assert main(["verify", str(src), "--function", "make_out", "--no-llm"]) == 0
         assert main(["verify", str(src), "--function", "digit", "--no-llm"]) == 0
         assert main(["verify", str(src), "--function", "skip8", "--no-llm"]) == 1
+
+
+HEAP_CPP = """\
+#include <stdlib.h>
+struct Buf { char *p; int n; };
+class Stack {
+public:
+    Stack() : data_(0), size_(0) {}
+    ~Stack() { free(data_); }
+    void push(int v) {
+        int *bigger = (int *)malloc((size_ + 1) * sizeof(int));
+        if (!bigger) return;
+        for (int i = 0; i < size_; i++) bigger[i] = data_[i];
+        bigger[size_++] = v;
+        data_ = bigger;
+    }
+    int size() const { return size_; }
+private:
+    int *data_;
+    int size_;
+};
+void buf_init(Buf &b) { b.p = (char *)malloc(4); b.n = 4; }
+char *make() { return new char[4]; }
+int roundtrip(int v) { int *p = new int(v); int r = *p; delete p; return r; }
+int lose(int v) { int *p = new int(v); return *p; }
+"""
+
+
+class TestLeaksInCxx:
+    """Copying an object into a static can run a copy constructor, so C++
+    was left out at first and every C++ leak stayed an artifact. A trivially
+    copyable object is copied as C copies a struct; a class with its own
+    copy semantics has its own destructor, which is what frees its memory."""
+
+    def test_only_what_is_trivially_copyable_is_kept(self, tmp_path):
+        src = tmp_path / "heap.cpp"
+        src.write_text(HEAP_CPP, encoding="utf-8")
+        code = generate(src, "buf_init").code
+        assert "veripp_keeper<__is_trivially_copyable(__typeof__(x))>" in code
+        assert "VERIPP_KEEP(1, b_obj);" in code
+
+    def test_a_function_with_nothing_to_keep_still_says_it_looked(self, tmp_path):
+        """`int lose(int)` holds no pointer; without the line its leak was
+        still filed as the harness's own, in C as well."""
+        src = tmp_path / "heap.cpp"
+        src.write_text(HEAP_CPP, encoding="utf-8")
+        code = generate(src, "lose").code
+        assert "kept reachable for the leak check (veripp_kept_*)" in code
+        assert "VERIPP_KEEP(" not in code.split("int main()")[1]
+
+    @pytest.mark.esbmc
+    def test_new_without_delete_is_found_and_the_rest_prove(self, tmp_path):
+        from veripp.esbmc import VerifyConfig
+        from veripp.harness import HarnessOptions
+        from veripp.paths import contracts_include_dir
+        from veripp.scan import scan
+
+        src = tmp_path / "heap.cpp"
+        src.write_text(HEAP_CPP, encoding="utf-8")
+        config = VerifyConfig(timeout_s=120, include_dirs=[contracts_include_dir()])
+        report = scan(src, config, HarnessOptions(), jobs=2, retry_budget=0)
+        found = {r.name: r for r in report.counterexamples}
+        assert set(found) == {"lose"}, report.summary()
+        assert {"buf_init", "make", "roundtrip", "push", "size"} <= {
+            r.name for r in report.proved}, report.summary()
+        # The trace never shows a `new`, so it is filed at the function --
+        # in the file, not in a harness that no longer exists.
+        assert Path(found["lose"].file).name == "heap.cpp"
+        assert found["lose"].line == 22
+
+    @pytest.mark.esbmc
+    def test_a_sequence_finds_the_block_push_never_frees(self, tmp_path, capsys):
+        """One push on a fresh Stack leaks nothing. The second one does."""
+        from veripp.cli import main
+
+        src = tmp_path / "heap.cpp"
+        src.write_text(HEAP_CPP, encoding="utf-8")
+        assert main(["verify", str(src), "--class", "Stack", "--no-llm"]) == 1
+        out = capsys.readouterr().out
+        assert "forgotten memory" in out and "in push" in out
+
+    @pytest.mark.esbmc
+    def test_a_scalar_only_leak_in_c_is_found(self, tmp_path, capsys):
+        from veripp.cli import main
+
+        src = tmp_path / "l.c"
+        src.write_text(
+            "#include <stdlib.h>\n"
+            "int lose(int v) { int *p = malloc(sizeof *p); if (!p) return 0;"
+            " *p = v; return *p; }\n", encoding="utf-8")
+        assert main(["verify", str(src), "--function", "lose", "--no-llm"]) == 1
+        assert "allocated at" in capsys.readouterr().out

@@ -382,11 +382,12 @@ false-positive triage and reproduction commands are in
   help sort them.
 - **Verification is bounded.** A proof covers executions within the stated
   bounds only.
-- **Leaks are reported for C, not yet for C++.** A leak is memory the
-  function allocated and can no longer be reached through its return value,
-  its arguments or a global when it returns. A C++ harness cannot yet keep
-  those reachable, so a leak in a C++ function is filed as a harness
-  artifact rather than reported.
+- **A leak is memory the function lost.** It is reported when what the
+  function allocated can no longer be reached through its return value, its
+  arguments or a global once it returns. A C++ leak made with `new` is
+  reported at the function, not at a line, because the checker's trace does
+  not show the allocation. Leaks in `--sequence` harnesses are not reported
+  yet.
 - **Only C and C-like C++ work.** ESBMC's C++ frontend doesn't handle
   STL-heavy code. For example, tinyxml2 crashes it and jsoncpp won't parse.
 - **Coverage varies by file.** Types defined outside the translation unit

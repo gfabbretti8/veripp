@@ -258,6 +258,7 @@ class AgentReport:
         prop = self.final.violated_property
         if prop:
             lines.append(f"Violated property: {prop.description}")
+            unlocated_leak = False
             if prop.allocated_at is not None:
                 # The checker's own location for a leak is where the program
                 # ends, which in a harness is a line nobody wrote.
@@ -265,6 +266,14 @@ class AgentReport:
                     f"  allocated at {display_loc(prop.allocated_at)}, and "
                     "out of reach when the call returns: not freed, not "
                     "returned, not left in an argument or a global")
+            elif "forgotten memory" in prop.description and os.path.basename(
+                    prop.loc.file).startswith("veripp_harness_"):
+                lines.append(
+                    "  allocated during the call, and out of reach when it "
+                    "returns: not freed, not returned, not left in an "
+                    "argument or a global (the checker's trace does not show "
+                    "the allocating line)")
+                unlocated_leak = True
             else:
                 lines.append(f"  at {display_loc(prop.loc)}")
             if prop.loc.in_checker_model and prop.allocated_at is None:
@@ -274,7 +283,8 @@ class AgentReport:
                     "  (inside the checker's model of a library call; the "
                     "trace does not show which line called it)"
                 )
-            lines += source_excerpt(prop.user_loc)
+            if not unlocated_leak:
+                lines += source_excerpt(prop.user_loc)
             if prop.expression:
                 lines.append(f"  guard: {prop.expression}")
             if prop.cwes:
