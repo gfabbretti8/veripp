@@ -331,9 +331,15 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
     # allocator -- is not a line anyone can be pointed at, and stays with
     # the rule below. C++ gets no such test: the checker's trace never
     # shows a `new`, so asking for the line would discard every C++ leak.
+    # Even then not in a unit that reallocates: the checker's realloc model
+    # leaves its own new block behind on the path where it reports failure,
+    # which has no line either, and lodepng's ucvector_resize was reported
+    # for it.
     if ("forgotten memory" in prop.description
             and _keeps_leak_roots(harness_path)
-            and (prop.allocated_at is not None or harness_path.suffix != ".c")):
+            and (prop.allocated_at is not None
+                 or (harness_path.suffix != ".c"
+                     and not _unit_reallocates(harness_path)))):
         return None
     # A property that fails inside the generated file, rather than in the code
     # under test, is by definition about the harness. `veripp verify FILE`
@@ -350,6 +356,22 @@ def mechanical_artifact(result: VerifyResult, harness_path: Path) -> str | None:
             "the code under test"
         )
     return None
+
+
+def _unit_reallocates(harness_path: Path) -> bool:
+    """Whether the source a harness includes calls anything named realloc."""
+    try:
+        code = harness_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    for included in re.findall(r'^#include "(/[^"\n]+)"', code, re.M):
+        try:
+            text = Path(included).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return True  # cannot tell, so do not vouch for the leak
+        if re.search(r"\w*realloc\w*\s*\(", text):
+            return True
+    return False
 
 
 def _keeps_leak_roots(harness_path: Path) -> bool:

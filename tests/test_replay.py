@@ -230,9 +230,9 @@ class TestLeakRoots:
         harness = tmp_path / "veripp_harness_f.c"
         harness.write_text("static const void *veripp_kept_result;\n", encoding="utf-8")
 
-        def result(allocated_at):
+        def result(allocated_at, where=harness):
             prop = ViolatedProperty(
-                loc=SourceLoc(str(harness), 39, 1, "main"),
+                loc=SourceLoc(str(where), 39, 1, "main"),
                 description="dereference failure: forgotten memory: dynamic_2_array",
                 allocated_at=allocated_at)
             return VerifyResult(outcome=Outcome.COUNTEREXAMPLE, config=VerifyConfig(),
@@ -243,8 +243,16 @@ class TestLeakRoots:
             result(SourceLoc("/src/heap.c", 22, 5, "dup_len")), harness) is None
         # C++ is not asked for the line: the trace never shows a `new`.
         cxx = tmp_path / "veripp_harness_f.cpp"
-        cxx.write_text("// kept reachable (veripp_kept_*)\n", encoding="utf-8")
-        assert mechanical_artifact(result(None), cxx) is None
+        plain = tmp_path / "plain.cpp"
+        plain.write_text("int *make() { return new int(1); }\n", encoding="utf-8")
+        cxx.write_text(f'#include "{plain}"\n// kept reachable (veripp_kept_*)\n',
+                       encoding="utf-8")
+        assert mechanical_artifact(result(None, cxx), cxx) is None
+        # ...unless the unit reallocates: the checker's realloc model leaves
+        # a block of its own behind when it reports failure, with no line.
+        plain.write_text("void *grow(void *p) { return realloc(p, 8); }\n",
+                         encoding="utf-8")
+        assert mechanical_artifact(result(None, cxx), cxx) is not None
 
     @pytest.mark.esbmc
     def test_real_leaks_are_found_and_handed_back_memory_is_not(self, tmp_path):

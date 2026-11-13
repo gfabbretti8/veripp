@@ -54,8 +54,10 @@ scan reaches the functions that take callbacks.
   `new`, so a C++ leak allocated that way is reported at the function
   rather than at a line.
 
-  Two shapes are still filed as artifacts: a leak in C whose allocation
-  the trace shows only inside the checker's own library model, and any
+  Three shapes are still filed as artifacts: a leak in C whose allocation
+  the trace shows only inside the checker's own library model; a leak with
+  no line in a C++ file that calls `realloc`, whose model in the checker
+  leaves a block of its own behind when it reports failure; and any
   leak in a `--sequence` harness or in a `--class` sequence whose methods
   hand memory back.
 
