@@ -138,6 +138,9 @@ of its two counterexamples, which no caller could produce, is gone.
   and the reasons, as a single-file scan always did, and lists the
   counterexamples themselves, ranked across files, each with its line --
   instead of file names and one command to run per finding.
+- **A scan prints each result when it is ready.** Progress came in source
+  order, so one function running to its timeout held back every result
+  behind it and a scan that was half done sat on `[1/144]` for minutes.
 - **The harness's own `main` is not a caller.** When the function under
   test assigns nothing before a failing library call, the last state in the
   trace outside the checker's model is the harness filling its inputs, and

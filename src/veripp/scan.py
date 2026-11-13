@@ -717,7 +717,13 @@ def scan(
         )
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        for done, result in enumerate(pool.map(one, names), start=1):
+        # As each finishes, not in source order: in order, one function that
+        # runs to its timeout holds back every result behind it, and a scan
+        # that is half done sits on `[1/144]` for two minutes looking stuck.
+        # The report is sorted by name below either way.
+        pending = [pool.submit(one, name) for name in names]
+        for done, future in enumerate(cf.as_completed(pending), start=1):
+            result = future.result()
             report.results.append(result)
             if progress is not None:
                 progress(done, len(names), result)
