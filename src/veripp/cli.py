@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 import shutil
@@ -232,8 +233,9 @@ def main(argv: list[str] | None = None) -> int:
     # gives the cheapest timeouts their 120 seconds anyway.
     s.set_defaults(timeout=SCAN_TIMEOUT_S)
     s.add_argument(
-        "--jobs", "-j", type=int, default=4,
-        help=_adv("parallel verifications"),
+        "--jobs", "-j", type=int, default=default_jobs(),
+        help=_adv("parallel verifications (default: one per core, at most "
+                  "one per 2 GB of memory)"),
     )
     s.add_argument(
         "--no-llm",
@@ -355,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="why these are being accepted; recorded on every entry")
     _add_common_args(a, source_optional=True)
     a.set_defaults(timeout=SCAN_TIMEOUT_S)
-    a.add_argument("--jobs", type=int, default=4, help="parallel verifications")
+    a.add_argument("--jobs", type=int, default=default_jobs(),
+                   help="parallel verifications")
     a.add_argument("--escalations", type=int, default=1,
                    help=_adv("extra attempts with larger bounds"))
     a.add_argument("--quiet", action="store_true", help="only the summary")
@@ -505,6 +508,24 @@ def main(argv: list[str] | None = None) -> int:
 #: --help and live behind --help-all. Nothing is removed; the surface a
 #: newcomer must read drops to the handful of flags that express intent.
 _SHOW_ADVANCED = False
+
+
+def default_jobs() -> int:
+    """How many checkers a scan runs at once when nobody says.
+
+    One per core, which on the eight- and sixteen-core machines people
+    develop on is two to four times the fixed 4 this used to be -- but no
+    more than the memory allows. A checker deep in a hard function holds
+    gigabytes, and on a 15 GB machine eight of them had the kernel killing
+    processes; allowing 2 GB each keeps a scan from taking the machine down
+    to finish sooner.
+    """
+    cores = os.cpu_count() or 4
+    try:
+        gigabytes = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2**30
+    except (ValueError, OSError, AttributeError):
+        return min(cores, 4)
+    return max(1, min(cores, int(gigabytes // 2)))
 
 
 #: Per-function timeout of a scan's first pass, in seconds.

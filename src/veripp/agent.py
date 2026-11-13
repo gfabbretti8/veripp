@@ -814,8 +814,18 @@ def probe_reachability(harness: Path, config: VerifyConfig) -> tuple[str, str]:
         code = read_source(harness)
     except OSError as exc:
         return UNCONFIRMED, f"could not read {harness}: {exc}"
+    # With every other check off. The probe asks one thing -- can execution
+    # get to the end -- and the checks are assertions, not assumptions, so
+    # they cannot change the answer: the run this follows already showed
+    # that none of them fails. Leaving them on made the probe build and
+    # solve the whole proof a second time to find one reachable path, which
+    # doubled the cost of every proved function.
     probe_config = replace(
-        config, defines=[*config.defines, REACHABILITY_PROBE_MACRO]
+        config, defines=[*config.defines, REACHABILITY_PROBE_MACRO],
+        overflow_check=False, unsigned_overflow_check=False,
+        bounds_check=False, pointer_check=False, div_by_zero_check=False,
+        memory_leak_check=False, uninitialised_check=False,
+        ub_shift_check=False, nan_check=False, multi_property=False,
     )
     workdir: Path | None = None
     if has_reachability_marker(code):

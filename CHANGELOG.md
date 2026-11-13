@@ -145,6 +145,12 @@ of its two counterexamples, which no caller could produce, is gone.
   in a tool error, on a 15 GB machine that had killed checker processes
   for memory earlier the same day. The retry pass still gives the cheapest timeouts
   four times as long, `--timeout` sets it, and `verify` keeps 120.
+- **A scan runs one checker per core**, and no more than one per 2 GB of
+  memory, instead of a fixed four. `--jobs` still sets it.
+- **The reachability probe asks only its own question.** Every proof is
+  re-run with an assertion that must fail, to show the harness reached the
+  call at all. That run had every other check on, so it built and solved
+  the whole proof a second time to find one path to the end.
 - **A scan prints each result when it is ready.** Progress came in source
   order, so one function running to its timeout held back every result
   behind it and a scan that was half done sat on `[1/144]` for minutes.
