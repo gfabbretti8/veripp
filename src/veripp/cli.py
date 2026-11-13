@@ -226,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
         help="verify every function in a file that veripp can harness",
     )
     _add_common_args(s, source_optional=True)
+    # A quarter of what `verify` allows one function. Measured on parson's
+    # 144: at 120 seconds the first pass took 36 minutes and settled five
+    # more functions than the 9 minutes it takes at 30 -- and the retry pass
+    # gives the cheapest timeouts their 120 seconds anyway.
+    s.set_defaults(timeout=SCAN_TIMEOUT_S)
     s.add_argument(
         "--jobs", "-j", type=int, default=4,
         help=_adv("parallel verifications"),
@@ -349,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--reason", default="",
                    help="why these are being accepted; recorded on every entry")
     _add_common_args(a, source_optional=True)
+    a.set_defaults(timeout=SCAN_TIMEOUT_S)
     a.add_argument("--jobs", type=int, default=4, help="parallel verifications")
     a.add_argument("--escalations", type=int, default=1,
                    help=_adv("extra attempts with larger bounds"))
@@ -501,6 +507,10 @@ def main(argv: list[str] | None = None) -> int:
 _SHOW_ADVANCED = False
 
 
+#: Per-function timeout of a scan's first pass, in seconds.
+SCAN_TIMEOUT_S = 30
+
+
 def _adv(help_text: str) -> str:
     """Mark a flag as advanced: still parsed, hidden unless --help-all."""
     return help_text if _SHOW_ADVANCED else argparse.SUPPRESS
@@ -568,7 +578,9 @@ def _add_common_args(p: argparse.ArgumentParser, require_function: bool = False,
         ),
     )
     bounds.add_argument(
-        "--timeout", type=int, default=120, help=_adv("per-attempt timeout (s)")
+        "--timeout", type=int, default=120,
+        help=_adv("per-attempt timeout in seconds (default: 120 for verify, "
+                  "30 for a scan's first pass)")
     )
     build.add_argument("--std", default=_DEFAULT_STD, help=_adv("language standard"))
     bounds.add_argument(

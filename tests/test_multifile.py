@@ -335,7 +335,17 @@ class TestOneConfiguration:
     def test_verify_and_scan_hand_the_checker_the_same_configuration(
         self, tmp_path, monkeypatch
     ):
+        from dataclasses import replace
+
         verify, scan = self._configs(tmp_path, monkeypatch, database=self.DATABASE)
+        # What is checked, and against which build, is the same. How long
+        # one function may take is not: a scan runs hundreds and gives each
+        # a quarter of what `verify` gives its one.
+        assert (verify.timeout_s, scan.timeout_s) == (120, 30)
+        assert replace(verify, timeout_s=0) == replace(scan, timeout_s=0)
+
+    def test_an_explicit_timeout_is_the_same_for_both(self, tmp_path, monkeypatch):
+        verify, scan = self._configs(tmp_path, monkeypatch, "--timeout", "45")
         assert verify == scan
 
     def test_database_include_dirs_are_passed_once(self, tmp_path, monkeypatch):

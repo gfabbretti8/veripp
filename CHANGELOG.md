@@ -138,6 +138,12 @@ of its two counterexamples, which no caller could produce, is gone.
   and the reasons, as a single-file scan always did, and lists the
   counterexamples themselves, ranked across files, each with its line --
   instead of file names and one command to run per finding.
+- **A scan gives each function 30 seconds on its first pass, not 120.**
+  Measured on parson's 144 functions on four cores: at 120 the first pass
+  took 36 minutes, at 30 it took 9, and the longer one settled five more
+  functions (two proofs, three counterexamples) while thirteen runs died
+  for lack of memory. The retry pass still gives the cheapest timeouts
+  four times as long, `--timeout` sets it, and `verify` keeps 120.
 - **A scan prints each result when it is ready.** Progress came in source
   order, so one function running to its timeout held back every result
   behind it and a scan that was half done sat on `[1/144]` for minutes.
