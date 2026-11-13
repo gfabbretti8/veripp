@@ -141,8 +141,9 @@ of its two counterexamples, which no caller could produce, is gone.
 - **A scan gives each function 30 seconds on its first pass, not 120.**
   Measured on parson's 144 functions on four cores: at 120 the first pass
   took 36 minutes, at 30 it took 9, and the longer one settled five more
-  functions (two proofs, three counterexamples) while thirteen runs died
-  for lack of memory. The retry pass still gives the cheapest timeouts
+  functions (two proofs, three counterexamples) while thirteen runs ended
+  in a tool error, on a 15 GB machine that had killed checker processes
+  for memory earlier the same day. The retry pass still gives the cheapest timeouts
   four times as long, `--timeout` sets it, and `verify` keeps 120.
 - **A scan prints each result when it is ready.** Progress came in source
   order, so one function running to its timeout held back every result
