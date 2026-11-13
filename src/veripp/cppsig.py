@@ -1269,17 +1269,44 @@ def unresolved_callees(source: str, body: str) -> list[str]:
             for m in re.finditer(
                 _DECLARED_RE_TEMPLATE.format(name=re.escape(name)), scrubbed_source
             ):
-                head = scrubbed_source[max(0, m.start() - 60) : m.start()].rstrip()
-                if head and head[-1] in "=(,&|!+-*/<>?:{};" and not head.endswith(";"):
-                    continue  # a call in an expression, not a declaration
-                if re.search(r"\b(?:return|else|do|case|goto)\s*$", head):
-                    # `return memcmp(a, b, n);` is a call too: memcmp has no
-                    # declaration in the unit (it comes from <string.h>), and
-                    # the checker's own model gives it a body.
+                head = scrubbed_source[max(0, m.start() - 160) : m.start()]
+                if not _reads_as_a_declaration(head):
                     continue
                 unresolved.append(name)
                 break
     return unresolved
+
+
+#: What comes before the name in a declaration: the start of a statement,
+#: then nothing but a return type -- `static const char *`, `void`.
+_DECLARATION_HEAD_RE = re.compile(
+    r"(?:^|[;{}]|\*/|\n[ \t]*#[^\n]*\n)\s*((?:[A-Za-z_][\w:]*[\s\*&]+)+)$"
+)
+_NOT_A_TYPE_WORD = {
+    "return", "else", "do", "case", "goto", "new", "delete", "throw",
+    "sizeof", "typedef",
+}
+
+
+def _reads_as_a_declaration(head: str) -> bool:
+    """Whether the text before `name(...);` makes it a declaration.
+
+        void normalize(Box *b);          a declaration
+        x = normalize(b);                a call
+        strcpy(copy, s);                 a call, and a statement of its own
+        n = (int)strlen(copy);           a call behind a cast
+        return memcmp(a, b, n);          a call
+
+    A statement-level call used to pass for a declaration, because both
+    follow a `;` or a brace. So `strcpy`, `strlen` and `free` -- which have
+    no declaration in the unit and a body in the checker's model -- were
+    listed as callees whose side effects are NOT modelled, on results that
+    modelled every one of them.
+    """
+    m = _DECLARATION_HEAD_RE.search(head)
+    if m is None:
+        return False
+    return not (set(re.findall(r"[A-Za-z_]\w*", m.group(1))) & _NOT_A_TYPE_WORD)
 
 
 _NOT_A_CALL = {

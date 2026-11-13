@@ -388,3 +388,29 @@ class TestOneConfiguration:
         main(["verify", str(src), "--function", "inc", "--no-llm"])
         out = capsys.readouterr().out
         assert "std=c11" in out and "std=c++17" not in out
+
+
+class TestACallIsNotADeclaration:
+    """`strcpy(copy, s);` follows a `;` just as `void f(int);` does."""
+
+    SRC = (
+        "#include <stdlib.h>\n#include <string.h>\n"
+        "int helper(int);\n"
+        "static const char *name_of(int kind);\n"
+        "int dup_len(const char *s) {\n"
+        "    char *copy = malloc(strlen(s) + 1);\n"
+        "    if (!copy) return -1;\n"
+        "    strcpy(copy, s);\n"
+        "    int n = (int)strlen(copy);\n"
+        "    free(copy);\n"
+        "    if (n) puts(name_of(n));\n"
+        "    else abort();\n"
+        "    return helper(n);\n"
+        "}\n"
+    )
+
+    def test_library_calls_as_statements_are_not_listed(self):
+        from veripp.cppsig import find_function, unresolved_callees
+
+        body = find_function(self.SRC, "dup_len").body
+        assert unresolved_callees(self.SRC, body) == ["name_of", "helper"]
