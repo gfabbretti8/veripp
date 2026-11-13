@@ -1339,7 +1339,10 @@ def _emit_pointer_slot(
     reads_through = re.search(
         rf"\*\s*\*\s*{n}\b|\*\s*\(\s*\*\s*{n}\b"
         rf"|\(\s*\*\s*{n}\s*\)\s*(?:\[|\+\+|--|->)"
-        rf"|(?:\+\+|--)\s*\(?\s*\*\s*{n}\b|\*\s*{n}\s*(?:\+=|-=|\[)",
+        rf"|(?:\+\+|--)\s*\(?\s*\*\s*{n}\b|\*\s*{n}\s*(?:\+=|-=|\[)"
+        # ...or taken into a local that is then written through, which is
+        # how parson's parse_utf16 spells it: `char *out = *processed;`.
+        rf"|(?<![=!<>])=\s*\*\s*{n}\s*;",
         scrubbed)
     # Handed on as it is: whoever receives it may read through it.
     passed_on = re.search(rf"[(,]\s*{n}\s*[,)]", scrubbed) and not re.search(

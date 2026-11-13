@@ -362,6 +362,15 @@ class TestPointersToPointers:
         assert "const char * p_slot = p_buf;" in harness.code
         assert any("reads through it" in a for a in harness.assumptions)
 
+    def test_a_slot_copied_into_a_local_is_read_through(self, tmp_path):
+        """parson's parse_utf16: `char *out = *processed; *out++ = c;`."""
+        src = tmp_path / "u.c"
+        src.write_text("void put(char **processed, char c) {\n"
+                       "    char *out = *processed;\n    *out = c;\n"
+                       "    *processed = out;\n}\n", encoding="utf-8")
+        harness = generate(src, "put")
+        assert "char * processed_slot = processed_buf;" in harness.code
+
     @pytest.mark.esbmc
     def test_they_verify_and_the_overrun_does_not(self, tmp_path, capsys):
         from veripp.cli import main
