@@ -89,6 +89,12 @@ run, and refuses to back results from one that cannot detect a planted bug.
   sorted by name, so it could send the reader to a static helper while an
   entry point's finding sat at the top of the list above it. When that
   finding was reached through a caller, the hint says which.
+- **A declined triage request is an error, not an answer.** The
+  Anthropic API reports a request its safety classifiers decline as a
+  successful response with no text, and veripp read the empty text as a
+  classification. A prompt quoting an out-of-bounds write is the kind
+  that can be declined, so the finding now says triage was unavailable
+  and why, as it does for a rate limit.
 
 ### Changed: the project
 - **The package type-checks, and CI keeps it so.** `mypy src` reported 34

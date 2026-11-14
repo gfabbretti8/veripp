@@ -381,3 +381,45 @@ def test_classify_prompt_names_the_over_permissive_object_case(context):
         system = server.requests[0]["payload"]["messages"][0]["content"]
     assert "independently" in system and "invariants forbid" in system
     assert "merely looks extreme is not a real_bug" in system
+
+
+class TestADeclinedRequestIsNotAnAnswer:
+    """The API reports a declined request as a 200 with no text. veripp sends
+    counterexamples about memory corruption, which is what a safety
+    classifier may decline, and an empty reply used to be parsed as a
+    classification."""
+
+    def _client(self, message):
+        from types import SimpleNamespace
+
+        from veripp.llm import AnthropicLLM
+
+        llm = AnthropicLLM.__new__(AnthropicLLM)
+        errors = type("E", (Exception,), {})
+        llm._anthropic = SimpleNamespace(
+            AuthenticationError=errors, RateLimitError=errors,
+            APIStatusError=errors, APIConnectionError=errors)
+        llm._client = SimpleNamespace(messages=SimpleNamespace(
+            create=lambda **kwargs: message))
+        llm._model = "m"
+        return llm
+
+    def test_a_refusal_is_an_error_naming_its_category(self):
+        from types import SimpleNamespace
+
+        from veripp.llm import LLMError
+
+        declined = SimpleNamespace(
+            stop_reason="refusal", content=[],
+            stop_details=SimpleNamespace(category="cyber"))
+        with pytest.raises(LLMError, match=r"declined to triage this \(cyber\)"):
+            self._client(declined)._ask("system", "user")
+
+    def test_an_ordinary_reply_is_still_its_text(self):
+        from types import SimpleNamespace
+
+        reply = SimpleNamespace(
+            stop_reason="end_turn",
+            content=[SimpleNamespace(type="thinking", thinking=""),
+                     SimpleNamespace(type="text", text="real_bug")])
+        assert self._client(reply)._ask("system", "user") == "real_bug"

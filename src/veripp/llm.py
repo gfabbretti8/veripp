@@ -306,6 +306,17 @@ class AnthropicLLM(PromptedLLM):
             raise LLMError("could not reach the Anthropic API") from exc
         except TypeError as exc:  # SDK raises this when auth resolves to nothing
             raise LLMError(f"Anthropic client is not usable: {exc}") from exc
+        if getattr(msg, "stop_reason", None) == "refusal":
+            # A declined request comes back as a 200 with no text. Read as
+            # an answer it is an empty classification, which fell through to
+            # the default label as if a model had judged the finding -- and
+            # a prompt that quotes an out-of-bounds write is exactly what a
+            # safety classifier may decline.
+            category = getattr(getattr(msg, "stop_details", None), "category", None)
+            raise LLMError(
+                "the model declined to triage this"
+                + (f" ({category})" if category else "")
+            )
         return "".join(b.text for b in msg.content if b.type == "text")
 
 
