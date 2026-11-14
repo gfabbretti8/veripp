@@ -107,7 +107,9 @@ user they have a bug:
    the same line fail and prints the inputs to it, which is the thing step
    4 asks for. Functions under `NO CALLER REACHES` fail when called
    directly but through none of their callers, within the same bounds:
-   report them as unenforced preconditions at most, not as bugs.
+   report them as unenforced preconditions at most, not as bugs -- and
+   say that each caller was checked within its own harness bounds, which
+   can leave out the state that fails.
    `whether a caller reaches it is not settled` means a caller timed out
    or could not be harnessed; give it longer with `--caller-budget 600`
    (default 120 seconds; `--caller-budget 0` skips the question).

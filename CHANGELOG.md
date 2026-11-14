@@ -55,16 +55,26 @@ run, and refuses to back results from one that cannot detect a planted bug.
 - External functions are left alone: their callers live in translation
   units a scan of one file never sees, so nothing found here could clear
   them.
+- **Measured on cJSON and parson** (`--timeout 10`, 4-core container).
+  Three counterexamples in static functions were asked. parson's
+  `json_object_init` -- the allocation-size overflow the field report
+  filed as unreachable after reading its one call site by hand -- is
+  cleared: neither `json_object_make` nor `json_object_grow_and_rehash`
+  makes the line fail, and both get into the function. That is the
+  field report's conclusion, reached for a narrower reason, and the
+  difference matters: the report read that the capacity would need a
+  2^64-byte allocation to have succeeded, while the rehash's harness
+  bounds `cell_capacity` to 4, so the capacity that overflows was never
+  among the states it was given. "No caller reaches it" means within the
+  callers' harness bounds, which are printed by `veripp harness` for
+  each caller and can exclude the very state in question. cJSON's
+  `print_number` and `update_offset` are not settled: their callers are
+  the recursive printers, which time out, and `print`, which veripp
+  cannot harness.
 - **What it does not do: make an expensive caller cheap.** A caller's
   run gets four times the function's own timeout and shares the budget.
-  Measured on cJSON and parson with `--timeout 10` on a 4-core container,
-  three counterexamples in static functions were asked (`print_number`,
-  `update_offset`, `json_object_init`) and none settled: their callers
-  are cJSON's recursive printers and parson's rehash, which time out, and
-  `print`, which veripp cannot harness. `json_object_init` got one of its
-  two callers cleared (`json_object_make`, with `--timeout 200`) and the
-  other timed out. The pass decides helpers whose callers the checker can
-  finish; where it cannot, the report says which caller and why.
+  The pass decides helpers whose callers the checker can finish; where it
+  cannot, the report says which caller and why.
 
 ## 0.7.0
 

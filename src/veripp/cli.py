@@ -2065,7 +2065,10 @@ def _ask_callers(args, report: AgentReport, harness: Harness, target: Path):
         print(f"note: `{sig.name}` is static; asking its callers whether "
               "they reach this (--caller-budget 0 to skip)", file=sys.stderr)
     try:
-        return escalate(args.source, sig.name, prop, report.final.config,
+        # Under the bounds the run was started with, as `scan` asks: the
+        # agent loop may have ended on incremental BMC or a wider unwind,
+        # and a caller asked that way is a different, slower question.
+        return escalate(args.source, sig.name, prop, _config_for(args),
                         _harness_options(args), args._scratch,
                         budget_s=budget)
     except Exception as exc:   # an extra question must not cost the answer

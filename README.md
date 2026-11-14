@@ -220,7 +220,10 @@ until it gets to an externally visible function:
 caller reaches is counted on its own row (`NO CALLER REACHES`), outside
 the counterexamples, and does not fail the scan. That verdict is as
 bounded as a proof: each caller was checked within its own harness
-bounds, and its harness was shown to get into the helper at all. Anything
+bounds, and its harness was shown to get into the helper at all. Those
+bounds can exclude the state that fails -- a caller whose buffer is capped
+at four elements never passes a length of 2^62 -- so read
+`veripp harness FILE --function CALLER` before treating one as closed. Anything
 less is reported as not settled and stays a counterexample: a caller that
 timed out or could not be harnessed, a call from a macro, a function whose
 address is taken. `verify` asks the same question of a static function and
