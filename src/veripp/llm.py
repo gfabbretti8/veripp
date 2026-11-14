@@ -84,6 +84,9 @@ class _CapRefused(Exception):
 
 
 class LLMClient(Protocol):
+    #: Named in the note that says which service triage went to.
+    PROVIDER: str
+
     def classify(self, context: TriageContext) -> str: ...
 
     def explain(self, context: TriageContext) -> str: ...
@@ -264,7 +267,7 @@ class AnthropicLLM(PromptedLLM):
 
     def __init__(self, model: str | None = None):
         try:
-            import anthropic
+            import anthropic  # type: ignore[import-not-found]  # optional extra
         except ImportError as exc:
             raise RuntimeError(
                 "the `anthropic` package is not installed "

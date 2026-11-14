@@ -70,6 +70,11 @@ veripp = ["include/veripp/*.hpp"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.mypy]
+# The oldest Python veripp supports: an API newer than this is an error
+# here rather than an AttributeError on someone's 3.10.
+python_version = "3.10"
+
 [tool.ruff]
 # The requires-python floor. Syntax newer than this -- a PEP 701 f-string
 # reusing its own quote, say -- is a syntax error here rather than a

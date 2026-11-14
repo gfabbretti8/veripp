@@ -375,16 +375,20 @@ class ScanReport:
         where = self.source
 
         if self.counterexamples:
-            rank = {"real_bug": 0, None: 1, "harness_issue": 2,
-                    "missing_assumption": 2}
-            first = sorted(
-                self.counterexamples,
-                key=lambda r: (rank.get(r.triage_kind, 1), r.name),
-            )[0]
+            # The one the list above puts first: the hint used to sort by
+            # name, and sent the reader to a static helper while an entry
+            # point's finding sat at the top of the list.
+            first = ranked_counterexamples(self.counterexamples)[0]
             nudge = (
                 f"  next:  veripp verify {where} --function {first.name}\n"
-                "         to see the failing input. A counterexample holds in the\n"
-                "         generated harness; check a caller can really reach it."
+                "         to see the failing input. "
+                + (f"`{first.reached_from[0]}` reaches it with the\n"
+                   "         inputs above; check that a caller of that can "
+                   "pass them."
+                   if first.caller_reach == "reached" and first.reached_from
+                   else "A counterexample holds in the\n"
+                   "         generated harness; check a caller can really "
+                   "reach it.")
             )
             # When most of the counterexamples are in functions handed an
             # object the harness filled field by field, the likelier story
@@ -542,7 +546,7 @@ def finding_tags(r: "FunctionResult") -> str:
     }.get(r.replay)
     parts = [part for part in (replayed, r.access, r.reach_note(),
                                r.harness_null, r.harness_bound,
-                               _TRIAGE_TAGS.get(r.triage_kind))
+                               _TRIAGE_TAGS.get(r.triage_kind or ""))
              if part]
     return f"  [{'; '.join(parts)}]" if parts else ""
 

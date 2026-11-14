@@ -234,7 +234,7 @@ def install(
     from .esbmc import check_soundness
 
     source = source or source_for()
-    if not source.available:
+    if not source.available or source.url is None:
         return InstallResult(path=None, error=source.unavailable_reason)
 
     dest = dest or managed_dir()

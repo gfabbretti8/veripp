@@ -36,6 +36,7 @@ import re
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from .cppsig import SignatureError, _define_spans, definition_spans, scrub
 from .esbmc import (
@@ -151,6 +152,7 @@ def _narrowed(config: VerifyConfig, description: str) -> VerifyConfig:
     about one array index in the callee.
     """
     text = description.lower()
+    on: dict[str, bool]
     off = dict(overflow_check=False, unsigned_overflow_check=False,
                bounds_check=False, pointer_check=False,
                div_by_zero_check=False, memory_leak_check=False,
@@ -173,7 +175,8 @@ def _narrowed(config: VerifyConfig, description: str) -> VerifyConfig:
         on = dict(bounds_check=True, pointer_check=True)
     else:
         return config          # not one this knows how to isolate
-    return replace(config, **{**off, **on})
+    flags: dict[str, Any] = {**off, **on}
+    return replace(config, **flags)
 
 
 def _inputs_for(result: VerifyResult, target) -> list[str]:

@@ -333,7 +333,9 @@ def match_bracket(text: str, start: int) -> int:
 
 def split_top_level(text: str, sep: str = ",") -> list[str]:
     """Split on `sep`, ignoring separators nested in (), [], {} or <>."""
-    parts, depth, current = [], 0, []
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
     for ch in text:
         if ch in "([{<":
             depth += 1
@@ -685,6 +687,23 @@ def _decl_head(scrubbed: str, name_start: int) -> tuple[int, bool]:
             break
         i -= 1
     start = i + 1
+    if after_colon:
+        # The colon may be inside a directive: cJSON defines
+        # `#define cjson_min(a, b) (((a) < (b)) ? (a) : (b))` on the line
+        # before `static unsigned char *print(...)`, and the tail of that
+        # macro, parentheses and all, was read as print's return type and
+        # then as a constructor's initialiser list. The directive ends at
+        # the end of its line, and so does anything the colon started.
+        line_start = scrubbed.rfind("\n", 0, i) + 1
+        # ...and a directive continued with a backslash starts lines above.
+        while line_start > 0 and scrubbed[:line_start - 1].rstrip(" \t").endswith("\\"):
+            line_start = scrubbed.rfind("\n", 0, line_start - 1) + 1
+        if scrubbed[line_start:i].lstrip().startswith("#"):
+            line_end = scrubbed.find("\n", i)
+            while line_end != -1 and scrubbed[:line_end].rstrip(" \t").endswith("\\"):
+                line_end = scrubbed.find("\n", line_end + 1)
+            if line_end != -1 and line_end < name_start:
+                start, after_colon = line_end + 1, False
     # A preprocessor directive also ends whatever came before it: without this,
     # a file whose first function follows an #include has the directive text
     # swept into its return type.

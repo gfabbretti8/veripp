@@ -76,6 +76,27 @@ run, and refuses to back results from one that cannot detect a planted bug.
   The pass decides helpers whose callers the checker can finish; where it
   cannot, the report says which caller and why.
 
+### Fixed
+- **A `?:` in the macro above a function no longer gets the function
+  refused.** cJSON defines `cjson_min(a, b)` with a conditional on the
+  line before `static unsigned char *print(...)`. The scan back from the
+  name stopped at that colon, read the rest of the macro as the return
+  type, saw its parentheses and refused `print` as "an entry in a
+  constructor initialiser list" -- in a C file, for the function every
+  printer in cJSON is reached through. A colon inside a preprocessor
+  directive, continued lines included, now ends with the directive.
+- **The scan's `next:` hint names the finding the list puts first.** It
+  sorted by name, so it could send the reader to a static helper while an
+  entry point's finding sat at the top of the list above it. When that
+  finding was reached through a caller, the hint says which.
+
+### Changed: the project
+- **The package type-checks, and CI keeps it so.** `mypy src` reported 34
+  errors that nothing ran: result fields typed `object`, a variable
+  reused for two types, an optional URL passed where a string was
+  required. All are fixed and `uvx mypy@2.3.1 src` runs beside ruff,
+  against Python 3.10, the oldest veripp supports.
+
 ## 0.7.0
 
 Results fail closed where they used to fail open, the checker arrives with

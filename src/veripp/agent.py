@@ -19,8 +19,10 @@ import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from . import term
+from .callers import Escalation
 from .cppsig import scrub
 from .esbmc import Outcome, VerifyConfig, VerifyResult, run
 from .harness import (
@@ -33,6 +35,9 @@ from .harness import (
 )
 from .llm import LLMClient, LLMError, NullLLM
 from .paths import read_source
+if TYPE_CHECKING:
+    from .repro import Replay
+
 from .triage import (
     Diagnosis, TargetInfo, real_failures, triage_counterexample,
 )
@@ -62,10 +67,10 @@ class AgentReport:
     harness: Path | None = None
     #: What happened when the counterexample was compiled and run under the
     #: sanitizers (--replay), or None when it was not.
-    replay: object | None = None
+    replay: Replay | None = None
     #: What the callers of a static function said about its counterexample
     #: (a `callers.Escalation`), or None when they were not asked.
-    callers: object | None = None
+    callers: Escalation | None = None
     #: Assertions an LLM inserted into the harness as loop invariants. Set
     #: only when the result was obtained on that modified harness, which
     #: `harness` then names. They were checked with everything else, never
@@ -158,6 +163,8 @@ class AgentReport:
 
     def _callers_lines(self) -> list[str]:
         found = self.callers
+        if found is None:
+            return []
         lines = ["Callers (the function is static, so only code in this "
                  "file can pass it anything):"]
         if found.verdict == "reached":
@@ -486,9 +493,9 @@ def _lines(text: str) -> list[str]:
 
 
 def _diff(before: str, after: str) -> list[tuple[str, int, int, int, int]]:
-    return difflib.SequenceMatcher(
+    return list(difflib.SequenceMatcher(
         None, _lines(before), _lines(after), autojunk=False
-    ).get_opcodes()
+    ).get_opcodes())
 
 
 def _added_assertions(before: str, after: str) -> list[str]:
@@ -622,7 +629,7 @@ def verify_with_agent(
     budget = budget or Budget()
     config = base_config or VerifyConfig()
     started = time.monotonic()
-    context = dict(
+    context: dict[str, Any] = dict(
         assumptions=list(assumptions or []), harness=harness, llm_invariants=[]
     )
     preconditions: list[str] = []

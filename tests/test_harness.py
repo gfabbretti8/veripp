@@ -267,6 +267,20 @@ class TestCIdioms:
         sig = find_function(src, "add")
         assert [(p.type, p.name) for p in sig.params] == [("int", "a"), ("int", "b")]
 
+    def test_a_colon_in_the_macro_above_is_not_an_initialiser_list(self):
+        """cJSON defines `cjson_min` with a `?:` on the line before `print`.
+        The scan back from the name stopped at that colon, took the rest of
+        the macro as print's return type, saw its parentheses, and refused
+        the function every printer in the file is reached through."""
+        src = ("#define cjson_min(a, b) (((a) < (b)) ? (a) : (b))\n\n"
+               "static unsigned char *print(const char *item, int format)\n"
+               "{ return 0; }\n")
+        sig = find_function(src, "print")
+        assert sig.return_type == "unsigned char *" and sig.is_static
+        continued = ("#define pick(a, b) ((a) ? \\\n    (a) : (b))\n"
+                     "int after(int n) { return n; }\n")
+        assert find_function(continued, "after").return_type == "int"
+
     def test_a_real_initialiser_list_is_still_refused(self):
         src = (
             "class D : public B {\n  int a_;\npublic:\n"

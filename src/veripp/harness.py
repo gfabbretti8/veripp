@@ -440,9 +440,9 @@ def generate(
     for name in dict.fromkeys(
         re.findall(rf"= {_STUB_PREFIX}(\w+);", "\n".join(body))
     ):
-        stub = _callback_stub(expanded, name, typedefs)
-        if stub is not None:
-            stub_preamble.append(stub)
+        noop = _callback_stub(expanded, name, typedefs)
+        if noop is not None:
+            stub_preamble.append(noop)
 
     body.append("")
     call = _emit_call(signature, assumptions)
@@ -1849,6 +1849,7 @@ def _emit_buffer(
     length_type: str | None = None,
 ) -> list[str]:
     pointee = param.pointee()
+    nondet: str | None
     if normalize_type(pointee, typedefs) == "void":
         # `LZ4_compress_default(const void* src, int srcSize, ...)`: a void
         # pointer says nothing about the type, but the length beside it says

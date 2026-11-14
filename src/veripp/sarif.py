@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 from pathlib import Path
 
 #: The oasis-tcs raw URL that most tools quote is a 404 today; this one
@@ -190,7 +191,7 @@ def build(findings: list[dict], *, root: Path, version: str,
         )
 
         uri = _relative(finding.get("file", ""), root)
-        result = {
+        result: dict[str, Any] = {
             "ruleId": rule_id,
             "level": "error",
             "message": {"text": message},

@@ -35,7 +35,7 @@ from .harness import (
     generate_c_sequence,
     generate_sequence,
 )
-from .llm import NullLLM, make_llm
+from .llm import LLMClient, NullLLM, make_llm
 from .paths import contracts_include_dir, scratch_dir
 from .scan import scan
 from .triage import TargetInfo
@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="replace")
+            stream.reconfigure(errors="replace")  # type: ignore[union-attr]
         except (AttributeError, OSError):
             pass
 
@@ -426,15 +426,15 @@ def main(argv: list[str] | None = None) -> int:
     # should not be a thing anyone has to discover.
     joined: list[str] = []
     skip = False
-    for i, a in enumerate(argv):
+    for i, token in enumerate(argv):
         if skip:
             skip = False
             continue
-        if a == "--esbmc-arg" and i + 1 < len(argv) and argv[i + 1].startswith("-"):
+        if token == "--esbmc-arg" and i + 1 < len(argv) and argv[i + 1].startswith("-"):
             joined.append(f"--esbmc-arg={argv[i + 1]}")
             skip = True
         else:
-            joined.append(a)
+            joined.append(token)
     argv = joined
 
     args = parser.parse_args(argv)
@@ -2281,7 +2281,7 @@ def _exit_code(report: AgentReport) -> int:
     return EXIT_INCONCLUSIVE
 
 
-def _make_llm(args) -> tuple[object, str | None]:
+def _make_llm(args) -> tuple[LLMClient, str | None]:
     """The triage client, plus a note to show only if it turns out to matter.
 
     Telling someone their counterexamples will not be triaged is useless when
