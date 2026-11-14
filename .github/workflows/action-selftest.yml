@@ -27,7 +27,7 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # examples/off_by_one.cpp has a real off-by-one. The action must fail
       # the job on it, because that is the whole product.
@@ -54,7 +54,7 @@ jobs:
   proves-a-good-one:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # A relative path from a subdirectory: the case `--directory` broke.
       - run: mkdir -p nested && cp examples/ring_buffer.cpp nested/
@@ -85,7 +85,7 @@ jobs:
   fail-on-never-is-honest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Must succeed despite pointing at a file with a known bug.
       - id: run
@@ -109,7 +109,7 @@ jobs:
   refuses-a-lying-checker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # A checker that reports VERIFICATION SUCCESSFUL for everything is the
       # worst thing that can happen to a verification tool: every result it
@@ -150,7 +150,7 @@ jobs:
   args-reach-the-checker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The `args` input carries the flags real projects need (-I, -D,
       # --unwind, --link). It is passed through a shell where word splitting
@@ -207,7 +207,7 @@ jobs:
   scans-a-directory:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # What a client actually configures: point it at the source tree, not at
       # one file. A finding in any file must fail the job, and the summary must
@@ -259,7 +259,7 @@ jobs:
   a-vacuous-proof-fails:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The function's own precondition cannot hold, so the call is never
       # reached and every property "holds". veripp exits 3 for that, like
@@ -296,7 +296,7 @@ jobs:
   fail-on-inconclusive:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # A header that is not on the include path: the checker's frontend
       # refuses the file, which settles nothing -- inconclusive, not vacuous.

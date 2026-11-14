@@ -76,13 +76,13 @@ runs:
   using: 'composite'
   steps:
     - name: Install uv
-      uses: astral-sh/setup-uv@v10.0.1
+      uses: astral-sh/setup-uv@v10.3.3
       with:
         enable-cache: true
 
     - name: Cache ESBMC
       id: cache-esbmc
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/veripp-esbmc
         # The architecture is part of the key: x86_64 and arm64 runners share
