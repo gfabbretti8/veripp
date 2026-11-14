@@ -113,7 +113,38 @@ Full options:  veripp <command> --help       the flags that express intent
 """
 
 
+# What a shell reports for a process that SIGPIPE ended: 128 + 13. Not one
+# of veripp's own codes, on purpose -- a run cut off by its reader did not
+# finish, so it has no verdict to report.
+EXIT_PIPE_CLOSED = 141
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI; a reader that stops reading ends it quietly.
+
+    `veripp scan src/ | head` closes the pipe once head has its ten lines,
+    and the next print raised BrokenPipeError: a traceback under the output
+    of a command that had done nothing wrong.
+    """
+    try:
+        code = _main(argv)
+        sys.stdout.flush()  # here, not at interpreter exit, where it cannot be caught
+        return code
+    except BrokenPipeError:
+        # Python flushes stdout once more on the way out and would complain
+        # about the same closed pipe; give it somewhere harmless to write.
+        # Only for the process's own stdout: a caller that swapped
+        # sys.stdout (a test, an embedding program) owns that stream.
+        own = sys.__stdout__
+        if own is not None and sys.stdout is own:
+            try:
+                os.dup2(os.open(os.devnull, os.O_WRONLY), own.fileno())
+            except (OSError, ValueError):  # no real descriptor behind stdout
+                pass
+        return EXIT_PIPE_CLOSED
+
+
+def _main(argv: list[str] | None = None) -> int:
     # veripp's output contains characters (em dashes, and whatever a source
     # file's identifiers hold) that the console's codepage may not cover, and
     # an unencodable character turns a finished verification into a traceback
@@ -2351,6 +2382,13 @@ def _install_checker(dest=None) -> int:
 
 
 def _doctor(allow_unsound: bool = False) -> int:
+    import platform
+
+    # First, so that doctor's output alone says what a bug report is about.
+    print(
+        f"veripp {__version__} (Python {platform.python_version()}, "
+        f"{platform.system()} {platform.machine()})"
+    )
     esbmc = find_esbmc()
     if esbmc:
         print(f"esbmc: {esbmc}")

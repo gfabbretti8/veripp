@@ -690,3 +690,38 @@ class TestKeepHarness:
         scan_module.scan(src, VerifyConfig(), retry_budget=0)
         (scratch,) = made
         assert not scratch.exists()
+
+
+class TestAClosedPipeIsNotACrash:
+    """`veripp ... | head` closes the pipe while veripp is still printing.
+    That is the reader's choice, not an error, and it used to end in a
+    BrokenPipeError traceback."""
+
+    def test_a_reader_that_stops_reading_gets_no_traceback(self) -> None:
+        import subprocess
+        import sys
+
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "veripp.cli", "verify", "--help-all"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+        proc.stdout.readline()
+        proc.stdout.close()  # what `head -1` does
+        stderr = proc.stderr.read()
+        proc.stderr.close()
+        code = proc.wait(timeout=60)
+        assert "Traceback" not in stderr and "BrokenPipe" not in stderr, stderr
+        # Either it had already finished printing, or it was cut off -- and a
+        # run that was cut off must not pass for a verdict.
+        assert code in (0, 141), code
+
+    def test_a_run_cut_off_by_its_reader_has_its_own_exit_code(self, monkeypatch) -> None:
+        from veripp import cli
+
+        def cut_off(argv):
+            raise BrokenPipeError
+
+        monkeypatch.setattr(cli, "_main", cut_off)
+        assert cli.main(["scan", "."]) == cli.EXIT_PIPE_CLOSED
+        assert cli.EXIT_PIPE_CLOSED not in (0, 1, 2, 3)
