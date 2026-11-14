@@ -102,6 +102,15 @@ user they have a bug:
    caller could pass; `static, 2 callers here` means the only ways in are
    those call sites, so read them. `static, no callers found here` is dead
    code, a function pointer, or a macro -- find out which.
+   For a static function veripp has already asked those callers, with the
+   checker: `reached from api -> helper` names an entry point that makes
+   the same line fail and prints the inputs to it, which is the thing step
+   4 asks for. Functions under `NO CALLER REACHES` fail when called
+   directly but through none of their callers, within the same bounds:
+   report them as unenforced preconditions at most, not as bugs.
+   `whether a caller reaches it is not settled` means a caller timed out
+   or could not be harnessed; give it longer with `--caller-budget 600`
+   (default 120 seconds; `--caller-budget 0` skips the question).
 3. If the function is internal and callers always pass, say, a non-zero length,
    the finding is an unenforced precondition, not a bug. Re-run with
    `--assume 'len > 0'` and see if it proves. veripp checks the assumption

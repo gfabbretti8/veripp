@@ -7,6 +7,65 @@ veripp is a **bounded** proof, and it is only as good as the checker underneath
 it. `veripp doctor` probes that checker against known-failing programs on every
 run, and refuses to back results from one that cannot detect a planted bug.
 
+## Unreleased
+
+### Added: a static function's counterexample is put to its callers
+- **`scan` and `verify` ask the callers.** A harness calls a function with
+  anything its signature admits, which is the right question for an entry
+  point and the wrong one for a `static` helper: the only inputs it ever
+  sees are the ones the callers in its own file pass. Six of the false
+  counterexamples in the field report were that -- `mppe_rekey`,
+  `snmp_asn1_enc_s32t`, `tdefl_record_match` -- and the report says of
+  them that nothing in a signature can prevent it. The checker can tell
+  them apart, because a caller's harness calls the real caller, which
+  calls the real helper. So for each counterexample in a static function,
+  each caller's harness is run and asked whether the same line still
+  fails, and a static caller that reaches it is asked the same of its own
+  callers, until an externally visible function is reached or none is
+  left.
+- **Three answers.** *Reached*: an entry point makes the line fail, and
+  the report names the chain and gives the inputs to the entry point
+  (`reached from top -> mid -> pick`, then `top: i = 3`). Such a finding
+  ranks with the entry points. *No caller reaches it*: every caller was
+  checked and none does. These leave the counterexamples for a row of
+  their own, `NO CALLER REACHES`, are not sent to triage, and do not fail
+  a scan. *Not settled*: anything else, and it stays a counterexample.
+- **What "no caller reaches it" rests on.** It is bounded like a proof:
+  each caller was checked within its own harness bounds. A caller clears
+  the line only if its harness was shown to get into the helper -- a copy
+  of the unit is given a failing assertion as the helper's first statement
+  and the caller's harness is run against it -- so a caller that returns
+  before the call on every input it is given clears nothing. A caller
+  that timed out, hit the unwind bound or could not be harnessed, a call
+  from a macro body or an initialiser, a helper whose address is taken,
+  and a helper with no callers at all are all "not settled".
+- **Each caller is asked one thing.** The run has only the check that
+  reported the property switched on -- the checks are assertions, not
+  assumptions, so the others cannot change the answer -- and asks for a
+  verdict on every property, so that what the caller trips over on its
+  way does not hide the line being asked about.
+- **`verify` prints it under `Callers:`** and carries it in `--json` as
+  `callers`. Its exit code does not change: the function does fail on
+  those inputs when called directly, and that is what was asked.
+- **`--caller-budget SECONDS`** (default 120) bounds the pass on both
+  commands, and `0` turns it off. `scan --json` gains `no_caller_reaches`,
+  and each counterexample gains `caller_reach`, `caller_note`,
+  `reached_from` and `reached_inputs`. A cached scan that never asked does
+  not answer a run that does.
+- External functions are left alone: their callers live in translation
+  units a scan of one file never sees, so nothing found here could clear
+  them.
+- **What it does not do: make an expensive caller cheap.** A caller's
+  run gets four times the function's own timeout and shares the budget.
+  Measured on cJSON and parson with `--timeout 10` on a 4-core container,
+  three counterexamples in static functions were asked (`print_number`,
+  `update_offset`, `json_object_init`) and none settled: their callers
+  are cJSON's recursive printers and parson's rehash, which time out, and
+  `print`, which veripp cannot harness. `json_object_init` got one of its
+  two callers cleared (`json_object_make`, with `--timeout 200`) and the
+  other timed out. The pass decides helpers whose callers the checker can
+  finish; where it cannot, the report says which caller and why.
+
 ## 0.7.0
 
 Results fail closed where they used to fail open, the checker arrives with

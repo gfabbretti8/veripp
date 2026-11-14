@@ -36,6 +36,10 @@ from .triage import (
     harness_null_note, mechanical_artifact, precondition_violations,
 )
 
+#: `FunctionResult.caller_reach` values (see `callers`).
+UNREACHED = "unreached"
+UNSETTLED = "unsettled"
+
 
 @dataclass
 class FunctionResult:
@@ -109,6 +113,19 @@ class FunctionResult:
     replay: str = ""
     replay_detail: str = ""
 
+    #: For a counterexample in a static function: what its callers said
+    #: when asked whether the line fails through them. "reached" -- an
+    #: externally visible function gets there, `reached_from` names the
+    #: chain down to this function and `reached_inputs` are the inputs to
+    #: its first link; "unreached" -- every caller was checked and none
+    #: does, within the same bounds; "unsettled" -- asked, and at least one
+    #: caller gave no answer. Empty when not asked. All three are the
+    #: checker's, on the callers' own generated harnesses.
+    caller_reach: str = ""
+    caller_note: str = ""
+    reached_from: list[str] = field(default_factory=list)
+    reached_inputs: list[str] = field(default_factory=list)
+
     triage_kind: str | None = None
 
     def reach_note(self) -> str | None:
@@ -120,7 +137,12 @@ class FunctionResult:
         where = "here" if self.linkage == "static" else "in this unit"
         if self.callers == 0:
             return f"{self.linkage}, no callers found {where}"
-        return f"{self.linkage}, {self.callers} caller{'s' if self.callers != 1 else ''} {where}"
+        note = f"{self.linkage}, {self.callers} caller{'s' if self.callers != 1 else ''} {where}"
+        if self.caller_reach == "reached":
+            note += "; " + self.caller_note
+        elif self.caller_reach == "unsettled":
+            note += "; whether a caller reaches it is not settled"
+        return note
     triage_note: str = ""
     triage_error: str | None = None
     preconditions: list[str] = field(default_factory=list)
@@ -143,6 +165,10 @@ class ScanReport:
     #: the full escalation ladder, and how many that settled.
     retried: int = 0
     settled: int = 0
+    #: Whether counterexamples in static functions were put to their
+    #: callers, and how many were.
+    callers_asked: bool = False
+    caller_checked: int = 0
     #: Length-shaped parameters a function never reads, or reads only inside
     #: an assertion. Independent of harnessing and of the solver, and the
     #: shape behind three of this project's confirmed findings.
@@ -171,6 +197,21 @@ class ScanReport:
         return [
             r for r in self.results
             if r.outcome == Outcome.COUNTEREXAMPLE.value and not r.artifact
+            and r.caller_reach != UNREACHED
+        ]
+
+    @property
+    def unreached(self) -> list[FunctionResult]:
+        """Counterexamples in static functions that no caller reproduces.
+
+        Not artifacts: the function does fail on those inputs. They are
+        kept apart because the only code that can pass them never does,
+        within the bounds its callers were checked under.
+        """
+        return [
+            r for r in self.results
+            if r.outcome == Outcome.COUNTEREXAMPLE.value and not r.artifact
+            and r.caller_reach == UNREACHED
         ]
 
     @property
@@ -258,6 +299,11 @@ class ScanReport:
                 "safe under a stated precondition the solver accepted -- "
                 "confirm callers guarantee it"
             ] if self.preconditioned else []),
+            *([
+                f"  NO CALLER REACHES{len(self.unreached):4d}  "
+                "fails when called directly, but through none of its "
+                "callers here, within the same bounds"
+            ] if self.unreached else []),
             f"  HARNESS ARTIFACT {len(self.artifacts):4d}  "
             "failed because of how the harness was built, not the code",
             f"  INCONCLUSIVE     {len(self.inconclusive):4d}  "
@@ -300,6 +346,7 @@ class ScanReport:
             lines += ["", "  counterexamples (most likely to matter first):"]
             for r in ranked_counterexamples(self.counterexamples)[:20]:
                 lines.append(f"    {r.name}: {r.detail}{finding_tags(r)}")
+                lines += reached_lines(r, "      ")
             if len(self.counterexamples) > 20:
                 lines.append(f"    ... and {len(self.counterexamples) - 20} more")
             failed = [r for r in self.counterexamples if r.triage_error]
@@ -308,6 +355,13 @@ class ScanReport:
                     f"    (triage unavailable for {len(failed)}: "
                     f"{failed[0].triage_error})"
                 )
+
+        if self.unreached:
+            lines += ["", "  fail when called directly, but no caller here "
+                          "reaches the failure (static functions; every "
+                          "caller was checked):"]
+            for r in sorted(self.unreached, key=lambda r: r.name):
+                lines.append(f"    {r.name}: {r.detail} -- {r.caller_note}")
 
         # End on something to do. A tally answers "what happened"; the reader's
         # actual question is "what now", and the answer differs by result.
@@ -451,7 +505,11 @@ def ranked_counterexamples(found: list["FunctionResult"]) -> list["FunctionResul
     # every caller in every other translation unit; a static one is reached
     # only through the call sites counted here, each of which may guard the
     # input the counterexample needs.
+    # A static function an entry point was shown to reach stands where
+    # the entry point does.
     linkage_rank = {"external": 0, "": 1, "static": 2}
+    def who(r):
+        return 0 if r.caller_reach == "reached" else linkage_rank.get(r.linkage, 1)
     # A null the harness put there ranks after nulls the code produced on
     # its own, whoever can reach the function.
     # What the compiled function did comes first of all: a crash under the
@@ -463,7 +521,7 @@ def ranked_counterexamples(found: list["FunctionResult"]) -> list["FunctionResul
         key=lambda r: (replay_rank.get(r.replay, 1),
                        rank.get(r.triage_kind, 1),
                        1 if (r.harness_null or r.harness_bound) else 0,
-                       linkage_rank.get(r.linkage, 1),
+                       who(r),
                        access_rank.get(r.access, 1), r.name),
     )
 
@@ -487,6 +545,14 @@ def finding_tags(r: "FunctionResult") -> str:
                                _TRIAGE_TAGS.get(r.triage_kind))
              if part]
     return f"  [{'; '.join(parts)}]" if parts else ""
+
+
+def reached_lines(r: "FunctionResult", indent: str) -> list[str]:
+    """The inputs to the entry point that reaches a static function's
+    counterexample, as lines for a summary. Empty when there are none."""
+    if r.caller_reach != "reached" or not r.reached_inputs:
+        return []
+    return [f"{indent}{r.reached_from[0]}: " + ", ".join(r.reached_inputs)]
 
 
 def _reason(detail: str) -> str:
@@ -558,6 +624,8 @@ def scan(
     retry_budget: int = 120,
     retry_progress=None,
     replay: bool = False,
+    caller_budget: int = 120,
+    caller_progress=None,
 ) -> ScanReport:
     """Harness and verify every function in `source` that veripp can model.
 
@@ -568,6 +636,10 @@ def scan(
       unwind, k-induction, incremental BMC for timeouts), cheapest first,
       until `retry_budget` seconds are spent. This never consults `llm`,
       even when one is given.
+    - Counterexamples in static functions are put to their callers
+      (`callers.escalate`), until `caller_budget` seconds are spent: one
+      that an entry point reaches says so, and one that no caller reaches
+      is listed apart from the findings.
     - With `llm`, counterexamples are then triaged: the model classifies
       each one and may propose a precondition, which the solver re-checks
       (vacuity probe included) before anything in the report changes.
@@ -731,6 +803,9 @@ def scan(
     if retry_budget > 0:
         _retry_pass(report, config, options, harness_paths, retry_budget,
                     retry_progress, escalations=escalations)
+    if caller_budget > 0:
+        _caller_pass(report, config, options, harness_paths, workdir, types,
+                     caller_budget, caller_progress)
     if llm is not None and not isinstance(llm, NullLLM):
         _triage_pass(report, config, options, llm, harness_paths,
                      triage_progress)
@@ -882,6 +957,59 @@ def _retry_pass(
             progress(done, len(candidates), r)
 
 
+def _caller_pass(
+    report: ScanReport,
+    config: VerifyConfig,
+    options: HarnessOptions,
+    harness_paths: dict[str, Path],
+    workdir: Path,
+    types,
+    budget_s: int,
+    progress=None,
+) -> None:
+    """Put each counterexample in a static function to its callers.
+
+    A static function is reached only through the call sites in its own
+    file, so they can all be asked. An external one is an entry point for
+    code this scan never sees, and nothing its callers here say could
+    clear it, so it is left alone.
+
+    Sequential, most likely to matter first, under one shared budget: a
+    caller's run is a second proof of a larger function, and the scan's
+    parallel pass has already had the machine's cores.
+    """
+    from .callers import escalate
+    from .esbmc import SourceLoc, ViolatedProperty
+
+    candidates = [
+        r for r in ranked_counterexamples(report.counterexamples)
+        if r.linkage == "static" and r.line and "::" not in r.signature
+    ]
+    report.callers_asked = True
+    started = time.monotonic()
+    for done, r in enumerate(candidates, start=1):
+        remaining = budget_s - (time.monotonic() - started)
+        if remaining <= 5:
+            break
+        prop = ViolatedProperty(SourceLoc(r.file, r.line), r.detail)
+        try:
+            found = escalate(report.source, r.name, prop, config, options,
+                             workdir, types=types, harness_paths=harness_paths,
+                             budget_s=remaining)
+        except Exception as exc:   # never cost the scan its results
+            r.caller_reach, r.caller_note = UNSETTLED, (
+                f"veripp failed while asking: {type(exc).__name__}: {exc}")
+            continue
+        if found is None:
+            continue
+        report.caller_checked += 1
+        r.caller_reach, r.caller_note = found.verdict, found.note
+        r.reached_from = [*found.chain, r.name] if found.chain else []
+        r.reached_inputs = found.inputs
+        if progress is not None:
+            progress(done, len(candidates), r)
+
+
 def _triage_pass(
     report: ScanReport,
     config: VerifyConfig,
@@ -902,6 +1030,8 @@ def _triage_pass(
         r for r in report.results
         if r.outcome == Outcome.COUNTEREXAMPLE.value and not r.artifact
         and r.name in harness_paths
+        # What no caller reaches is not worth a model's opinion.
+        and r.caller_reach != UNREACHED
     ]
     for done, r in enumerate(candidates, start=1):
         target = TargetInfo(source=report.source, function=r.name,

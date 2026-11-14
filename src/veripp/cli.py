@@ -218,6 +218,14 @@ def main(argv: list[str] | None = None) -> int:
         "function fails too. This RUNS the function under test on this "
         "machine; nothing else veripp does executes your code",
     )
+    v.add_argument(
+        "--caller-budget", type=int, default=120, metavar="SECONDS",
+        help=_adv(
+            "on a counterexample in a static function, wall-clock budget "
+            "for asking its callers whether the same line fails through "
+            "them, up to an externally visible one; 0 skips the question"
+        ),
+    )
 
     h = sub.add_parser("harness", help="print the generated harness without verifying")
     _add_common_args(h, require_function=True)
@@ -275,6 +283,15 @@ def main(argv: list[str] | None = None) -> int:
             "wall-clock budget for re-trying inconclusive functions on the "
             "full escalation ladder (wider bounds, k-induction), cheapest "
             "first; 0 disables the second pass"
+        ),
+    )
+    s.add_argument(
+        "--caller-budget", type=int, default=120, metavar="SECONDS",
+        help=_adv(
+            "wall-clock budget for putting each counterexample in a static "
+            "function to its callers: does the same line fail when the "
+            "function is reached through them, up to an externally visible "
+            "one; 0 disables the pass"
         ),
     )
     s.add_argument("--json", action="store_true", help="machine-readable output")
@@ -1077,7 +1094,9 @@ def _report_from_cache(source: Path, payload: dict):
     report = ScanReport(source=source, candidates=payload.get("candidates", 0),
                         triaged=payload.get("triaged", False),
                         retried=payload.get("retried", 0),
-                        settled=payload.get("settled", 0))
+                        settled=payload.get("settled", 0),
+                        callers_asked=payload.get("callers_asked", False),
+                        caller_checked=payload.get("caller_checked", 0))
     for item in payload.get("results", []):
         report.results.append(FunctionResult(**item))
     return report
@@ -1091,6 +1110,8 @@ def _cache_payload(report) -> dict:
         "triaged": report.triaged,
         "retried": report.retried,
         "settled": report.settled,
+        "callers_asked": report.callers_asked,
+        "caller_checked": report.caller_checked,
         "results": [asdict(r) for r in report.results],
     }
 
@@ -1332,7 +1353,24 @@ def _retry_progress(args):
     return cb
 
 
-def _cache_serves(payload: dict, llm, retry_budget: int) -> bool:
+def _caller_progress(args):
+    def cb(done: int, total: int, r) -> None:
+        if args.quiet or args.json:
+            return
+        mark, paint = {
+            "reached": ("REACHED", ("red", "bold")),
+            "unreached": ("no caller", ("green",)),
+        }.get(r.caller_reach, ("unsettled", ("dim",)))
+        print(f"  [caller {done:2d}/{total}] "
+              f"{term.style(f'{mark:>10}', *paint, stream=sys.stderr)}  "
+              f"{r.name}"
+              + (f"  ({r.caller_note})" if r.caller_reach == "reached" else ""),
+              file=sys.stderr)
+    return cb
+
+
+def _cache_serves(payload: dict, llm, retry_budget: int,
+                  caller_budget: int = 0) -> bool:
     """Whether a cached verdict answers the question this run is asking.
 
     A cached scan without the triage or retry pass is still sound, but it
@@ -1347,6 +1385,12 @@ def _cache_serves(payload: dict, llm, retry_budget: int) -> bool:
         return False
     if retry_budget > 0 and not payload.get("retried") and any(
         item.get("outcome") in ("timeout", "unwind_limit", "unknown")
+        for item in payload.get("results", [])
+    ):
+        return False
+    if caller_budget > 0 and not payload.get("callers_asked") and any(
+        item.get("outcome") == "counterexample" and not item.get("artifact")
+        and item.get("linkage") == "static"
         for item in payload.get("results", [])
     ):
         return False
@@ -1460,7 +1504,7 @@ def _scan_tree(args) -> int:
             key = _cache_key(source, config, options, cache, args) if cache else ""
             cached = cache.get(key) if cache else None
             if cached is not None and not _cache_serves(
-                cached, llm, args.retry_budget
+                cached, llm, args.retry_budget, args.caller_budget
             ):
                 cached = None
             if cached is not None:
@@ -1476,6 +1520,8 @@ def _scan_tree(args) -> int:
                           triage_progress=_triage_progress(args),
                           retry_budget=args.retry_budget,
                           retry_progress=_retry_progress(args),
+                      caller_budget=args.caller_budget,
+                      caller_progress=_caller_progress(args),
                           replay=getattr(args, "replay", False))
             if cache:
                 cache.put(key, _cache_payload(report))
@@ -1490,7 +1536,9 @@ def _scan_tree(args) -> int:
         "proved": sum(len(r.proved) for r in reports),
         "counterexamples": [
             {"file": str(r.source), "function": f.name, "property": f.detail,
-             "triage": f.triage_kind}
+             "triage": f.triage_kind, "caller_reach": f.caller_reach,
+             "reached_from": f.reached_from,
+             "reached_inputs": f.reached_inputs}
             for r in reports for f in r.counterexamples
         ],
         "preconditioned": [
@@ -1498,6 +1546,11 @@ def _scan_tree(args) -> int:
              "preconditions": f.preconditions,
              "precondition_violations": f.precondition_violations}
             for r in reports for f in r.preconditioned
+        ],
+        "no_caller_reaches": [
+            {"file": str(r.source), "function": f.name, "property": f.detail,
+             "callers": f.caller_note}
+            for r in reports for f in r.unreached
         ],
         "inconclusive": sum(len(r.inconclusive) for r in reports),
         "artifacts": sum(len(r.artifacts) for r in reports),
@@ -1524,6 +1577,7 @@ def _scan_tree(args) -> int:
 def _tree_summary(root: Path, reports: list) -> str:
     total_cx = sum(len(r.counterexamples) for r in reports)
     total_pre = sum(len(r.preconditioned) for r in reports)
+    total_unreached = sum(len(r.unreached) for r in reports)
     total = sum(r.candidates or len(r.results) for r in reports)
     refused = sum(len(r.refused) for r in reports)
     reasons: dict[str, int] = {}
@@ -1543,6 +1597,9 @@ def _tree_summary(root: Path, reports: list) -> str:
         "a property fails for some input -- triage each one",
         *([f"  PRECONDITIONED   {total_pre:4d}  safe under a solver-accepted "
            "precondition -- confirm callers guarantee it"] if total_pre else []),
+        *([f"  NO CALLER REACHES{total_unreached:4d}  fails when called "
+           "directly, but through none of its callers, within the same "
+           "bounds"] if total_unreached else []),
         f"  HARNESS ARTIFACT {sum(len(r.artifacts) for r in reports):4d}  "
         "failed because of how the harness was built, not the code",
         f"  INCONCLUSIVE     {sum(len(r.inconclusive) for r in reports):4d}  "
@@ -1570,7 +1627,7 @@ def _tree_summary(root: Path, reports: list) -> str:
         # of file names sends the reader off to run one command per finding
         # before learning what any of them is.
         from .agent import display_path
-        from .scan import finding_tags, ranked_counterexamples
+        from .scan import finding_tags, ranked_counterexamples, reached_lines
 
         owner = {id(f): r.source for r in reports for f in r.counterexamples}
         ordered = ranked_counterexamples(
@@ -1582,6 +1639,7 @@ def _tree_summary(root: Path, reports: list) -> str:
             if f.line and not in_model:
                 where += f":{f.line}"
             lines.append(f"    {where}  {f.name}: {f.detail}{finding_tags(f)}")
+            lines += reached_lines(f, "      ")
         if len(ordered) > 20:
             lines.append(f"    ... and {len(ordered) - 20} more")
         lines += [
@@ -1645,7 +1703,7 @@ def _scan(args) -> int:
     cache = _cache_for(args) if selected is None else None
     key = _cache_key(args.source, config, options, cache, args) if cache else ""
     cached = cache.get(key) if cache else None
-    if cached is not None and not _cache_serves(cached, llm, args.retry_budget):
+    if cached is not None and not _cache_serves(cached, llm, args.retry_budget, args.caller_budget):
         cached = None
     if cached is not None:
         report = _report_from_cache(args.source, cached)
@@ -1659,6 +1717,8 @@ def _scan(args) -> int:
                       triage_progress=_triage_progress(args),
                       retry_budget=args.retry_budget,
                       retry_progress=_retry_progress(args),
+                      caller_budget=args.caller_budget,
+                      caller_progress=_caller_progress(args),
                       replay=getattr(args, "replay", False))
         if cache:
             cache.put(key, _cache_payload(report))
@@ -1679,6 +1739,13 @@ def _scan(args) -> int:
                  # Who can reach it: an entry point, or a helper with this
                  # many call sites in the scanned unit(s).
                  "linkage": r.linkage, "callers": r.callers,
+                 # For a static function, what its callers said when asked
+                 # whether the line fails through them: "reached" (with
+                 # the chain from an entry point and that entry point's
+                 # inputs), "unsettled", or "" when not asked.
+                 "caller_reach": r.caller_reach, "caller_note": r.caller_note,
+                 "reached_from": r.reached_from,
+                 "reached_inputs": r.reached_inputs,
                  # Set when the null dereferenced is one the harness left, or
                  # the bound crossed is one it chose.
                  "harness_null": r.harness_null, "harness_bound": r.harness_bound}
@@ -1690,6 +1757,14 @@ def _scan(args) -> int:
                  "precondition_violations": r.precondition_violations,
                  "triage": r.triage_kind}
                 for r in report.preconditioned
+            ],
+            # Fail when called directly; every caller in the file was
+            # checked and none makes the line fail, within the same bounds.
+            "no_caller_reaches": [
+                {"function": r.name, "signature": r.signature,
+                 "property": r.detail, "file": r.file, "line": r.line,
+                 "callers": r.caller_note}
+                for r in report.unreached
             ],
             "triaged": report.triaged,
             "retried": report.retried,
@@ -1948,6 +2023,9 @@ def _verify(args) -> int:
         except RuntimeError:
             pass
 
+    if harness and args.function:
+        report.callers = _ask_callers(args, report, harness, target)
+
     if getattr(args, "repro", None):
         written = _write_repro(args, report, harness)
         if written:
@@ -1964,6 +2042,37 @@ def _verify(args) -> int:
     _emit(args, _payload(report, harness), readable)
 
     return _exit_code(report)
+
+
+def _ask_callers(args, report: AgentReport, harness: Harness, target: Path):
+    """For a counterexample in a static function: what its callers say.
+
+    The same question `scan` asks, through the same code, so the two
+    commands cannot disagree about a function.
+    """
+    from .callers import escalate
+    from .triage import mechanical_artifact
+
+    budget = getattr(args, "caller_budget", 0)
+    sig = harness.signature
+    prop = report.final.violated_property
+    if (budget <= 0 or report.final.outcome is not Outcome.COUNTEREXAMPLE
+            or prop is None or not sig.is_static or sig.class_name
+            or mechanical_artifact(report.final, target) is not None):
+        return None
+    quiet = getattr(args, "quiet", False) or getattr(args, "json", False)
+    if not quiet:
+        print(f"note: `{sig.name}` is static; asking its callers whether "
+              "they reach this (--caller-budget 0 to skip)", file=sys.stderr)
+    try:
+        return escalate(args.source, sig.name, prop, report.final.config,
+                        _harness_options(args), args._scratch,
+                        budget_s=budget)
+    except Exception as exc:   # an extra question must not cost the answer
+        if not quiet:
+            print(f"note: could not ask the callers "
+                  f"({type(exc).__name__}: {exc})", file=sys.stderr)
+        return None
 
 
 def _is_cxx_std(std: str) -> bool:
@@ -2076,6 +2185,18 @@ def _payload(report: AgentReport, harness: Harness | None) -> dict:
         # was proved with the rest, none was assumed.
         "llm_invariants": report.llm_invariants,
         "stubbed_calls": report.final.stubbed_calls,
+        # For a counterexample in a static function: whether a caller
+        # makes the same line fail. "reached" names the chain from an
+        # externally visible function and gives that function's inputs;
+        # "unreached" means every caller was checked and none does, within
+        # the same bounds; "unsettled" means at least one gave no answer.
+        "callers": ({
+            "verdict": report.callers.verdict, "note": report.callers.note,
+            "reached_from": report.callers.chain,
+            "inputs": report.callers.inputs,
+            "checked": [{"caller": c.caller, "status": c.status,
+                         "detail": c.detail} for c in report.callers.checks],
+        } if report.callers is not None else None),
         "function": harness.signature.qualified_name if harness else None,
         "sequence": bool(harness and harness.class_info),
         "violated_property": asdict(prop) if prop else None,

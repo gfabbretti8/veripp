@@ -1320,6 +1320,8 @@ _NOT_A_CALL = {
 # ---------------------------------------------------- enumerating targets ---
 
 _TRAILING_WORDS = "|".join(sorted(_TRAILING_QUALS - {"&", "&&"}))
+#: What may sit between a parameter list and the body it belongs to.
+_BODY_OPENS_RE = re.compile(rf"(?:\b(?:{_TRAILING_WORDS})\b|\s)*\{{")
 
 
 def _define_spans(source: str) -> list[tuple[int, int]]:
@@ -1343,12 +1345,12 @@ def _define_spans(source: str) -> list[tuple[int, int]]:
     return spans
 
 
-def function_definitions(source: str) -> list[str]:
-    """Names of things that look like function definitions in `source`.
+def definition_spans(source: str) -> list[tuple[str, int, int]]:
+    """`(name, open_brace, close_brace)` for everything that looks like a
+    function definition in `source`, in source order.
 
-    A best-effort list of candidate targets for a whole-file scan. Each name is
-    expected to go back through `find_function`, which is the part that refuses
-    what it cannot model -- this only has to avoid missing real definitions.
+    A name defined in two branches of an `#if` appears twice. The offsets
+    are into `source` (and into `scrub(source)`, which keeps them).
     """
     scrubbed = scrub(source)
     # A function-like macro with a braced body reads exactly like a
@@ -1363,8 +1365,7 @@ def function_definitions(source: str) -> list[str]:
     # a macro in the other, and dropping the name lost the function. What is
     # not a definition is the macro BODY, so that is what gets skipped.
     macro_spans = _define_spans(source)
-    names: list[str] = []
-    seen: set[str] = set()
+    spans: list[tuple[str, int, int]] = []
     for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", scrubbed):
         name = m.group(1)
         if name in _NOT_A_CALL or name in _NOT_A_MEMBER:
@@ -1376,14 +1377,26 @@ def function_definitions(source: str) -> list[str]:
             rparen = match_bracket(scrubbed, lparen)
         except SignatureError:
             continue
-        tail = scrubbed[rparen + 1 : rparen + 120]
-        stripped = re.sub(rf"\b({_TRAILING_WORDS})\b|\s+", "", tail)
-        if stripped[:1] != "{":
+        tail = _BODY_OPENS_RE.match(scrubbed, rparen + 1, rparen + 121)
+        if tail is None:
             continue  # a call or a declaration, not a definition
-        if name not in seen:
-            seen.add(name)
-            names.append(name)
-    return names
+        brace = tail.end() - 1
+        try:
+            close = match_bracket(scrubbed, brace)
+        except SignatureError:
+            close = len(scrubbed) - 1
+        spans.append((name, brace, close))
+    return spans
+
+
+def function_definitions(source: str) -> list[str]:
+    """Names of things that look like function definitions in `source`.
+
+    A best-effort list of candidate targets for a whole-file scan. Each name is
+    expected to go back through `find_function`, which is the part that refuses
+    what it cannot model -- this only has to avoid missing real definitions.
+    """
+    return list(dict.fromkeys(name for name, _, _ in definition_spans(source)))
 
 
 # ------------------------------------------------------------- includes ---

@@ -546,7 +546,10 @@ class TestWhoCanReachIt:
             encoding="utf-8",
         )
         config = VerifyConfig(timeout_s=90, include_dirs=[contracts_include_dir()])
-        report = scan(src, config, HarnessOptions(), jobs=2, retry_budget=0)
+        # The callers are not asked here: `uses_helper` guards the divisor,
+        # which test_callers.py covers, and this is about the counting.
+        report = scan(src, config, HarnessOptions(), jobs=2, retry_budget=0,
+                      caller_budget=0)
         found = {r.name: r for r in report.counterexamples}
         assert {"helper", "api"} <= set(found), report.summary()
         assert found["api"].linkage == "external" and found["api"].callers == 0

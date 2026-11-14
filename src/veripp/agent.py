@@ -63,6 +63,9 @@ class AgentReport:
     #: What happened when the counterexample was compiled and run under the
     #: sanitizers (--replay), or None when it was not.
     replay: object | None = None
+    #: What the callers of a static function said about its counterexample
+    #: (a `callers.Escalation`), or None when they were not asked.
+    callers: object | None = None
     #: Assertions an LLM inserted into the harness as loop invariants. Set
     #: only when the result was obtained on that modified harness, which
     #: `harness` then names. They were checked with everything else, never
@@ -152,6 +155,25 @@ class AgentReport:
             f"  NOTE: {what}, so this null may be the harness's rather than "
             f"something a caller can produce. {advice.capitalize()}."
         )
+
+    def _callers_lines(self) -> list[str]:
+        found = self.callers
+        lines = ["Callers (the function is static, so only code in this "
+                 "file can pass it anything):"]
+        if found.verdict == "reached":
+            lines.append(f"  {found.note}: an externally visible function "
+                         "makes the same line fail")
+            if found.inputs:
+                lines.append(f"  inputs to `{found.entry}`:")
+                lines += [f"    {line}" for line in found.inputs]
+        elif found.verdict == "unreached":
+            lines.append(
+                f"  no caller makes this line fail ({found.note}), within "
+                "the same bounds. The function fails on these inputs when "
+                "called directly; nothing in this file calls it that way.")
+        else:
+            lines.append(f"  not settled: {found.note}")
+        return lines
 
     def summary(self) -> str:
         if self.vacuous:
@@ -296,9 +318,16 @@ class AgentReport:
             if inputs:
                 lines.append("Counterexample inputs:")
                 lines += [f"  {line}" for line in inputs]
+        if self.callers is not None:
+            lines += self._callers_lines()
         if self.final.error:
             lines.append(f"Error: {self.final.error}")
-        if self.diagnosis and not self.diagnosis.triaged:
+        if (self.diagnosis and not self.diagnosis.triaged
+                and getattr(self.callers, "verdict", "") in ("reached", "unreached")):
+            # The default note says nothing has checked whether a caller
+            # can pass these inputs. Something just did.
+            pass
+        elif self.diagnosis and not self.diagnosis.triaged:
             # No model read it, so there is no diagnosis to print -- and the
             # conservative default it carries is not one.
             lines.append(f"Not triaged: {self.diagnosis.explanation}")

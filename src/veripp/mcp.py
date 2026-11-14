@@ -126,6 +126,10 @@ TOOLS: list[dict[str, Any]] = [
                                            "since a ref such as \"origin/main\""},
                 "retry_budget": {"type": "integer",
                                  "description": "seconds to spend re-trying inconclusive functions"},
+                "caller_budget": {"type": "integer",
+                                  "description": "seconds to spend asking the callers of each "
+                                                 "static function with a counterexample whether "
+                                                 "they reach it; 0 skips the question"},
                 "baseline": {"type": "string", "description": "a baseline file of accepted findings"},
                 "sarif": {"type": "string", "description": "write a SARIF report here"},
                 **_build_flags("scan"),

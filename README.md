@@ -201,6 +201,33 @@ tagged with the call sites found in the scanned units, and writes before
 reads. Length parameters that a function never reads are listed separately
 as leads.
 
+A counterexample in a `static` function is put to its callers. A helper
+only ever sees what the callers in its own file pass, so veripp runs each
+caller's harness and asks the checker whether the same line still fails
+when the helper is reached through it, climbing through static callers
+until it gets to an externally visible function:
+
+```
+  counterexamples (most likely to matter first):
+    pick: array bounds violated: array `tbl' upper bound  [static, 2 callers here; reached from top -> mid -> pick]
+      top: i = 3
+
+  fail when called directly, but no caller here reaches the failure (static functions; every caller was checked):
+    at: array bounds violated: array `tbl' lower bound -- not through `first`, `clamp`
+```
+
+`reached from` names an entry point and gives the inputs to *it*. What no
+caller reaches is counted on its own row (`NO CALLER REACHES`), outside
+the counterexamples, and does not fail the scan. That verdict is as
+bounded as a proof: each caller was checked within its own harness
+bounds, and its harness was shown to get into the helper at all. Anything
+less is reported as not settled and stays a counterexample: a caller that
+timed out or could not be harnessed, a call from a macro, a function whose
+address is taken. `verify` asks the same question of a static function and
+prints the answer under `Callers:`; its exit code does not change, because
+the function does fail on those inputs. `--caller-budget` (default 120 s)
+bounds the time spent, and `0` turns the question off.
+
 To adopt veripp on existing code, record what is already there and fail
 only on new findings:
 
@@ -379,7 +406,10 @@ false-positive triage and reproduction commands are in
 - **Counterexamples need triage.** A harness can build inputs no real caller
   can, especially object fields. The proofs are the trustworthy half. The
   counterexamples are leads, and `--assume`, `--constructors` and `--repro`
-  help sort them.
+  help sort them. For a `static` function veripp asks the callers itself;
+  for an externally visible one its callers are in code a scan of one file
+  does not see, and an entry point's own inputs are still built by the
+  harness.
 - **Verification is bounded.** A proof covers executions within the stated
   bounds only.
 - **A leak is memory the function lost.** It is reported when what the

@@ -71,6 +71,13 @@ Known M1 limits, all disclosed at runtime rather than papered over:
 - [x] Call-site validation of a proposed precondition, mechanical for literal
       arguments: a caller that passes a value the precondition forbids turns
       the conditional proof into a lead, in `verify` (exit 3) and in `scan`.
+- [x] A counterexample in a `static` function is put to its callers by
+      the checker itself: each caller's harness is asked whether the same
+      line fails, up through static callers to an externally visible
+      function. Reached ones name the entry point and its inputs; ones no
+      caller reaches leave the counterexamples. A function another
+      translation unit can call is out of its reach -- that needs the
+      whole program's call graph, not one file's.
 
 ## M1.8 — provider independence (done)
 - [x] Any OpenAI-compatible endpoint (OpenAI, Gemini, Groq, Together,
