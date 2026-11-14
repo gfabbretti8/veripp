@@ -1,6 +1,13 @@
 # veripp
 
+[![ci](https://github.com/gfabbretti8/veripp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gfabbretti8/veripp/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/veripp)](https://pypi.org/project/veripp/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://pypi.org/project/veripp/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/gfabbretti8/veripp/blob/main/LICENSE)
+
 **AI-assisted bounded verification for C and C++ functions.**
+
+![veripp reporting an off-by-one in examples/off_by_one.cpp: the violated property, the line, and the inputs that reach it](https://raw.githubusercontent.com/gfabbretti8/veripp/main/docs/demo.svg)
 
 Point veripp at a function. It generates a verification harness from the
 signature and runs the [ESBMC](https://esbmc.org) model checker for eight
@@ -36,6 +43,24 @@ Assumptions (a result is only as good as these):
 An LLM is optional. When you configure one, it triages counterexamples and
 may propose preconditions, and ESBMC re-checks every proposal before anything
 in the report changes. `--no-llm` runs the same pipeline without a model.
+
+## Where it fits
+
+- **You don't write a harness.** A fuzzer needs a fuzz target and a corpus,
+  and a model checker used directly needs a harness that builds the inputs.
+  veripp derives that from the signature and prints what it assumed.
+- **A pass covers every input within the bounds, not the ones that were
+  tried.** Tests, fuzzers and sanitizers report on the executions they saw.
+  A `verified` here is a proof over all inputs the harness admits, which is
+  why the bounds and assumptions are printed with it.
+- **A finding comes with inputs.** A counterexample is concrete values and a
+  line, and `--replay` runs them under AddressSanitizer and UBSan to see
+  whether the compiled function fails too.
+
+It works one function at a time, so it complements a fuzzer rather than
+replacing one: a fuzzer exercises the whole program along paths real callers
+take, and veripp asks what a single function does with anything its
+signature admits. [Known limits](#known-limits) says what that costs.
 
 ## Install
 

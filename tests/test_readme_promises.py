@@ -208,3 +208,59 @@ class TestDoctorHintsMatchTheInstall:
         )
         # The pointer to where the examples live must survive the trim.
         assert "github.com" in result.stdout
+
+
+class TestThePictureIsARealRun:
+    """The terminal picture at the top of the README is the first thing a
+    visitor reads, and a picture is the easiest thing in a README to let go
+    stale: nothing fails when the output it shows stops being the output.
+
+    scripts/render-demo.py draws it from a run. These re-run the command and
+    hold the committed picture to what veripp prints now.
+    """
+
+    SVG = ROOT / "docs" / "demo.svg"
+
+    @staticmethod
+    def _script():
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "render_demo", ROOT / "scripts" / "render-demo.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_readme_shows_it_from_an_absolute_url(self) -> None:
+        # A repo-relative image is a broken one on the PyPI page.
+        assert self.SVG.is_file()
+        assert (
+            "https://raw.githubusercontent.com/gfabbretti8/veripp/main/docs/demo.svg"
+            in README
+        )
+
+    @pytest.mark.esbmc
+    def test_it_says_what_veripp_prints(self) -> None:
+        import html
+
+        script = self._script()
+        shown = [
+            html.unescape(text).replace("\u00a0", " ")
+            for text in re.findall(r"<text[^>]*>(.*?)</text>", self.SVG.read_text(encoding="utf-8"))
+        ]
+        assert shown[0] == "$ veripp " + " ".join(script.COMMAND[:-1])
+
+        # Compared word by word, because the picture folds long lines, and
+        # without the solver's choice of array contents: any values that
+        # overrun the buffer are a correct counterexample, and a different
+        # build of the checker may pick different ones.
+        def words(lines: list[str]) -> list[str]:
+            kept = [line for line in lines if not line.lstrip().startswith("a_buf =")]
+            return " ".join(kept).split()
+
+        printed = script.run().rstrip("\n").split("\n")
+        assert words(shown[1:]) == words(printed), (
+            "docs/demo.svg no longer shows what the command prints; "
+            "re-render it with `python scripts/render-demo.py`"
+        )
