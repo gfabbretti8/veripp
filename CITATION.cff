@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: If you use veripp in your work, please cite it.
+title: "veripp: AI-assisted bounded verification for C and C++ functions"
+type: software
+authors:
+  - family-names: Fabbretti
+    given-names: Giovanni
+repository-code: https://github.com/gfabbretti8/veripp
+url: https://github.com/gfabbretti8/veripp
+license: Apache-2.0
+keywords: [formal verification, bounded model checking, ESBMC, C, C++, memory safety]

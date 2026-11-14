@@ -95,8 +95,26 @@ run, and refuses to back results from one that cannot detect a planted bug.
   classification. A prompt quoting an out-of-bounds write is the kind
   that can be declined, so the finding now says triage was unavailable
   and why, as it does for a rate limit.
+- **`veripp ... | head` no longer ends in a traceback.** A reader that
+  closes the pipe raised `BrokenPipeError` at the next line printed. The
+  run now stops quietly and exits 141, what a shell reports for SIGPIPE
+  and not one of veripp's verdict codes: a run that was cut off has no
+  verdict.
+
+### Changed: `doctor`
+- **`doctor` starts with the veripp version and the Python it runs on**,
+  so its output is a complete answer to "what are you running" in a bug
+  report.
 
 ### Changed: the project
+- **The picture at the top of the README is a run, not a drawing.**
+  `scripts/render-demo.py` runs the command and draws what it printed, and
+  a test re-runs it and fails when `docs/demo.svg` shows anything else.
+- **A security policy that says what counts.** A `verified` for code that
+  has the bug is handled as a vulnerability, reported privately
+  (`SECURITY.md`). There are issue forms, a pull-request checklist, a code
+  of conduct and a `CITATION.cff`, and Dependabot proposes updates to the
+  pinned workflow actions as one reviewed pull request a week.
 - **The package type-checks, and CI keeps it so.** `mypy src` reported 34
   errors that nothing ran: result fields typed `object`, a variable
   reused for two types, an optional URL passed where a string was

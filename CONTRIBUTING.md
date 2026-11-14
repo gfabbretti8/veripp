@@ -67,3 +67,15 @@ Prompts are shared by every provider on purpose, and a test enforces that, so
 adding a vendor cannot change what is asked. Most providers need no code at
 all: if they speak the OpenAI chat-completions API, `--llm-base-url` already
 reaches them.
+
+## The README
+
+Every command in the README is run by `tests/test_readme_promises.py`, and
+its links are absolute because the same file is the PyPI page. The terminal
+picture at the top is generated: after a change to what `verify` prints, run
+`uv run python scripts/render-demo.py` and commit `docs/demo.svg`.
+
+## Reporting a wrong `verified`
+
+Privately, as [SECURITY.md](SECURITY.md) describes. Everything else is an
+ordinary issue.

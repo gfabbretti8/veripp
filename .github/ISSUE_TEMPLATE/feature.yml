@@ -1,0 +1,22 @@
+name: Feature request
+description: Something veripp should reach, report or integrate with.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The code or workflow it came up in says more than the feature does.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+  - type: textarea
+    id: assumptions
+    attributes:
+      label: What the result would have to disclose
+      description: >-
+        If this makes the harness assume something new, say what. Every
+        assumption is printed with the result (CONTRIBUTING.md, "The one rule").

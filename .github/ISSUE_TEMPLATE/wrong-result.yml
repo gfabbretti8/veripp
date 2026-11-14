@@ -1,0 +1,51 @@
+name: Wrong or unhelpful result
+description: A false counterexample, a refusal, an inconclusive result, or a crash.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A `verified` for code that has the bug is a security report, not an
+        issue: see SECURITY.md.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened
+      options:
+        - Counterexample that no real caller can produce
+        - Function refused (no harness generated)
+        - Inconclusive (timeout, unwind bound, frontend error)
+        - veripp crashed or printed a traceback
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command, and what it printed. `--json` output is welcome.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: >-
+        The function, cut down as far as it still shows the problem, or a
+        link to the file and commit in a public repository.
+      render: c
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `veripp doctor`
+      description: It names the veripp version, the checker and the platform.
+      render: text
+    validations:
+      required: true

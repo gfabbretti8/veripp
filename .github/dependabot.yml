@@ -1,0 +1,12 @@
+# Workflow actions are pinned by version, and several workflows publish
+# (PyPI, ghcr.io), so a bump is a reviewed pull request rather than a
+# floating tag. Grouped: one pull request a week, not one per action.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"   # the workflows and the root action.yml
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

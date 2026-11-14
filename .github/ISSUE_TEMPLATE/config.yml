@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A wrong "verified", or another security problem
+    url: https://github.com/gfabbretti8/veripp/security/advisories/new
+    about: Report it privately. SECURITY.md says what counts.
