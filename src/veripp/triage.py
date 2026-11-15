@@ -456,6 +456,41 @@ class Diagnosis:
     triaged: bool = True
 
 
+#: What one counterexample value, and all of them together, may take up in
+#: a triage prompt. The checker prints the whole containing object as the
+#: value of every field write, so one write into miniz's `tdefl_compressor`
+#: (two 32 KB dictionaries) rendered as 758,000 characters of zeros: more
+#: than most models accept, billed in full by the ones that do, and no help
+#: in deciding who can pass it.
+MAX_INPUT_VALUE_CHARS = 2000
+MAX_INPUTS_CHARS = 12000
+
+
+def _inputs_for_prompt(assignments: list[str]) -> str:
+    """The counterexample's inputs, cut to a size a model can be sent.
+
+    A cut is always said: a model that takes a shortened dump for the whole
+    value would reason from a state the checker never produced.
+    """
+    lines: list[str] = []
+    used = 0
+    for index, text in enumerate(assignments):
+        if len(text) > MAX_INPUT_VALUE_CHARS:
+            head, tail = MAX_INPUT_VALUE_CHARS * 3 // 4, MAX_INPUT_VALUE_CHARS // 4
+            text = (
+                f"{text[:head]} ... [{len(text) - head - tail} characters of "
+                f"this value omitted] ... {text[-tail:]}"
+            )
+        if used + len(text) > MAX_INPUTS_CHARS and lines:
+            lines.append(
+                f"... [{len(assignments) - index} further assignments omitted]"
+            )
+            break
+        lines.append(text)
+        used += len(text)
+    return "\n".join(lines)
+
+
 def build_context(
     target: TargetInfo | None, harness_path: Path, result: VerifyResult
 ) -> TriageContext:
@@ -465,6 +500,7 @@ def build_context(
     parameters: list[str] = []
     function_source = ""
     call_sites: list[str] = []
+    caller_context: list[str] = []
     facts: list[str] = []
 
     if target is not None:
@@ -477,6 +513,7 @@ def build_context(
             parameters = [p.name for p in sig.params]
             function_source = _definition_snippet(text, sig.name, sig.body)
             call_sites = find_call_sites(text, sig.name)
+            caller_context = call_sites_in_context(text, sig.name)
             total = len(find_call_sites(text, sig.name, limit=None))
             if sig.is_static:
                 facts.append(
@@ -510,13 +547,14 @@ def build_context(
     if bounded:
         facts.append(f"the function {bounded}")
 
-    inputs = "\n".join(str(a) for a in result.input_assignments())
+    inputs = _inputs_for_prompt([str(a) for a in result.input_assignments()])
     return TriageContext(
         function=function,
         signature=signature or function,
         parameters=parameters,
         function_source=function_source,
         call_sites=call_sites,
+        caller_context=caller_context,
         harness_code=harness_code,
         violated_property=str(result.violated_property or ""),
         counterexample_inputs=inputs or "(none recorded)",
@@ -639,6 +677,50 @@ def triage_counterexample(
             ),
             llm_error=str(exc),
         )
+
+
+#: How much of a caller a prompt is shown above each call: the lines that
+#: say where the arguments came from. Measured, not guessed -- see
+#: benchmarks/TRIAGE.md, where a bare call line had models dismiss
+#: confirmed bugs because `f(encname, ...)` does not say that `encname`
+#: points into a network packet.
+CALLER_CONTEXT_LINES = 12
+MAX_CALLER_CONTEXT_SITES = 6
+MAX_CALLER_CONTEXT_CHARS = 6000
+
+
+def call_sites_in_context(source: str, name: str) -> list[str]:
+    """Each call of `name` with the lines of its caller that lead up to it.
+
+    The call line alone names the arguments; what decides reachability is
+    what they are -- a literal, a checked length, bytes off the wire -- and
+    that is in the lines above. The walk back stops at the start of the
+    enclosing function (a line beginning in column one), so a prompt is not
+    shown the tail of whatever function sits above the caller.
+    """
+    lines = source.splitlines()
+    blocks: list[str] = []
+    used = 0
+    for site in find_call_sites(source, name, limit=MAX_CALLER_CONTEXT_SITES):
+        line_no = int(site.split(":", 1)[0].removeprefix("line "))
+        first = line_no
+        while first > 1 and line_no - first < CALLER_CONTEXT_LINES:
+            above = lines[first - 2]
+            first -= 1
+            if above[:1] not in ("", " ", "\t", "#") and not above.startswith("}"):
+                break  # the caller's own signature line: the top of it
+            if above.startswith("}"):
+                first += 1  # the end of the function above; not the caller's
+                break
+        block = "\n".join(
+            f"{'>' if n == line_no else ' '} {n:5} | {lines[n - 1]}"
+            for n in range(first, line_no + 1)
+        )
+        if used + len(block) > MAX_CALLER_CONTEXT_CHARS and blocks:
+            break
+        blocks.append(block)
+        used += len(block)
+    return blocks
 
 
 # ------------------------------------------------ call-site validation ---

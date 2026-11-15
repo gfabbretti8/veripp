@@ -311,3 +311,34 @@ class TestUninitialisedInsideTheLibraryModel:
         prop, harness = self._prop(tmp_path, "/* nread */ int f(void) { return fgetc(0); }\n")
         result = VerifyResult(Outcome.COUNTEREXAMPLE, VerifyConfig(), properties=[prop])
         assert mechanical_artifact(result, harness) is not None
+
+
+class TestThePromptIsASizeAModelCanBeSent:
+    """The checker prints the whole containing object for every field write.
+    One write into a struct holding two 32 KB arrays made a 758,000-character
+    triage prompt (miniz, tdefl_record_match)."""
+
+    def test_a_huge_value_is_cut_and_the_cut_is_said(self) -> None:
+        from veripp.triage import MAX_INPUT_VALUE_CHARS, _inputs_for_prompt
+
+        value = "d_obj = { " + "0, " * 250_000 + ".m_flags=7 }"
+        text = _inputs_for_prompt([value])
+        assert len(text) < MAX_INPUT_VALUE_CHARS + 200
+        assert text.startswith("d_obj = { 0, ")
+        assert text.endswith(".m_flags=7 }")       # the end of the dump survives
+        assert "characters of this value omitted" in text
+
+    def test_many_values_stop_at_a_total_and_say_how_many_were_left(self) -> None:
+        from veripp.triage import MAX_INPUTS_CHARS, _inputs_for_prompt
+
+        values = [f"a[{i}] = " + "9" * 1500 for i in range(40)]
+        text = _inputs_for_prompt(values)
+        assert len(text) < MAX_INPUTS_CHARS + 200
+        assert "further assignments omitted" in text.splitlines()[-1]
+
+    def test_ordinary_inputs_are_sent_whole(self) -> None:
+        from veripp.triage import _inputs_for_prompt
+
+        assert _inputs_for_prompt(["n = 4", "a_buf = { 1, 2, 3, -1 }"]) == (
+            "n = 4\na_buf = { 1, 2, 3, -1 }"
+        )

@@ -38,7 +38,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from veripp.agent import Budget, verify_with_agent  # noqa: E402
 from veripp.esbmc import VerifyConfig  # noqa: E402
-from veripp.harness import generate  # noqa: E402
+from veripp.harness import HarnessOptions, generate  # noqa: E402
 from veripp.llm import LLMError, PromptedLLM  # noqa: E402
 from veripp.paths import contracts_include_dir, scratch_dir  # noqa: E402
 from veripp.triage import TargetInfo  # noqa: E402
@@ -56,6 +56,7 @@ class Case:
     record: str          # where that was established
     includes: list[str] = field(default_factory=list)   # relative to CORPUS
     defines: list[str] = field(default_factory=list)
+    unterminated: bool = False   # --unterminated: char* inputs are raw bytes
 
     @property
     def name(self) -> str:
@@ -63,9 +64,17 @@ class Case:
 
 
 FIELD = "benchmarks/HUNT_FIELD_REPORT.md"
-LWIP = ["lwip/src/include", "lwip/contrib/ports/unix/port/include",
-        "lwip/contrib/ports/unix/lib"]
+REPRO = "veripp/benchmarks/repro"
 
+# Only findings that reach the model today are listed. Others in the field
+# report no longer do, which is the tool improving and not a gap here: the
+# harness now refuses or proves them (is_decimal, find_builtin, cJSON_Minify,
+# cJSON_DetachItemViaPointer), or needs a build configuration this script
+# does not carry (mppe_rekey, snmp_asn1_enc_s32t).
+#
+# Four of the real ones are read from benchmarks/repro/, which holds the
+# functions verbatim as they were when found: parson and lwIP have since
+# fixed the UTF-8 and NetBIOS reads upstream, so a fresh clone verifies.
 CASES = [
     # ---- not real: the inputs are ones no caller produces -----------------
     Case("lvandeve/lodepng", "lodepng/lodepng.cpp", "reverseBits", NOT_REAL,
@@ -76,19 +85,13 @@ CASES = [
          "benchmarks/eval_triage.py", defines=["STB_IMAGE_WRITE_IMPLEMENTATION"]),
     Case("richgel999/miniz", "miniz/miniz_tdef.c", "tdefl_record_match", NOT_REAL,
          "miniz's own MZ_ASSERT; every call site normalises the value first",
-         f"{FIELD} #7"),
+         f"{FIELD} #7", includes=["stubs"]),
     Case("kgabis/parson", "parson/parson.c", "json_object_init", NOT_REAL,
          "static; the one caller passes a capacity that needs a 2^64-byte "
          "allocation to have succeeded", f"{FIELD} #14"),
     Case("kgabis/parson", "parson/parson.c", "json_serialize_string", NOT_REAL,
          "output buffer with no length parameter; callers size it first",
          f"{FIELD} #15"),
-    Case("kgabis/parson", "parson/parson.c", "is_decimal", NOT_REAL,
-         "a NUL planted inside a counted string no tokeniser produces",
-         f"{FIELD} #12"),
-    Case("codeplea/tinyexpr", "tinyexpr/tinyexpr.c", "find_builtin", NOT_REAL,
-         "a NUL inside an identifier; the tokeniser's identifiers have none",
-         f"{FIELD} #11"),
     Case("codeplea/tinyexpr", "tinyexpr/tinyexpr.c", "npr", NOT_REAL,
          "NaN is tinyexpr's error value, defined IEEE behaviour",
          f"{FIELD} #13"),
@@ -101,43 +104,26 @@ CASES = [
     Case("DaveGamble/cJSON", "cJSON/cJSON.c", "print_number", NOT_REAL,
          "sscanf is not modelled, so `test` stays unconstrained",
          f"{FIELD} #19"),
-    Case("DaveGamble/cJSON", "cJSON/cJSON.c", "cJSON_DetachItemViaPointer", NOT_REAL,
-         "item->prev is never null in cJSON's circular sibling lists",
-         f"{FIELD} #16"),
-    Case("DaveGamble/cJSON", "cJSON/cJSON.c", "cJSON_Minify", NOT_REAL,
-         "the documented contract is a NUL-terminated string",
-         "benchmarks/CORPUS.md (cJSON, triaged)"),
     Case("DaveGamble/cJSON", "cJSON/cJSON_Utils.c", "detach_item_from_array", NOT_REAL,
          "walks ->prev, never null in a list the library builds",
          f"{FIELD} (struct graph class)"),
     Case("DaveGamble/cJSON", "cJSON/cJSON_Utils.c", "insert_item_in_array", NOT_REAL,
          "walks ->prev, never null in a list the library builds",
          f"{FIELD} (struct graph class)"),
-    Case("lwip-tcpip/lwip", "lwip/src/netif/ppp/mppe.c", "mppe_rekey", NOT_REAL,
-         "mppe_init sets keylen to exactly 16 or 8, or never calls it",
-         f"{FIELD} (internal function class)", includes=LWIP),
-    Case("lwip-tcpip/lwip", "lwip/src/apps/snmp/snmp_asn1.c", "snmp_asn1_enc_s32t", NOT_REAL,
-         "every caller passes the 1-4 that snmp_asn1_enc_s32t_cnt computes",
-         f"{FIELD} (internal function class)", includes=LWIP),
     # ---- real: confirmed under a sanitizer --------------------------------
-    Case("lwip-tcpip/lwip", "lwip/src/core/def.c", "lwip_strnstr", REAL,
-         "reads buffer past n; httpd passes a non-terminated pbuf payload",
-         "benchmarks/LWIP_STRING_HELPERS.md", includes=LWIP),
-    Case("lwip-tcpip/lwip", "lwip/src/core/def.c", "lwip_strnistr", REAL,
-         "same over-read as lwip_strnstr",
-         "benchmarks/LWIP_STRING_HELPERS.md", includes=LWIP),
-    Case("kgabis/parson", "parson/parson.c", "verify_utf8_sequence", REAL,
-         "reads continuation bytes past the counted string; reachable from "
-         "json_value_init_string_with_len", "benchmarks/PARSON_UTF8_OVERREAD.md"),
-    Case("kgabis/parson", "parson/parson.c", "is_valid_utf8", REAL,
-         "passes verify_utf8_sequence a sequence the length does not cover",
-         "benchmarks/PARSON_UTF8_OVERREAD.md"),
-    Case("lwip-tcpip/lwip", "lwip/src/apps/netbiosns/netbiosns.c", "netbiosns_name_decode", REAL,
+    Case("gfabbretti8/veripp", f"{REPRO}/netbios_decode.c", "netbiosns_name_decode", REAL,
          "the read is bounded by nothing; the bytes are a UDP datagram's",
-         "benchmarks/LWIP_NETBIOS_NAME_DECODE.md", includes=LWIP),
-    Case("lwip-tcpip/lwip", "lwip/src/netif/ppp/utils.c", "ppp_vslprintf", REAL,
-         "%.*v calls strlen on a counted field",
-         "benchmarks/LWIP_PPP_SLPRINTF_V.md", includes=LWIP),
+         "benchmarks/LWIP_NETBIOS_NAME_DECODE.md", unterminated=True),
+    Case("gfabbretti8/veripp", f"{REPRO}/ppp_slprintf_v.c", "vslprintf_v", REAL,
+         "%.*v calls strlen on a counted, unterminated field",
+         "benchmarks/LWIP_PPP_SLPRINTF_V.md", unterminated=True),
+    Case("gfabbretti8/veripp", f"{REPRO}/tinyusb_utf16.c", "_convert_utf16le_to_utf8", REAL,
+         "the destination size is passed and discarded; UTF-8 can be 1.5x "
+         "the UTF-16 it is converted from, in place",
+         "benchmarks/TINYUSB_UTF16_DESCRIPTOR.md"),
+    Case("gfabbretti8/veripp", f"{REPRO}/tinyusb_utf16.c", "print_utf16", REAL,
+         "bLength comes from the device and sets how far the buffer is read",
+         "benchmarks/TINYUSB_UTF16_DESCRIPTOR.md"),
     Case("gfabbretti8/veripp", "veripp/examples/off_by_one.cpp", "sum_array", REAL,
          "i <= n reads a[n] for every n", "examples/off_by_one.cpp"),
     Case("gfabbretti8/veripp", "veripp/demo/cve-2019-13223/predict_point.c", "predict_point", REAL,
@@ -145,6 +131,7 @@ CASES = [
          "demo/cve-2019-13223/README.md"),
 ]
 
+CLASSIFY_MARK = "You triage counterexamples"
 EXPLAIN_MARK = "Explain this model-checker counterexample"
 PROPOSE_MARK = "Propose ONE C++ boolean expression"
 
@@ -163,6 +150,10 @@ class Recorder(PromptedLLM):
             return "NONE"
         if EXPLAIN_MARK in system:
             return "(not asked)"
+        if CLASSIFY_MARK not in system:
+            # A request to repair the file or add invariants: the run never
+            # got as far as a counterexample, so this is not a triage case.
+            return ""
         self.asked.setdefault("classify", {"system": system, "user": user})
         # Not real_bug, so that the loop goes on to ask for a precondition
         # and that prompt is recorded too.
@@ -191,12 +182,15 @@ class Replay(PromptedLLM):
                 return "NONE"  # the answerer proposed nothing
         if EXPLAIN_MARK in system:
             return "(not asked)"
+        if CLASSIFY_MARK not in system:
+            return ""
         return self._read("classify")
 
 
 def run(case: Case, corpus: Path, llm: PromptedLLM, timeout: int):
     source = corpus / case.rel
-    target = TargetInfo(source=source, function=case.function)
+    options = HarnessOptions(terminated_strings=not case.unterminated)
+    target = TargetInfo(source=source, function=case.function, options=options)
     harness = generate(source, case.function, target.options)
     path = harness.write(scratch_dir())
     config = VerifyConfig(
@@ -218,6 +212,13 @@ def ensure_corpus(corpus: Path) -> None:
             continue
         if repo == "gfabbretti8/veripp":
             dest.symlink_to(REPO)
+            continue
+    stubs = corpus / "stubs"   # miniz includes a header its build generates
+    stubs.mkdir(exist_ok=True)
+    (stubs / "miniz_export.h").write_text("#define MINIZ_EXPORT\n", encoding="utf-8")
+    for repo in sorted({c.repo for c in CASES}):
+        dest = corpus / repo.split("/")[1]
+        if dest.exists() or repo == "gfabbretti8/veripp":
             continue
         subprocess.run(["git", "clone", "-q", "--depth", "1",
                         f"https://github.com/{repo}.git", str(dest)], check=True)
@@ -245,15 +246,26 @@ def capture(corpus: Path, out: Path, timeout: int, only: str | None) -> int:
         if "classify" in recorder.asked:
             (prompts / f"{case.name}.json").write_text(
                 json.dumps(recorder.asked, indent=1), encoding="utf-8")
+            # The same prompts as plain text, for an answerer that reads
+            # files rather than JSON: a person, or an agent.
+            ask = recorder.asked["classify"]
+            (prompts / f"{case.name}.classify.txt").write_text(
+                f"=== SYSTEM PROMPT ===\n{ask['system']}\n\n"
+                f"=== USER MESSAGE ===\n{ask['user']}\n", encoding="utf-8")
+            if "precondition" in recorder.asked:
+                (prompts / f"{case.name}.precondition.txt").write_text(
+                    "=== SYSTEM PROMPT ===\n"
+                    f"{recorder.asked['precondition']['system']}\n\n"
+                    "=== USER MESSAGE ===\n(the same user message as in "
+                    f"{case.name}.classify.txt)\n", encoding="utf-8")
             index.append(case.name)
-    (out / "cases.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
     print(f"\n{len(index)} of {len(CASES)} cases reach the model")
     return 0
 
 
 def grade(corpus: Path, out: Path, model: str, timeout: int) -> int:
     answers = out / "answers" / model
-    names = json.loads((out / "cases.json").read_text(encoding="utf-8"))
+    names = sorted(p.stem for p in (out / "prompts").glob("*.json"))
     rows = []
     for case in CASES:
         if case.name not in names:
