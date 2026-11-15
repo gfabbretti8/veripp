@@ -72,6 +72,11 @@ REPRO = "veripp/benchmarks/repro"
 # cJSON_DetachItemViaPointer), or needs a build configuration this script
 # does not carry (mppe_rekey, snmp_asn1_enc_s32t).
 #
+# demo/cve-2019-13223's predict_point is deliberately absent. Run with every
+# check on, its first counterexample is an overflow for an `x` outside the
+# segment, not the CVE's division by zero, and no record says whether a
+# caller can pass that -- so there is no ground truth to grade against.
+#
 # Four of the real ones are read from benchmarks/repro/, which holds the
 # functions verbatim as they were when found: parson and lwIP have since
 # fixed the UTF-8 and NetBIOS reads upstream, so a fresh clone verifies.
@@ -126,9 +131,6 @@ CASES = [
          "benchmarks/TINYUSB_UTF16_DESCRIPTOR.md"),
     Case("gfabbretti8/veripp", "veripp/examples/off_by_one.cpp", "sum_array", REAL,
          "i <= n reads a[n] for every n", "examples/off_by_one.cpp"),
-    Case("gfabbretti8/veripp", "veripp/demo/cve-2019-13223/predict_point.c", "predict_point", REAL,
-         "CVE-2019-13223: x1 == x0 divides by zero, from file data",
-         "demo/cve-2019-13223/README.md"),
 ]
 
 CLASSIFY_MARK = "You triage counterexamples"
