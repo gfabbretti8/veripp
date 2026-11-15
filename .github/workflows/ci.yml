@@ -29,16 +29,16 @@ jobs:
     env:
       UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1  # no floating v10 tag is published
+        uses: astral-sh/setup-uv@v10.3.3  # no floating v10 tag is published
         with:
           enable-cache: true
 
       - name: Cache ESBMC
         id: cache-esbmc
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/esbmc
           # Keyed on this file and the pinned digest: bumping either rotates
@@ -82,8 +82,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10.0.1  # no floating v10 tag is published
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3  # no floating v10 tag is published
       - run: uvx ruff@0.15.8 check .
       # The package type-checks clean, and this keeps it so. It was 34
       # errors when nothing ran it, among them a result field typed
@@ -98,8 +98,8 @@ jobs:
   wheel:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10.0.1  # no floating v10 tag is published
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3  # no floating v10 tag is published
         with:
           enable-cache: true
       - run: uv build
@@ -120,8 +120,8 @@ jobs:
       matrix:
         node: ['18', '20', '22']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
 
