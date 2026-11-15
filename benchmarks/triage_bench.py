@@ -275,8 +275,13 @@ def grade(corpus: Path, out: Path, model: str, timeout: int) -> int:
         report = run(case, corpus, Replay(answers, case.name, model), timeout)
         diagnosis = report.diagnosis
         if diagnosis is None or diagnosis.llm_error:
-            rows.append(dict(case=case.name, truth=case.truth, kind="(no answer)",
-                             correct=None, accepted=[], vacuous=False))
+            # Not graded, and said: the run did not end in a triaged
+            # counterexample this time (a solver timeout under load, usually).
+            why = (diagnosis.llm_error if diagnosis is not None
+                   else f"no diagnosis; the run ended {report.final.outcome.name.lower()}")
+            rows.append(dict(case=case.name, truth=case.truth, kind="(not graded)",
+                             correct=None, accepted=[], vacuous=False, why=why))
+            print(f"{case.name:44} NOT GRADED: {why}", flush=True)
             continue
         said_real = diagnosis.kind == "real_bug"
         rows.append(dict(
