@@ -66,8 +66,10 @@ Known M1 limits, all disclosed at runtime rather than papered over:
       assertion, so unsatisfiable preconditions are reported as VACUOUS
       instead of passing. The solver cannot catch this on its own.
 - [x] `benchmarks/eval_triage.py --models a,b,c` scores triage per model
-      against the pilot's ground truth. Because the solver rejects wrong
-      proposals, the question is hit rate against price, not correctness.
+      against the pilot's ground truth, and `benchmarks/triage_bench.py`
+      does it on 16 findings without an API key. The solver rejects a
+      proposal that does not hold, but not one that holds and is wrong
+      about the callers: measured in `benchmarks/TRIAGE.md`.
 - [x] Call-site validation of a proposed precondition, mechanical for literal
       arguments: a caller that passes a value the precondition forbids turns
       the conditional proof into a lead, in `verify` (exit 3) and in `scan`.

@@ -16,8 +16,9 @@ alarms, 5 confirmed bugs), measured 2026-11-15:
 | Claude Sonnet | call line only | 3 / 5 | 10 / 11 |
 | Claude Sonnet | **with the caller's code** | **5 / 5** | 10 / 11 |
 | Claude Opus | call line only | 4 / 5 | 11 / 11 |
-| Claude Opus | **with the caller's code** | **5 / 5** | 9 / 9 (2 not answered) |
+| Claude Opus | **with the caller's code** | **5 / 5** | 10 / 11 |
 | Claude Fable | call line only | 4 / 5 | 10 / 11 |
+| Claude Fable | with the caller's code | not measured | not measured |
 
 Three things follow, in order of how much they matter.
 
@@ -90,9 +91,10 @@ line 78: netbiosns_name_decode(encname, name_dec, sizeof(name_dec));
 ```
 
 The line names the argument. What decides the question is what `encname`
-*is*, and that is six lines up, in the caller. `TRIAGE.md` used to say "a
-model asked to judge reachability without being able to look at callers is
-being asked to guess". This is that, measured.
+*is*, and that is six lines up, in the caller. An earlier
+version of this file guessed that "a model asked to judge reachability
+without being able to look at callers is being asked to guess". This is
+that, measured.
 
 ### The fix: show the caller, not the call
 
@@ -111,23 +113,27 @@ The caller's code leading up to each call (where the arguments come from; `>` ma
 Re-asked with that, Haiku went from 2 of 5 confirmed bugs to 5 of 5, Sonnet
 from 3 to 5, Opus from 4 to 5.
 
-It has a cost. Haiku, with more code to read, called two false alarms real
-that it had dismissed before (`parse_string`, `npr`). That is the cheap
-direction to be wrong in, and the trade is the right one, but it is a trade.
+It has a cost. With more code to read, Haiku called two false alarms real
+that it had dismissed before (`parse_string`, `npr`) and Opus one (`npr`).
+That is the cheap direction to be wrong in, and the trade is the right one,
+but it is a trade.
 
 ### `npr` splits the models, and may be a labelling question
 
 tinyexpr's `npr` multiplies by a value that is `NAN` when `n < r`, and the
 checker reports NaN. The field report calls it false: NaN is tinyexpr's
-error value and producing it is defined behaviour. Sonnet and Fable call it
-`real_bug`, on the grounds that any expression can reach it. Both readings
-are defensible; it is scored against the field report.
+error value and producing it is defined behaviour. With the call line only,
+Sonnet and Fable call it `real_bug`, on the grounds that any expression can
+reach it; with the caller's code, Haiku, Sonnet and Opus all do. It is the
+only false alarm any model but Haiku got wrong in either round, so the
+"false alarms dismissed" column is mostly a count of this one case. Both
+readings are defensible; it is scored against the field report.
 
 ## A wrong dismissal is not free
 
-`eval_triage.py` says "a wrong answer costs a retry rather than soundness",
-because the solver checks every proposal. That holds when a model wrongly
-says *real bug*. It does not hold the other way:
+veripp's own documentation used to say that a wrong answer costs a retry
+rather than soundness, because the solver checks every proposal. That holds
+when a model wrongly says *real bug*. It does not hold the other way:
 
 | model | confirmed bug | proposed, and accepted by ESBMC |
 |---|---|---|
@@ -167,8 +173,9 @@ static functions.
   answered eight cases per agent, told to treat each independently, after
   the one-per-agent Opus run hit a usage limit. An agent that sees eight
   cases can learn the mix.
-- **Two Opus answers are missing** from the second round for the same
-  reason, both false alarms.
+- **Fable was not re-asked with the caller's code.** Its usage limit was
+  reached first. Two of Opus's second-round answers were collected a day
+  after the rest for the same reason.
 - **Some preconditions were not checked.** Under load a few replays ended
   without a verdict and are marked `(not graded)` in the result files; the
   labels in the table above are read straight from the replies and are

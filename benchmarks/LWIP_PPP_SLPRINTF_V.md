@@ -2,6 +2,8 @@
 
 **Status: not reported upstream.** Internal record.
 
+> **Re-checked, 2026-11-16,** against lwIP master `053a259`: `%.*v` in `src/netif/ppp/utils.c` still calls `strlen` on the field unless the fill character is `0`.
+
 | | |
 |---|---|
 | Project | [lwIP](https://github.com/lwip-tcpip/lwip) 2.2.0 **and `master`**, `src/netif/ppp/utils.c` |

@@ -85,13 +85,26 @@ run, and refuses to back results from one that cannot detect a planted bug.
   as a harness artifact. The prompt now carries up to twelve lines of the
   caller above each of the first six calls. Re-asked, Haiku went from 2 of
   5 confirmed bugs kept to 5 of 5, Sonnet from 3 to 5 and Opus from 4 to 5;
-  Haiku also called two false alarms real that it had dismissed before.
+  Haiku also called two false alarms real that it had dismissed before,
+  and Opus one.
   `benchmarks/TRIAGE.md` has the table and what it does not show.
 - **`benchmarks/triage_bench.py` grades triage without an API key.** It
   saves the prompts veripp would send, lets anything answer them into
   files, and replays the answers through veripp's parser and the solver
   check. The answers from this measurement are in
   `benchmarks/triage_results/`.
+
+- **A wrong dismissal is no longer described as free.** The code and the
+  roadmap said a wrong answer from a model costs a retry and never
+  soundness. Twice in the measurement a model dismissed a confirmed bug
+  and proposed a precondition the solver accepted, which veripp reports as
+  `PRECONDITIONED`. The text now says so.
+- **The bug write-ups say what upstream looks like now.** Three of the ten
+  recorded defects have changed upstream since they were written (parson's
+  UTF-8 over-read, lwIP's NetBIOS decode, TinyUSB's `bare_api` example)
+  while their write-ups still said "still present". Each now carries a
+  dated note of what was re-checked, and the three other lwIP findings a
+  note that they are still there.
 
 ### Fixed
 - **A counterexample no longer makes a 758,000-character triage prompt.**
