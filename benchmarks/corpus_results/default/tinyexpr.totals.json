@@ -1,0 +1,13 @@
+{
+ "proved": 17,
+ "preconditioned": 0,
+ "counterexamples": 0,
+ "no_caller_reaches": 0,
+ "artifacts": 4,
+ "inconclusive": 23,
+ "functions": 45,
+ "refused": 1,
+ "seconds": 150.7932608619999,
+ "commit": "ba2e32b",
+ "timeouts": 18
+}

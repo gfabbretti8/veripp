@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 WORK="${1:-$(mktemp -d)}"
 echo "corpus dir: $WORK"
 
-for repo in lvandeve/lodepng nothings/stb; do
+for repo in lvandeve/lodepng nothings/stb richgel999/miniz; do
   name=$(basename "$repo")
   [ -d "$WORK/$name" ] || git clone -q --depth 1 "https://github.com/$repo.git" "$WORK/$name"
 done
@@ -22,3 +22,7 @@ run "$WORK/lodepng/lodepng.cpp" --function lodepng_addofl
 run "$WORK/lodepng/lodepng.cpp" --function reverseBits
 run "$WORK/lodepng/lodepng.cpp" --function lodepng_strlen
 run "$WORK/stb/stb_image_write.h" --function stbiw__zlib_bitrev -D STB_IMAGE_WRITE_IMPLEMENTATION
+run examples/ring_buffer.cpp --class RingBuffer
+# miniz includes a header its build generates; an empty export macro stands in.
+mkdir -p "$WORK/stubs" && echo '#define MINIZ_EXPORT' > "$WORK/stubs/miniz_export.h"
+run "$WORK/miniz/miniz.c" --function mz_adler32 -I "$WORK/stubs"

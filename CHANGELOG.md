@@ -107,6 +107,13 @@ run, and refuses to back results from one that cannot detect a planted bug.
   note that they are still there.
 
 ### Fixed
+- **C++ code inside a namespace can be verified.** `main` is outside
+  every namespace, and the harness called the function and named its
+  parameter types unqualified, so the frontend rejected every function of
+  a file written inside `namespace geo { ... }`: free functions, struct
+  parameters, classes, nested namespaces. The harness now opens the file's
+  own namespaces. tinyxml2's failure had been recorded as the checker's;
+  this part of it was veripp's.
 - **A counterexample no longer makes a 758,000-character triage prompt.**
   The checker prints the whole containing object for every field write, so
   one write into miniz's `tdefl_compressor`, which holds two 32 KB
@@ -141,6 +148,22 @@ run, and refuses to back results from one that cannot detect a planted bug.
 - **`doctor` starts with the veripp version and the Python it runs on**,
   so its output is a complete answer to "what are you running" in a bug
   report.
+
+### Changed: the measurements
+- **The corpus table is re-measured, and is what a first scan gives.**
+  Ten libraries, scanned on 2026-11-16 with veripp's defaults, the pinned
+  ESBMC 8.6 and all eight checks: 380 of 1,013 functions proved. The table
+  it replaces was measured with a different checker, machine, timeout and
+  check set, and is kept in `benchmarks/CORPUS.md` as history. Libraries
+  whose structs have `#if` members are less harnessable by default than
+  the old table said (lodepng 69%, was 82%), because veripp now refuses to
+  guess at them, and more with `--preprocess` (95%); both are shown.
+  `benchmarks/measure_corpus.py` reproduces it.
+- **The "known-broken" C++ libraries are re-checked on 8.6**, with the
+  error each one gives and whose it is. Two of tinyxml2's three causes
+  were veripp's: the namespace bug above, and a receiver object
+  default-constructed for a class that has no default constructor or is
+  abstract, which is open.
 
 ### Changed: the project
 - **The picture at the top of the README is a run, not a drawing.**

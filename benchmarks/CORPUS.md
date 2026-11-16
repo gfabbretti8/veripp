@@ -1,24 +1,99 @@
 # What veripp does on real libraries
 
+Measured with `veripp scan` on 2026-11-16: veripp at `6224d7a`, the pinned
+ESBMC 8.6, a 4-core x86_64 container, no model. Each library was cloned at
+its default branch and scanned with veripp's defaults, with no flags beyond
+the include paths and defines the file cannot be parsed without. That is
+what a first `veripp scan` gives. `./benchmarks/measure_corpus.py`
+reproduces it in about an hour; the totals it wrote are in
+[`corpus_results/`](corpus_results).
+
+These are observations at a point in time, not a leaderboard. They move with
+the machine and the time allowed, and every one is bounded by the
+assumptions each result states.
+
+## Results
+
+| library | what it is | functions | proved | counterexamples | harnessable | artifacts | inconclusive |
+|---|---|---:|---:|---:|---:|---:|---:|
+| [libpng](https://github.com/pnggroup/libpng) `png.c` | the PNG reference implementation | 70 | **23** | 4 | 46% | 2 | 3 |
+| [lodepng](https://github.com/lvandeve/lodepng) | single-file PNG codec | 256 | **72** | 23 | 69% | 19 | 64 |
+| [cJSON](https://github.com/DaveGamble/cJSON) | ubiquitous C JSON parser | 117 | **56** | 4 | 98% | 15 | 40 |
+| [parson](https://github.com/kgabis/parson) | C JSON parser | 144 | **61** | 12 | 99% | 5 | 65 |
+| [lz4](https://github.com/lz4/lz4) `lz4.c` | compression, everywhere | 100 | **32** | 17 | 95% | 2 | 44 |
+| [tinyexpr](https://github.com/codeplea/tinyexpr) | expression evaluator | 45 | **17** | 0 | 98% | 4 | 23 |
+| [zlib](https://github.com/madler/zlib) (8 modules) | the most deployed C library | 117 | **52** | 4 | 56% | 0 | 10 |
+| [giflib](https://github.com/mirrorer/giflib) `dgif_lib.c` | GIF decoding | 23 | **1** | 14 | 100% | 3 | 5 |
+| [jansson](https://github.com/akheron/jansson) `value.c` | C JSON, widely embedded | 88 | **24** | 19 | 97% | 14 | 28 |
+| [libyaml](https://github.com/yaml/libyaml) `api.c` | YAML, behind PyYAML | 53 | **18** | 10 | 87% | 6 | 12 |
+
+1,013 functions, 380 proved. **Harnessable** is the share veripp built a
+harness for; the rest were refused with a reason. **Artifacts** are
+counterexamples veripp itself attributes to how the harness was built.
+**Inconclusive** is 294 in all: 244 hit the 30-second first-pass timeout on
+this machine, 40 the unwind bound, 6 were checker errors and 4 frontend
+rejections. None is a vacuous or unconfirmed proof. Counterexamples are leads, not bugs: none of these was
+triaged for this table.
+
+The commits scanned: libpng `7ef5852`, lodepng `7b2893e`, cJSON `6d9f244`,
+parson `ec53fb6`, lz4 `6b589e8`, tinyexpr `ba2e32b`, zlib `99623ef`, giflib
+`fa37672`, jansson `851a214`, libyaml `90a56d4`. zlib's eight modules are
+`adler32`, `crc32`, `compress`, `uncompr`, `deflate`, `inflate`, `trees`
+and `zutil`.
+
+```bash
+veripp scan path/to/libpng/png.c -I path/to/libpng -I dir/with/pnglibconf.h
+```
+
+libpng needs its `pnglibconf.h` (it ships `pnglibconf.h.prebuilt`), jansson
+`-D HAVE_STDINT_H` and its generated `jansson_config.h`, and libyaml
+`-D HAVE_CONFIG_H` and its generated `config.h`; a `cmake` configure writes
+the last two.
+
+### With `--preprocess`
+
+Three of the libraries keep struct members inside `#if` blocks, and veripp
+refuses to guess which are compiled in. `--preprocess` reads the structs as
+the compiler sees them, and `scan` suggests it when such refusals dominate:
+
+| library | functions | proved | counterexamples | harnessable | artifacts | inconclusive |
+|---|---:|---:|---:|---:|---:|---:|
+| libpng `png.c` | 70 | 34 | 13 | 83% | 2 | 9 |
+| lodepng | 256 | 105 | 25 | 95% | 32 | 83 |
+| zlib (8 modules) | 117 | 43 | 16 | 74% | 3 | 25 |
+
+libpng and lodepng gain on every column. zlib gains in `deflate` and
+`trees` (13% to 91% harnessable in `trees`) and loses in the small modules:
+`compress` and `uncompr` drop from fully harnessable to half, so its proved
+count falls from 52 to 43. That loss is not explained yet.
+
+## Earlier measurements
+
+The first table this file carried, kept for the record. It is not
+comparable with the one above line by line: it was measured with an ESBMC
+built from master, on an M1 Mac, at `--timeout 10 -j 4`, with four checks
+on rather than eight, with a model triaging some findings, and before
+veripp refused structs with `#if` members. The libraries have also moved.
+The sections after it discuss these earlier figures, and say so where they
+quote a number.
+
 Measured with `veripp scan`, ESBMC built from master, on an M1 Mac. Reproduce
 any row with the command under it. These are observations at a point in time,
 not a leaderboard — the numbers move with the solver timeout, and every one of
 them is bounded by the assumptions each result states.
 
-## Results
-
 | library | what it is | functions | proved | leads | harnessable |
 |---|---|---:|---:|---:|---:|
-| [libpng](https://github.com/pnggroup/libpng) `png.c` | the PNG reference implementation | 70 | **40** | 12 | 86% |
-| [lodepng](https://github.com/lvandeve/lodepng) | single-file PNG codec | 260 | **99** | 61 | 82% |
-| [cJSON](https://github.com/DaveGamble/cJSON) | ubiquitous C JSON parser | 117 | 32 | 19 | 89% |
-| [parson](https://github.com/kgabis/parson) | C JSON parser | 144 | 28 | 33 | 91% |
-| [lz4](https://github.com/lz4/lz4) `lz4.c` | compression, everywhere | 94 | 19 | 18 | 57% |
-| [tinyexpr](https://github.com/codeplea/tinyexpr) | expression evaluator | 47 | 17 | 5 | 96% |
-| [zlib](https://github.com/madler/zlib) (6 modules) | the most deployed C library | 46 | 17 | 0 | 63% |
-| [giflib](https://github.com/mirrorer/giflib) `dgif_lib.c` | GIF decoding | 23 | 2 | 12 | 78% |
-| [jansson](https://github.com/akheron/jansson) `value.c` | C JSON, widely embedded | 88 | 20 | 31 | 90% |
-| [libyaml](https://github.com/yaml/libyaml) `api.c` | YAML, behind PyYAML | 53 | — | — | 74% |
+| libpng `png.c` | the PNG reference implementation | 70 | **40** | 12 | 86% |
+| lodepng | single-file PNG codec | 260 | **99** | 61 | 82% |
+| cJSON | ubiquitous C JSON parser | 117 | 32 | 19 | 89% |
+| parson | C JSON parser | 144 | 28 | 33 | 91% |
+| lz4 `lz4.c` | compression, everywhere | 94 | 19 | 18 | 57% |
+| tinyexpr | expression evaluator | 47 | 17 | 5 | 96% |
+| zlib (6 modules) | the most deployed C library | 46 | 17 | 0 | 63% |
+| giflib `dgif_lib.c` | GIF decoding | 23 | 2 | 12 | 78% |
+| jansson `value.c` | C JSON, widely embedded | 88 | 20 | 31 | 90% |
+| libyaml `api.c` | YAML, behind PyYAML | 53 | — | — | 74% |
 
 ```bash
 veripp scan path/to/libpng/png.c -I path/to/libpng --timeout 10 -j 4
@@ -224,6 +299,8 @@ as one.
 
 ## The container reproduces these numbers
 
+Not re-measured on 2026-11-16; the comparison below is with the earlier table.
+
 Every figure above was measured on the host. Scanning cJSON through the
 published arm64 image gives **32 proved of 117 functions, 89% harnessable** —
 the same proved count and the same harnessable rate. Counterexamples come out
@@ -238,6 +315,8 @@ fixtures could see it. Aggregate numbers from a real library are what caught
 it.
 
 ## Reading this honestly
+
+The figures quoted in this section are from the earlier table.
 
 **Proved** is the trustworthy column: no overflow, out-of-bounds read or
 write, null dereference or division by zero, for **any** input within the

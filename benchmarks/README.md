@@ -4,26 +4,27 @@
 libraries** — what was proved, what needs triage, and the veripp bugs each
 library exposed.
 
-Found by probing popular single-TU libraries through the ESBMC 8.4 frontend
-(`--goto-functions-only`) and then through the full veripp pipeline.
-`./benchmarks/run.sh` reproduces everything below from a clean checkout.
+Re-measured on 2026-11-16 with the pinned ESBMC 8.6 and veripp's default
+scan, on a 4-core x86_64 container. `./benchmarks/run.sh` reproduces the
+reference results below from a clean checkout, and
+`./benchmarks/measure_corpus.py` the corpus table.
 
 ## Working targets
 
 Harnessable is the share of a file's functions veripp can build a harness
 for. lodepng and cJSON are measured in [CORPUS.md](CORPUS.md), and their
 figures here are copied from it. stb_image_write and miniz are not in it;
-theirs were measured on 2026-08-23, with ESBMC 8.4, and not since.
+theirs are from the same day and settings.
 
 | library | popularity | frontend | harnessable | notes |
 |---|---|---|---|---|
-| [lodepng](https://github.com/lvandeve/lodepng) | ~2k stars, ubiquitous PNG codec | OK | 82% of 260 functions; 99 proved | best target; exercises every triage category |
-| [stb_image_write](https://github.com/nothings/stb) | ~30k stars (stb) | OK | 14/49 functions (29%), 2026-08-23 | needs `-D STB_IMAGE_WRITE_IMPLEMENTATION` |
-| [cJSON](https://github.com/DaveGamble/cJSON) | ~12k stars | OK (as C++ TU) | 89% of 117 functions; 32 proved | its counterexamples are triaged in CORPUS.md |
-| [miniz](https://github.com/richgel999/miniz) | ~2k stars | OK (needs stub `miniz_export.h`) | 8/24 functions (33%), 2026-08-23 | project typedefs (`mz_ulong`) now resolve via local includes |
+| [lodepng](https://github.com/lvandeve/lodepng) | ~2k stars, ubiquitous PNG codec | OK | 69% of 256 functions; 72 proved | best target; exercises every triage category; 95% and 105 with `--preprocess` |
+| [stb_image_write](https://github.com/nothings/stb) | ~30k stars (stb) | OK | 46/62 functions (74%); 9 proved | needs `-D STB_IMAGE_WRITE_IMPLEMENTATION` |
+| [cJSON](https://github.com/DaveGamble/cJSON) | ~12k stars | OK | 98% of 117 functions; 56 proved | an earlier run's counterexamples are triaged in CORPUS.md |
+| [miniz](https://github.com/richgel999/miniz) | ~2k stars | OK (needs stub `miniz_export.h`) | 23/24 functions (96%); 13 proved | `miniz.c` only |
 | [uthash](https://github.com/troydhanson/uthash) | ~4k stars | OK | n/a | macro library; no functions to target |
 
-## Reference results (ESBMC master, defaults)
+## Reference results (ESBMC 8.6, defaults, 2026-11-16)
 
 These are observations, not assertions. With Anthropic credentials set,
 `./benchmarks/eval_triage.py` grades the live LLM triage against the
@@ -38,10 +39,16 @@ counterexample rows below (ground truth from the 2026-08-23 pilot):
 | `stb_image_write.h --function stbiw__zlib_bitrev` | counterexample: `shl` overflow | missing precondition on `codebits`; with LLM triage, becomes a solver-checked conditional proof |
 | `miniz.c --function mz_adler32` | **verified** | the Adler-32 checksum core, via typedef resolution + `buf_len` pairing |
 
-## Known-broken targets (upstream ESBMC defects, not veripp)
+## Known-broken targets
 
-| library | failure | status |
+Three C++ libraries veripp proves nothing in, as of 2026-11-16 with ESBMC
+8.6. This table used to put all three down to the checker. Two of
+tinyxml2's three causes were veripp's.
+
+| library | what happens | whose |
 |---|---|---|
-| tinyxml2 | converter SIGSEGV, all platforms, v8.4 and master | unreported; 32-line reproducer in scratchpad spike |
-| jsoncpp | frontend rejects (`basic_istringstream` over custom allocator) | [esbmc#7017](https://github.com/esbmc/esbmc/issues/7017) fixed on master post-v8.4; master then fails deeper in its `map` model |
-| pugixml | frontend lacks `<iosfwd>` | unreported |
+| tinyxml2 | every harness was rejected with `unknown type name 'XMLPrinter'`: veripp called into `namespace tinyxml2` without opening it | veripp; **fixed** 2026-11-16 |
+| tinyxml2 | 57 of 91 harnesses are still rejected: veripp default-constructs the receiver, and `XMLElement` has no default constructor and `XMLNode` is abstract | veripp; open. It should refuse these, or build the object through the library |
+| tinyxml2 | the other 34 run out of time or memory, and some crash the checker (`esbmc exited with status -11` on `CloseElement`) | ESBMC; not reported from here |
+| jsoncpp `json_value.cpp` | the frontend rejects the file: `no member named 'pop_back' in 'std::basic_string<char>'` | ESBMC's C++ library model |
+| pugixml | the frontend rejects the header: `pugixml.hpp:383: constructor cannot be redeclared` | not investigated |

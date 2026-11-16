@@ -427,11 +427,14 @@ Shell completions: `eval "$(veripp completion bash)"` (or `zsh`, or
 
 ## Results on real libraries
 
-Measured with `veripp scan`: libpng `png.c` 40 of 70 functions proved,
-lodepng 99 of 260, cJSON 32 of 117. These are bounded proofs, under the
-assumptions printed with each result. They were measured with an earlier,
-four-check version and are observations at a point in time. The full table,
-false-positive triage and reproduction commands are in
+Measured on 2026-11-16 with `veripp scan` at its defaults, ESBMC 8.6 and no
+model, on ten C libraries: 380 of 1,013 functions proved, among them cJSON
+56 of 117, parson 61 of 144 and zlib 52 of 117 across eight modules. With
+`--preprocess`, lodepng is 105 of 256 and libpng's `png.c` 34 of 70. These
+are bounded proofs, under the assumptions printed with each result, and the
+other functions are counterexamples to triage, timeouts and refusals, not
+bugs. The full table, the triage of one library's findings and the script
+that reproduces it are in
 [benchmarks/CORPUS.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/CORPUS.md).
 
 ## Known limits
@@ -452,7 +455,10 @@ false-positive triage and reproduction commands are in
   not show the allocation. Leaks in `--sequence` harnesses are not reported
   yet.
 - **Only C and C-like C++ work.** ESBMC's C++ frontend doesn't handle
-  STL-heavy code. For example, tinyxml2 crashes it and jsoncpp won't parse.
+  STL-heavy code: jsoncpp won't parse, and tinyxml2 crashes it. veripp also
+  default-constructs the object a member function is called on, so a class
+  with no default constructor, or an abstract one, gives a harness the
+  frontend rejects.
 - **Coverage varies by file.** Types defined outside the translation unit
   can't be constructed, and those functions are refused with the reason
   given. Run `veripp scan` to see how much of your code veripp reaches.

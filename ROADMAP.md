@@ -127,3 +127,21 @@ Two things worth knowing before touching delivery:
   configuration and the wheel was copied out of that image; both are in the
   git history if upstream ever stops publishing. The image is now only a
   distribution channel, nothing else is built from it.
+
+## Next
+
+Found by the 2026-11-16 re-measurement (`benchmarks/CORPUS.md`,
+`benchmarks/README.md`), not yet done:
+
+- [ ] A member function's receiver is default-constructed. For a class
+      with no default constructor, or an abstract one, that is a harness
+      the frontend rejects (57 of tinyxml2's 91). Refuse with the reason,
+      or build the object through the library as `--constructors` does
+      for parameters.
+- [ ] `--preprocess` makes zlib's `compress` and `uncompr` less
+      harnessable (fully to half), and the cause is not known.
+- [ ] 244 of the corpus's 294 inconclusive results are the 30-second
+      first-pass timeout on a 4-core machine. Which of them a longer
+      budget settles has not been measured.
+- [ ] Triage through a real API, on callers that were not written to
+      reproduce the bug (`benchmarks/TRIAGE.md`, "Still not measured").
