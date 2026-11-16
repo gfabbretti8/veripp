@@ -3,6 +3,7 @@
 
     ./benchmarks/measure_corpus.py CORPUS OUT            # all of them
     ./benchmarks/measure_corpus.py CORPUS OUT --only lz4
+    ./benchmarks/measure_corpus.py CORPUS OUT2 --only zlib --preprocess
 
 Each library is cloned at its default branch into CORPUS, given the header
 its own build would generate where it needs one, and scanned with veripp's
@@ -11,7 +12,7 @@ parsed without, no model. That is what a first `veripp scan` gives a user,
 which is the number worth publishing. OUT gets the JSON report and the
 readable output of each scan, and the script prints the table rows.
 
-Slow: about two hours for the ten on four cores.
+Takes about an hour for the ten on four cores.
 """
 from __future__ import annotations
 
@@ -76,7 +77,7 @@ def checkout(lib: Library, corpus: Path) -> Path:
     return dest
 
 
-def scan(lib: Library, corpus: Path, out: Path) -> dict:
+def scan(lib: Library, corpus: Path, out: Path, extra: list[str]) -> dict:
     """One library's totals, summed over its source files."""
     dest = checkout(lib, corpus)
     commit = subprocess.run(["git", "-C", str(dest), "log", "-1", "--format=%h"],
@@ -87,7 +88,7 @@ def scan(lib: Library, corpus: Path, out: Path) -> dict:
         stem = f"{lib.name}.{Path(source).stem}"
         report = out / f"{stem}.json"
         command = [sys.executable, "-m", "veripp.cli", "scan", str(dest / source),
-                   "--no-llm", "--no-cache", "--json-out", str(report)]
+                   "--no-llm", "--no-cache", "--json-out", str(report), *extra]
         for inc in lib.includes:
             command += ["-I", str(corpus / inc)]
         for define in lib.defines:
@@ -126,7 +127,11 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("corpus", type=Path)
     ap.add_argument("out", type=Path)
-    ap.add_argument("--only", help="a library name")
+    ap.add_argument("--only", action="append", help="a library name; repeatable")
+    ap.add_argument("--preprocess", action="store_true",
+                    help="scan with --preprocess: for libraries whose structs "
+                         "have members inside #if blocks, which veripp refuses "
+                         "to guess at without it")
     args = ap.parse_args()
     if not shutil.which("git"):
         ap.error("git is needed to clone the libraries")
@@ -138,9 +143,10 @@ def main() -> int:
           "commit | time |")
     print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|", flush=True)
     for lib in LIBRARIES:
-        if args.only and args.only != lib.name:
+        if args.only and lib.name not in args.only:
             continue
-        totals = scan(lib, args.corpus, args.out)
+        totals = scan(lib, args.corpus, args.out,
+                      ["--preprocess"] if args.preprocess else [])
         (args.out / f"{lib.name}.totals.json").write_text(
             json.dumps(totals, indent=1), encoding="utf-8")
         print(row(lib, totals), flush=True)
