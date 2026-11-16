@@ -1,0 +1,3 @@
+The assertion in the function states the precondition: match_len >= 3, 1 <= match_dist <= 32768. The counterexample passes match_len = 0 and match_dist = 0. Real callers pass cur_match_len, cur_match_dist and the saved match values, which are only recorded after a match of at least TDEFL_MIN_MATCH_LEN has been found. A zero length or distance is not something a caller produces, so the counterexample violates a precondition every call site respects.
+
+missing_assumption

@@ -1,0 +1,3 @@
+The failing dereference is c->prev->next for a non-first element (which = 1). Here c's prev is null only because the harness cut the object graph at the depth bound, and every cJSON field was made independently nondeterministic. In a real cJSON array, every item after the first has a non-null prev pointing to its predecessor. The type's own list invariant is violated, so the counterexample is about the harness.
+
+harness_issue

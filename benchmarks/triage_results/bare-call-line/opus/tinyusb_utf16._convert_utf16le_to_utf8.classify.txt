@@ -1,0 +1,5 @@
+The function never uses `utf8_len`. The code itself says "(void) utf8_len" and "TODO: Check for runover". A UTF-16 code unit of 0x800 or above becomes 3 UTF-8 bytes, so the output can need up to 1.5 times as many bytes as the input, and nothing stops writes past the end of `utf8`.
+
+The real caller converts in place: it reads the UTF-16 payload from `buf + 1` and writes UTF-8 into `buf`, in the same buffer. That data is a USB string descriptor, whose contents come from the device. Any descriptor with characters such as U+1000 (CJK or other non-Latin names) produces exactly the expansion in the counterexample: 3 code units where two are >= 0x800 need 2+1+3 or more bytes against 4 available. Writes then run past the end of the buffer and also overtake the input not yet read. Nothing in the call site limits the characters to ones below 0x800. The input is ordinary and device-controlled, so a real caller can trigger the overflow.
+
+real_bug

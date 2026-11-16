@@ -1,0 +1,1 @@
+memchr(name_enc, '\0', 4) != nullptr

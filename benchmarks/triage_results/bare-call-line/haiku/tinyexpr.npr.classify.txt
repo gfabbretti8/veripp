@@ -1,0 +1,7 @@
+The counterexample is n = -1, r = -1. npr computes ncr(n, r) * fac(r), where ncr and fac are the binomial-coefficient and factorial helpers. The NaN arises from those helpers receiving negative arguments. The harness feeds fully nondeterministic doubles, so this is a point in the input space and not something I have shown a caller passes.
+
+No call sites were found in the file, and npr is static, so I cannot confirm that any real caller produces n = -1 or r = -1. That rules out real_bug, which needs a feasible input that a real caller can produce. The mere presence of negative values is not enough to establish a real caller.
+
+The counterexample also falls outside the function's evident domain, a permutation count over non-negative quantities. The verifier's own NOT CHECKED assertions on ncr show it needs n and r greater than -1 for the unsigned conversion to be safe, so the failing region lies outside that range. Nothing shown contradicts a precondition that callers respect, so the closest label is missing_assumption: the input violates the non-negativity precondition that npr relies on.
+
+missing_assumption

@@ -1,0 +1,1 @@
+codebits >= 0 && codebits <= 31

@@ -1,0 +1,2 @@
+The harness only assumes offset <= length, but a printbuffer maintained by its callers keeps the cursor strictly inside the allocated, NUL-terminated buffer (offset < length). The counterexample places the cursor at the end (offset == length == 4), where strlen reads past the object. That object state is forbidden by the type invariant, so this is about the harness.
+harness_issue

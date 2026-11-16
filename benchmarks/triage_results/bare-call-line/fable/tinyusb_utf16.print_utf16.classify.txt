@@ -1,0 +1,8 @@
+The real caller passes temp_buf with buf_len = 128, i.e. a 256-byte buffer holding a USB string descriptor whose first byte (bLength) and contents come from the device. Nothing in print_utf16 validates that data against the buffer:
+
+- bLength = 1 gives (1 - 2) = -1, which becomes a huge size_t after the division by sizeof(uint16_t), so _count_utf8_bytes walks far past the buffer.
+- Even for a well-formed bLength, utf16_len can be up to 126 code units, and each can need 3 UTF-8 bytes, so utf8_len can reach ~378. The conversion itself is bounded by sizeof(uint16_t) * buf_len, but the final ((uint8_t *)buf)[utf8_len] = '\0' uses the unbounded count and writes past the 256-byte buffer. The verifier also reports that write (line 67) as failing.
+
+The harness's 4-element buffer is smaller than the caller's 128, but the defect does not depend on that: the length is taken from buf[0] and never checked against buf_len, so descriptor contents a real device can supply reproduce the same out-of-bounds access with the real 128-element buffer.
+
+real_bug

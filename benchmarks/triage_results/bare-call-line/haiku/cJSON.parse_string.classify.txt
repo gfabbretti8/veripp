@@ -1,0 +1,3 @@
+parse_string reads buffer_at_offset(input_buffer)[0] without checking that the offset is inside the buffer. The counterexample has offset equal to length (4 bytes, cursor at end), so that read is past the end of content. Both shown call sites (line 1401 from parse_value, line 1726 from parse_object) are reached only after the caller has checked that a byte is available at the cursor and that it is a quote, so every shown call site keeps offset < length. The violated precondition is the caller's bounds check, not the code's logic.
+
+missing_assumption

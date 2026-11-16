@@ -2,6 +2,8 @@
 
 **Status: not reported upstream.** Internal record.
 
+> **Re-checked, 2026-11-16,** against lwIP master `053a259`: `memset(smtp_auth_plain, 0xfa, 64)` is still at `smtp.c:409`.
+
 | | |
 |---|---|
 | Project | [lwIP](https://github.com/lwip-tcpip/lwip) 2.2.0, `src/apps/smtp/smtp.c` |

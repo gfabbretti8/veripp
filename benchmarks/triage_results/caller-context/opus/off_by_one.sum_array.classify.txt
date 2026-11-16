@@ -1,0 +1,3 @@
+The loop condition `i <= n` reads a[n], one element past the n valid elements. The real caller passes a 4-element array with n in [1, 4], so n = 4 reads a[4], past the end of `int a[4]`. Any n also reads the uninitialised a[n] when n < 4. The reported property is labelled array-bounds, and the out-of-bounds read is reachable from the real caller with n = 4, exactly as in the counterexample. (The add overflow on the same line also happens with arbitrary int contents, which the caller does supply.) This is a genuine off-by-one that a real call site triggers.
+
+real_bug

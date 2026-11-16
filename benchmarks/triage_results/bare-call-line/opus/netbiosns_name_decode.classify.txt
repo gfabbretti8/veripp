@@ -1,0 +1,5 @@
+The counterexample sets name_enc to the 4 bytes "PPPP" with no terminator. The harness states it chose this on purpose (--unterminated). The function decodes two pairs, writes 2 bytes to name_dec, which fit, then reads name_enc[4] to look for a terminator. That read is past the 4-byte array, so the violation is the read of *pname beyond the buffer.
+
+The function's contract is to walk a NUL- or '.'-terminated encoded name. The single caller (line 78) passes `encname`, an encoded name string, and nothing shown suggests it can be unterminated. The failure comes entirely from the harness handing over an unterminated string. It says nothing about a real caller. (The decoder does ignore name_dec_len and bounds only by NETBIOS_NAME_LEN. That could matter for a different input, but this counterexample does not show it: here only 2 bytes are written.)
+
+harness_issue

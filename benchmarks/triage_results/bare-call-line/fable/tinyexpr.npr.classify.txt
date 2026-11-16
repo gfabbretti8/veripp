@@ -1,0 +1,5 @@
+There are no direct call sites: npr is reached through tinyexpr's built-in function table (a function pointer), so it is called with whatever two numbers the evaluated expression supplies. Nothing between the expression text and npr restricts the arguments, so n = -1, r = -1 is an input a real caller produces simply by evaluating "npr(-1, -1)".
+
+The harness models the inputs correctly (two plain doubles, no object invariants or buffers involved), and there is no call-site precondition that the counterexample violates. For negative arguments ncr yields NaN, and the multiplication ncr(n, r) * fac(r) then produces NaN, which is exactly the property reported. The NaN is the library's way of signalling an invalid argument rather than memory corruption, but the input is feasible and the flagged behaviour does occur with it.
+
+real_bug

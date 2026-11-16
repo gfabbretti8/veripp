@@ -1,0 +1,3 @@
+Both call sites pass a small num: line 671 passes FIRSTBITS (a fixed small constant) and line 709 passes l, a Huffman code length. The counterexample uses num = 4294967295, which no caller produces, and the shift amount num - i - 1 then exceeds the width of unsigned. Every shown call site respects a bound on num that the counterexample violates.
+
+missing_assumption

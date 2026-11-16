@@ -1,0 +1,5 @@
+With which = 1, the loop moves from array->child to its `next` node. In the harness that node is a depth-2 object whose `prev` was set to null because the struct depth bound was reached. That node is not array->child, so the code runs `newitem->prev->next = newitem`, and newitem->prev was just copied from child->prev, which is null. The dereference fails.
+
+In a real cJSON array, every element after the first has a non-null `prev` that points to its predecessor. Only the head's `prev` is special: it points to the tail and is never null in a non-empty list. The second element's prev must be array->child. The harness built the list nodes independently, so the "next" node's prev does not point back to the node before it, and the deeper prev is a null from the depth cut. That breaks the doubly-linked-list invariant cJSON maintains. The single caller (apply_patch, inserting into a parsed or constructed JSON array) only ever passes well-formed cJSON arrays. The counterexample is an unreachable object state created by the harness.
+
+harness_issue

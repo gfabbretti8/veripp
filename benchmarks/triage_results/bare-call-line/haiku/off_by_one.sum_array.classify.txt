@@ -1,0 +1,3 @@
+The loop condition `i <= n` reads a[n], which is one past the end of an array of n elements. The harness models `a` as exactly n valid elements with n <= 4, so the counterexample is n = 4 with a 4-element array. That is an ordinary call: a caller passing a valid 4-element buffer with n = 4 gets an out-of-bounds read. The shown call site passes (a, n) with no precondition that rules this out, and sum_array has external linkage, so any translation unit can make this call. The input is not extreme. The harness models the input correctly, so this is not a harness issue, and no precondition is violated, so this is not a missing assumption.
+
+real_bug

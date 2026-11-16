@@ -1,0 +1,3 @@
+The function ignores utf8_len (the source says "TODO: Check for runover"), and writes 1 to 3 bytes per UTF-16 unit. The call site converts in place (utf16 = buf + 1, utf8 = buf), so nothing in the shown caller bounds the output by the buffer size. Any UTF-16 unit >= 0x800 expands from 2 bytes to 3 bytes, so real string data can overrun the output buffer. The counterexample (units 1024, 0, 4096 need 6 bytes, with utf8_len = 4) is a feasible input, not an artifact of the harness.
+
+real_bug

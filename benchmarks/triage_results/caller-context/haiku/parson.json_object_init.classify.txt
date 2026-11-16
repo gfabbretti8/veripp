@@ -1,0 +1,9 @@
+The counterexample passes capacity = 0x8000000000000000. The product cell_capacity * sizeof(*cells) then overflows size_t, so the allocation is far smaller than the loop that fills cells expects, and the loop writes past the heap object.
+
+The two call sites pass:
+- Line 455: capacity 0.
+- Line 540: new_capacity = MAX(object->cell_capacity * 2, STARTING_CAPACITY), where cell_capacity is the size of a table that already exists in memory.
+
+Neither call site can reach a capacity near 2^63. Doubling an existing table only overflows if that table already had about 2^63 entries, which would have needed an impossibly large allocation first. Every shown call site therefore respects a bound that keeps capacity * sizeof(element) within size_t, and the counterexample violates it.
+
+missing_assumption

@@ -1,0 +1,1 @@
+capacity <= ((size_t)-1) / 8

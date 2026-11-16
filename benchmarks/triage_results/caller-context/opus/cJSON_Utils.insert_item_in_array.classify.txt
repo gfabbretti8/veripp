@@ -1,0 +1,9 @@
+Here is how the counterexample unfolds with which = 1:
+- `child` starts at `array->child` (array_obj_child_target), and one step of the loop moves it to `array_obj_child_target.next` (array_obj_child_target_next_target), which is non-null. `which` drops to 0.
+- `child` is non-null and is not `array->child`, so the code takes the "insert in the middle" path.
+- `newitem->prev = child->prev`. In the harness, `array_obj_child_target_next_target.prev` is null because the struct-depth cut left it null.
+- `newitem->prev->next = newitem` then dereferences null.
+
+In a real cJSON array, every element after the first has a non-null `prev` that points back to its predecessor (here it would be array_obj_child_target). A second list element with `prev == NULL` breaks the linked-list invariant of the cJSON type. The mechanical facts say the same thing: the null comes from the harness's depth cut, not from anything a caller supplies. The only caller (line 997) passes `parent`, an existing array taken from a real document, whose child list cJSON keeps well formed. The failure therefore comes from the harness building an impossible object graph, not from the code.
+
+harness_issue

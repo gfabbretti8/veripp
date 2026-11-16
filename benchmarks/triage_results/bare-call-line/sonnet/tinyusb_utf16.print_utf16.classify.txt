@@ -1,0 +1,3 @@
+The caller passes a 128-element buffer, but its contents come from a USB string descriptor, which a device controls. bLength can be up to 255, so utf16_len can reach 126 and the UTF-8 output can reach about 3 bytes per unit. That is up to roughly 378 bytes written into a 256-byte buffer, and buf[utf8_len] can also fall outside it. A real caller can produce this, so it is not a harness artifact.
+
+real_bug

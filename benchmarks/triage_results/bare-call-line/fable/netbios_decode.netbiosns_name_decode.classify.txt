@@ -1,0 +1,7 @@
+The counterexample is name_enc = "PPPP" with no terminator in a 4-byte array. Every byte is an uppercase letter, so the loop consumes two pairs and then reads past the end of the array looking for the '\0' or '.' that ends the name. The harness itself says the string was deliberately built with NO terminator (--unterminated), and that this is a real defect only where a caller hands the function something that is not a C string.
+
+With a terminated string the read side is safe: the first byte of each pair is checked for '\0' / '.', and a terminator in the second position fails lwip_isupper and returns -1, so the scan never passes the terminator. The single call site shown passes `encname` and gives no indication that it is an unterminated buffer. The write side is not what failed here either (idx is guarded by NETBIOS_NAME_LEN, and the 4-element name_dec is again the harness's shape, not the caller's sizeof(name_dec) buffer).
+
+So the failure comes from how the harness shaped the input - an unterminated string - rather than from an input the shown caller is known to produce.
+
+harness_issue

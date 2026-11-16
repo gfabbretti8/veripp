@@ -1,0 +1,5 @@
+`npr` is static and has no direct call sites, so it is reached some other way: a function pointer or a table. In an expression evaluator like tinyexpr, that is almost certainly the builtin function table. That means its arguments are whatever doubles the user's expression evaluates to. An expression such as `npr(-1,-1)` is easy to write, so n = r = -1 is an input a real caller can produce. With those inputs, ncr and fac both yield NaN (the verifier's own notes show ncr's conversion is only in range for n, r > -1), and the multiplication in npr gives NaN.
+
+No precondition can be read from callers, because none are shown. The harness also models the two plain double parameters correctly, so this is not a harness artifact. The only argument against is that returning NaN for out-of-domain arguments may be the library's intended convention. But the property the verifier flags is reached by a feasible input, and nothing at a call site rules that input out.
+
+real_bug

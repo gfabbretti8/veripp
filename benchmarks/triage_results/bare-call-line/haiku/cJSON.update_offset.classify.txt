@@ -1,0 +1,5 @@
+The function advances the cursor by strlen(buffer->buffer + buffer->offset), so it needs a NUL terminator at or after the cursor, inside the allocation. The counterexample sets offset equal to length, so the cursor sits one past the end of the 4-byte buffer and strlen reads out of bounds.
+
+The four call sites (lines 1262, 1629, 1834, 1854) all write into a printbuffer that is grown with room for the terminator, so the cursor never reaches length. The harness only assumes offset <= length, which is the boundary this counterexample uses. No real caller produces offset == length, so this is not a real_bug. It is a missing precondition on the function (offset < length), which the call sites respect.
+
+missing_assumption

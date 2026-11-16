@@ -1,0 +1,3 @@
+The counterexample passes match_len = 0 and match_dist = 0. The function asserts match_len >= 3 and 1 <= match_dist <= 32768, and every call site records a real match (a zero distance and length is routed to a literal instead). Callers respect this precondition.
+
+missing_assumption

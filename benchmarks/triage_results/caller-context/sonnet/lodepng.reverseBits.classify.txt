@@ -1,0 +1,3 @@
+The failure needs num = 4294967295, which makes the shift amount num - i - 1 exceed 31. Real callers pass FIRSTBITS (a small constant) or a Huffman code length l taken from the tree. Those lengths are bit counts of at most a few bits, never near 2^32. The counterexample violates a precondition (num <= 32) that every shown call site satisfies.
+
+missing_assumption

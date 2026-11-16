@@ -1,0 +1,7 @@
+The counterexample sets capacity to 0x8000000000000000. The allocation sizes are cell_capacity * sizeof(size_t), and the item arrays are sized from capacity * 7 / 10. At that capacity the multiplication wraps around, so the malloc requests are too small and the loop writing cells[i] runs past the allocation.
+
+The shown call sites pass 0 (line 455) and new_capacity (line 540). The first is harmless. For the second, the prompt does not show how new_capacity is computed, but the counterexample needs a capacity near 2^63, which is an extreme value that a real caller would not produce. The object fields in the harness are overwritten before they are read, so the object state does not drive this violation.
+
+The counterexample depends on a capacity precondition that the callers do not violate, so the label is missing_assumption.
+
+missing_assumption

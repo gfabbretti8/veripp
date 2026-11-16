@@ -1,0 +1,7 @@
+The violated property is the function's own MZ_ASSERT stating its precondition: match_len >= 3 and 1 <= match_dist <= 32768. The counterexample passes match_len = 0 and match_dist = 0, which is not a match at all. Each real call site only records actual matches:
+- Line 1214 is reached only in the `else` branch after `else if (!cur_match_dist)` sends zero-distance cases to tdefl_record_literal, so cur_match_dist != 0. Matches of length 3 at large distances, or at cur_pos == dist, were zeroed out just before. The match finder only produces lengths >= TDEFL_MIN_MATCH_LEN and distances within the dictionary.
+- Line 1192 requires cur_match_len > m_saved_match_len and cur_match_len >= 128.
+- Line 1205 uses m_saved_match_len/m_saved_match_dist, which are non-zero (guarded by `if (d->m_saved_match_len)`) and were stored from an earlier valid cur_match_len/cur_match_dist pair.
+Every call site respects the precondition that the counterexample violates.
+
+missing_assumption

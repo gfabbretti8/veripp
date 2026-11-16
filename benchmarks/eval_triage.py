@@ -5,10 +5,13 @@ The triage pilot (2026-08-23) established ground truth for these targets by
 reading call sites and validating every proposal with ESBMC. This asks the
 production AnthropicLLM the same questions and scores it.
 
-Because the solver checks every proposal, a wrong answer costs a retry rather
-than soundness -- so the question is not "is this model reliable" but "how
-often is it right, and is that worth its price". Run several models to find
-out for your codebase:
+The solver checks every proposal, so a model that wrongly says "real bug"
+costs a reader an investigation and nothing else. The other direction is
+not free: a model that wrongly dismisses a bug can propose a precondition
+the solver accepts, and the finding becomes a PRECONDITIONED proof
+(benchmarks/TRIAGE.md has two measured instances). So watch which way a
+model errs, not only how often. Run several models to find out for your
+codebase; triage_bench.py has more cases and needs no key:
 
     ./benchmarks/eval_triage.py --models claude-haiku-4-5,claude-sonnet-5,claude-opus-5
 
@@ -178,8 +181,8 @@ def main() -> int:
     for score in scores:
         print(score.line())
     print(
-        "\nA wrong proposal costs a retry, not soundness -- the solver rejects it.\n"
-        "So compare hit rate against price, not correctness against perfection."
+        "\nA wrong 'real bug' costs an investigation. A wrong dismissal can end as a\n"
+        "PRECONDITIONED proof of a function that has the bug: see benchmarks/TRIAGE.md."
     )
     perfect = [
         s for s in scores

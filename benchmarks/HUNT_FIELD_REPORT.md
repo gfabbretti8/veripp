@@ -2,6 +2,14 @@
 
 **Status: internal record. Nothing here has been reported upstream.**
 
+> **Update, 2026-11-16.** Three of the ten defects have since changed
+> upstream, without a report from here: parson's UTF-8 over-read, lwIP's
+> NetBIOS name decode and the TinyUSB `bare_api` example. Each write-up
+> says what was re-checked. The three other lwIP findings were re-read at
+> master `053a259` and are still there. The two cJSON_Utils findings were
+> not re-checked. The counts and the text below are as recorded at the
+> time.
+
 This is what happened when veripp was aimed at code it had never seen, with
 a standing rule that no counterexample counted until it survived triage and
 a sanitizer.

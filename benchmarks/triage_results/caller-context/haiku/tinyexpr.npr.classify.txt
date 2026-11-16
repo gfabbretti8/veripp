@@ -1,0 +1,7 @@
+No call sites were found, but the facts say npr is static and may be reached through a function pointer. tinyexpr is an expression evaluator, so its builtin function table is the natural route to npr. A user-written expression can supply any argument values, including n = -1 and r = -1.
+
+With those values, ncr returns NaN for the out-of-domain input, and NaN times fac(r) gives NaN. This is the only effect the counterexample shows: the function returns NaN for an invalid domain. A user can produce that input from an expression string, so it is a feasible input, and the function returns a NaN that the property flags.
+
+Because no call site can rule the input out, no precondition on the caller holds. The input is one a real caller can produce, and the result misbehaves in the sense the property checks.
+
+real_bug

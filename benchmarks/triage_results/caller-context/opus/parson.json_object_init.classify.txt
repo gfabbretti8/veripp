@@ -1,0 +1,5 @@
+The counterexample uses capacity = 2^63. Then cell_capacity * sizeof(size_t) wraps to 0, parson_malloc allocates a zero-size block, and the initialisation loop writes past it.
+
+The real callers pass far smaller values. json_object_make passes 0. json_object_grow_and_rehash passes MAX(object->cell_capacity * 2, STARTING_CAPACITY): it starts at STARTING_CAPACITY and doubles once each time an existing object outgrows its item capacity. To reach 2^63 cells, the object would already have needed a cells table of about 2^62 entries allocated successfully, which is not physically possible, so the earlier allocation would have failed first. Every call site therefore keeps capacity small enough that the size multiplication cannot overflow.
+
+missing_assumption

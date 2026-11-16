@@ -143,7 +143,8 @@ precondition enforced by the official fix (`x1 != x0`) removes it
 ([details](https://github.com/gfabbretti8/veripp/blob/main/demo/cve-2019-13223/README.md)).
 
 Exit codes: `0` verified, `1` counterexample, `2` usage error, `3`
-inconclusive.
+inconclusive. A run whose reader closed the pipe (`veripp scan | head`)
+exits `141` and has no verdict.
 
 ## Usage
 
@@ -292,10 +293,14 @@ endpoint (`--llm-base-url` or `$VERIPP_LLM_BASE_URL`). A provider's API key
 in the environment, set for some other tool perhaps, does not send your code
 anywhere on its own.
 
-How good the triage is has only partly been measured. The path works end to
-end, a 7B local model scored 0 of 2 on the benchmark, and no hosted model has
-been graded yet. [benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md)
-has the details.
+Triage has been measured on 16 findings whose answer was already known.
+Shown the caller's code above each call, as veripp now sends it, Claude
+Haiku, Sonnet and Opus each kept all 5 confirmed bugs and dismissed 9 or
+10 of the 11 false alarms; shown only the call line, every model dismissed
+at least one real bug. A 7B local model scored 0 of 2. The set is small and
+no model has been graded through its real API yet:
+[benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md)
+has the method, the caveats and the raw answers.
 
 ## In CI
 

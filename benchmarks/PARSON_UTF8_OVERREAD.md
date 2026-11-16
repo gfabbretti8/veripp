@@ -2,6 +2,11 @@
 
 **Status: not reported upstream.** Internal record.
 
+> **Update, 2026-11-15.** Fixed upstream since this was written: at parson
+> `ec53fb6`, `verify_utf8_sequence` takes the remaining length and rejects a
+> sequence that does not fit, and veripp verifies all three functions. The
+> text below describes the code as it was when found.
+
 | | |
 |---|---|
 | Project | [parson](https://github.com/kgabis/parson) — single-file C JSON library |

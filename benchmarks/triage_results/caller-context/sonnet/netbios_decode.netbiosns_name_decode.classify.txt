@@ -1,0 +1,3 @@
+The harness passes an unterminated 4-character buffer, but the real caller does the same thing. It builds a malloc'd packet of MIN_PACKET bytes, fills every byte with 'A' (all legal name characters) and no NUL, and passes a pointer into the middle of it. The decoder loops until it sees '\0' or '.', so it keeps consuming 'A' pairs and reads past the end of the packet, including the second-character read at line 38. A real datagram of the minimum accepted length can trigger this, so the over-read is reachable.
+
+real_bug

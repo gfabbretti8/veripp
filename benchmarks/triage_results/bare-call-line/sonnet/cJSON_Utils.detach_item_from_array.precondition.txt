@@ -1,0 +1,1 @@
+array->child == 0 || array->child->next == 0 || array->child->next->prev != 0

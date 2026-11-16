@@ -1,0 +1,9 @@
+The counterexample passes num = 4294967295. The shift amount num - i - 1 then exceeds 31 at i = 0, which is undefined behaviour on an unsigned 32-bit shift.
+
+Both call sites pass a small num:
+- Line 671 passes FIRSTBITS, a fixed table-index width.
+- Line 709 passes l = tree->lengths[i], a Huffman code length. Code lengths are at most 15 in this format, and the length is always below the word width of 32.
+
+Every shown call site therefore keeps num within the word width, and the counterexample violates that precondition (num must be at most 32).
+
+missing_assumption

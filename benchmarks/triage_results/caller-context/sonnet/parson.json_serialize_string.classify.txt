@@ -1,0 +1,3 @@
+The harness gives buf a fixed 2 elements with no relation to the string. Real callers size buf from a prior counting pass (or pass NULL), so the output always fits. The overflow comes from a buffer of the wrong shape.
+
+harness_issue

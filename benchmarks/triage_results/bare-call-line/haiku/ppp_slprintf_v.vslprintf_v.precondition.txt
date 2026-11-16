@@ -1,0 +1,1 @@
+p != nullptr && memchr(p, 0, buflen) != nullptr

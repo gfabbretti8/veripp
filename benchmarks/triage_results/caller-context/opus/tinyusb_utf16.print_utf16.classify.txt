@@ -1,0 +1,9 @@
+print_utf16 trusts the low byte of buf[0] (bLength) to size the UTF-16 payload, and it never checks that value against buf_len.
+
+The real caller passes a 128-element (256-byte) buffer and sets the low byte of buf[0] to 1 or 255:
+- With bLength = 1, (1 - 2) / 2 is computed in an unsigned type and wraps to a huge utf16_len. _count_utf8_bytes then reads far past the end of the buffer, the same out-of-bounds read the counterexample shows at line 28.
+- With bLength = 255, utf16_len = 126. Each unit is 0x0800, which takes 3 UTF-8 bytes, so utf8_len = 378. The final ((uint8_t*)buf)[utf8_len] = '\0' writes 378 bytes into a 256-byte buffer, which is the failed check at line 67.
+
+Both values come straight from a descriptor's length byte, and the caller produces them directly. The harness's small buffer only reproduces in miniature what the real caller triggers.
+
+real_bug

@@ -1,0 +1,5 @@
+The counterexample has offset == length == 4, so the first read buffer_at_offset(input_buffer)[0] touches content[4], one past the 4-byte buffer. The harness only assumed offset <= length.
+
+The real callers do not reach parse_string that way. The call at line 1401 is guarded by can_access_at_index(input_buffer, 0) && buffer_at_offset(input_buffer)[0] == '"', so offset < length and the current byte is a quote. The call at line 1726 first checks that index 1 can be accessed, then advances the offset by one and calls buffer_skip_whitespace. That function stops while can_access_at_index(0) holds, and it steps the cursor back if it reaches the end, so the cursor stays inside the buffer. Both callers therefore establish offset < length, which is the precondition this counterexample breaks.
+
+missing_assumption

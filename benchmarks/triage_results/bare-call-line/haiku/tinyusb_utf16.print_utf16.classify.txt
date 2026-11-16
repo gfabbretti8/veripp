@@ -1,0 +1,3 @@
+The only call site passes temp_buf, a buffer whose first element is a USB string descriptor header. Its bLength byte comes from the device, which a real caller cannot pre-validate because the call site shows no check. The code computes utf16_len = ((buf[0] & 0xff) - 2) / sizeof(uint16_t) with no lower bound on bLength. If bLength is 1, the subtraction goes negative and converts to a huge size_t, so _count_utf8_bytes walks far past the buffer. A device can send bLength = 1 in an ordinary descriptor read, so a real caller can produce this input and the out-of-bounds access is a real bug. The harness counterexample's concrete values are not consistent with the reported violation, but the feasible trigger exists regardless.
+
+real_bug

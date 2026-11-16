@@ -5,14 +5,19 @@ offline with `NullLLM` and is not tied to a vendor.
 
 Design rule: the LLM only ever *proposes* -- a classification, an explanation,
 a precondition, a rewritten file. Every proposal that could change a verdict is
-re-checked by ESBMC. A wrong proposal costs a retry, never soundness, which is
-why a small cheap model is a reasonable choice here.
+re-checked by ESBMC. That bounds what a wrong answer can do, without making
+it free: a wrong "real bug" costs a reader an investigation, and a wrong
+dismissal can come with a precondition the solver accepts, which is reported
+as PRECONDITIONED, never PROVED, with the precondition printed
+(benchmarks/TRIAGE.md measures both, per model).
 
 The prompts live in `PromptedLLM` and are identical for every provider; a
 provider supplies only `_ask`. They encode what the triage pilot measured:
 classification is decided by a function's REAL CALL SITES, not by the trace.
 Without call sites all three pilot counterexamples were misread as real bugs;
-with them, all three were triaged correctly.
+with them, all three were triaged correctly. A call line alone turned out
+not to be enough either: the prompt also carries the caller's code above
+each call, which is what says where an argument comes from.
 """
 
 from __future__ import annotations
@@ -42,6 +47,9 @@ class TriageContext:
     parameters: list[str]         # parameter names, for precondition scoping
     function_source: str          # the definition, verbatim
     call_sites: list[str] = field(default_factory=list)  # "line N: <code>"
+    #: The first few of those calls again, each under the lines of its caller
+    #: that lead up to it: where the arguments come from.
+    caller_context: list[str] = field(default_factory=list)
     harness_code: str = ""
     violated_property: str = ""
     counterexample_inputs: str = ""
@@ -58,6 +66,12 @@ class TriageContext:
             f"Function under verification: {self.signature}\n\n"
             f"Definition:\n```cpp\n{self.function_source}\n```\n\n"
             f"Call sites in the same file (what real callers pass):\n{sites}\n\n"
+            + (
+                "The caller's code leading up to each call (where the "
+                "arguments come from; `>` marks the call):\n```cpp\n"
+                + "\n...\n".join(self.caller_context) + "\n```\n\n"
+                if self.caller_context else ""
+            )
             + (f"Facts established mechanically (not judgements):\n{facts}\n" if facts else "")
             +
             f"Verification harness (machine-generated):\n"

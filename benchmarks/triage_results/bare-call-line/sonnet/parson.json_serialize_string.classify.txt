@@ -1,0 +1,3 @@
+The harness gives buf only 2 chars, but the function writes the whole escaped output into buf: control char 31 becomes the 6-byte "\u001f". Overflow of a 2-element buffer is guaranteed for such input. The function has no length parameter for buf, so it relies on the caller sizing buf to the serialized length (the usual parson pattern: call with buf == NULL to measure, then allocate and call again). Both call sites pass a buffer prepared that way, so the counterexample violates a precondition (buf holds the full serialized output) that the callers respect.
+
+missing_assumption

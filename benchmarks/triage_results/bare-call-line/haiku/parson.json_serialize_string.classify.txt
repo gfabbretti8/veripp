@@ -1,0 +1,3 @@
+The counterexample is an array-bounds violation on the output buffer. The harness models `buf` as a fixed 2-element `char` array with no length parameter, and the comment says the 2 is only how far the body indexes. Output length is not bounded by that: with len = 3, an escaped character alone can write more than 2 bytes, and the output buffer is never sized from the input. The harness therefore chose a buffer of the wrong shape. The real callers (line 1214 with `strlen(key)`, line 1253 with `len`) pass a buffer whose size is determined by the caller's own sizing logic, not a 2-byte array. The counterexample reflects the harness's choice of buffer size, not a input a real caller produces.
+
+harness_issue

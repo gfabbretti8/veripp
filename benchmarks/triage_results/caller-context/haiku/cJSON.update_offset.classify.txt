@@ -1,0 +1,5 @@
+The failure is inside strlen. The harness gives the buffer four arbitrary bytes with no terminator, and allows offset to equal length, so strlen reads past the end of the buffer.
+
+The four call sites all run after a print_* routine has just written a value into the buffer. Those routines always finish with a NUL terminator, and the offset then sits on that terminator, inside the buffer. A real caller therefore never passes a buffer whose bytes from offset onward lack a terminator. The counterexample's unterminated buffer is one no caller produces, and the harness is what introduces it.
+
+harness_issue

@@ -2,6 +2,8 @@
 
 **Status: not reported upstream.** This is an internal record.
 
+> **Re-checked, 2026-11-16,** against lwIP master `053a259`: `lwip_strnstr` in `src/core/def.c` is unchanged.
+
 | | |
 |---|---|
 | Project | [lwIP](https://github.com/lwip-tcpip/lwip) (LWIP_VERSION 2.2.x) |

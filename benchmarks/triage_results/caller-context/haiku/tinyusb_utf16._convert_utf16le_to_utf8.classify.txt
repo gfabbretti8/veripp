@@ -1,0 +1,3 @@
+The only caller, print_utf16, takes utf16_len from the descriptor's bLength, which comes from the USB device and so is attacker-controlled. The output buffer is the caller's own `buf` reused in place. The function has no runover check (the TODO says so), and it writes 1 byte for each unit below 0x80, 2 bytes for units below 0x800, and 3 bytes for the rest. Input units that are 2 bytes each can expand to 3 bytes of output, so a descriptor of BMP characters at or above 0x800 writes more bytes than the input occupied and can run past the end of `buf`. The caller does not bound the output by its own buffer size either: it only prints the expected size. A device can send such a descriptor, so this is a feasible input that a real caller produces and it misbehaves.
+
+real_bug

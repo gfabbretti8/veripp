@@ -1,0 +1,3 @@
+The caller passes `a` with exactly `n` valid elements and n in [1, 4], and both n = 1 and n = 4 are feasible. The loop condition `i <= n` makes the last iteration read `a[n]`, one element past the end of the array, for every value of n the caller can produce. The counterexample with n = 4 is therefore an input a real caller produces and it misbehaves on every call.
+
+real_bug

@@ -1,0 +1,5 @@
+The counterexample uses num = 4294967295, so the first shift amount, num - 0 - 1, is far above 31.
+
+The real callers pass FIRSTBITS, a small compile-time constant, at line 671. At line 709 they pass l = tree->lengths[i], a Huffman code length. In DEFLATE those lengths are at most 15, and the caller skips l == 0. No caller passes a num anywhere near 32, let alone UINT_MAX. The shift is well defined for any num <= 32, and every call site meets that.
+
+missing_assumption

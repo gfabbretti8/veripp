@@ -1,0 +1,1 @@
+which == 0 || array->child == nullptr || array->child->next == nullptr || array->child->next->prev != nullptr

@@ -2,6 +2,13 @@
 
 **Status: not reported upstream.** Internal record.
 
+> **Update, 2026-11-16.** Changed upstream since this was written: at
+> TinyUSB `052ae5a`, `examples/host/bare_api` bounds `bLength` in
+> `print_utf16` and `_convert_utf16le_to_utf8` stops at the destination
+> size. Only that example was re-read; the other two named below were not.
+> The text below, including "Still present upstream", describes the code
+> this was found in, which `benchmarks/repro/tinyusb_utf16.c` keeps.
+
 | | |
 |---|---|
 | Project | [TinyUSB](https://github.com/hathach/tinyusb), `examples/host/bare_api`, `examples/host/device_info`, `examples/dual/host_info_to_device_cdc` |

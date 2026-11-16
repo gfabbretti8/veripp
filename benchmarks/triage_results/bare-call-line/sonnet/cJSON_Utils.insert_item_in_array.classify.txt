@@ -1,0 +1,3 @@
+The only call site passes a parent and index of a real cJSON array whose children form a well-formed doubly linked list: every non-head element has a non-null prev. The failing dereference is newitem->prev->next, where prev was copied from child->prev of a non-head element. The harness cut that prev to null at the struct depth bound, an object state the type's own invariants forbid. So this is a harness artifact.
+
+harness_issue

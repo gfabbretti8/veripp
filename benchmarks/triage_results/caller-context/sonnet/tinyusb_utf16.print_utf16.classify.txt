@@ -1,0 +1,3 @@
+The harness bounds the buffer to 4 elements, which differs from the caller's 128, so the exact counterexample is partly an artifact. But the real caller still hits the defect. In mode 1 it sets bLength = 1, so utf16_len = ((1) - 2) / 2 underflows to a huge size_t. _count_utf8_bytes then reads far past the 128-element buffer. In mode 2 it sets bLength = 255, which makes the UTF-8 output (126 * 3 = 378 bytes) larger than the 256-byte buffer it is written into. The function trusts the descriptor length rather than buf_len, and real callers can supply those values.
+
+real_bug

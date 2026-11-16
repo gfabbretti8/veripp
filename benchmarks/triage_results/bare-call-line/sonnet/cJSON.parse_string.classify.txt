@@ -1,0 +1,3 @@
+The harness allows offset == length, so buffer_at_offset(input_buffer)[0] reads one past the end of the 4-element content array. Both call sites are reached from the value/object parsing paths, which only dispatch to parse_string after checking that at least one byte is readable at the cursor and that it is a double quote. A cursor with no readable byte at it is therefore never passed in. The counterexample violates that precondition.
+
+missing_assumption

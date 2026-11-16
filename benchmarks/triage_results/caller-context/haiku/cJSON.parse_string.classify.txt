@@ -1,0 +1,7 @@
+The counterexample has offset equal to length (4 in a 4-byte buffer), so parse_string reads one byte past the end of the buffer at its first check, buffer_at_offset(input_buffer)[0].
+
+Call site 1401 is guarded by can_access_at_index(input_buffer, 0), so offset is below length there. Call site 1726 is different. Before it, cannot_access_at_index(input_buffer, 1) guarantees the comma is followed by at least one byte. Then offset is incremented past the comma and buffer_skip_whitespace runs. That skip advances while bytes are <= 32 and can stop with offset == length when the input ends in whitespace after a comma (for example `{"a":1, `). parse_string is then called with offset == length and reads content[length], which is out of bounds.
+
+A real caller can therefore produce offset == length at call site 1726 with trailing whitespace, so the out-of-bounds read is reachable from a real input. This is a real bug.
+
+real_bug

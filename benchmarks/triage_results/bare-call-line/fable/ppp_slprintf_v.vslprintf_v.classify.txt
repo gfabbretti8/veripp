@@ -1,0 +1,3 @@
+The only call site is vslprintf_v(rhostname, sizeof(rhostname), ruserlen, ruser): the source is passed together with an explicit length (ruserlen) as the precision, which is how a length-delimited, non-NUL-terminated field (a peer name taken from a packet) is handed over. The function nevertheless calls strlen(p) before applying prec, so it reads past the end of a buffer that is only guaranteed to hold prec bytes. The harness's unterminated `p` therefore matches what this caller can really pass, and the over-read in strlen is reachable.
+
+real_bug
