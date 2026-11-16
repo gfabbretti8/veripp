@@ -1,0 +1,5 @@
+Every byte in the buffer is 0, so strlen could only run off the end if it started past the last element. That means offset == length == 4, and buffer_pointer points one past the 4-byte array. The harness only assumes offset <= length.
+
+Each of the four call sites runs right after a print routine. That routine first called ensure() to reserve room for its output plus a terminator, then wrote a NUL-terminated string at buffer->buffer + buffer->offset. So at every call the cursor is strictly inside the allocation, and a NUL lies at or after it within the buffer. A cursor sitting exactly at the end of the buffer is a state the callers never produce. The counterexample breaks a precondition that all call sites meet.
+
+missing_assumption

@@ -1,0 +1,5 @@
+The counterexample has num = 4294967295, so on the first iteration the shift amount is num - 0 - 1 = 4294967294, far beyond the 32-bit width - undefined. (The unwinding assertion fails for the same reason: the loop would run ~4 billion times.)
+
+Both call sites pass a bit count, not an arbitrary unsigned: line 671 passes the constant FIRSTBITS (the first-level Huffman table width, a small constant such as 9), and line 709 passes `l`, a Huffman code length, which is bounded by the maximum code length (15 for deflate). For any num <= 32 the right shift amount num - i - 1 is at most 31 and the left shift amount i is at most 31, so the function is well defined. Every real caller respects num <= 32; the counterexample does not.
+
+missing_assumption

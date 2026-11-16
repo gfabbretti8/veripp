@@ -1,0 +1,3 @@
+The only real call site passes `ruser`, which the caller treats as a C string, so the function is only ever handed NUL-terminated input. The counterexample instead gives `p` as four nondeterministic characters with no terminator ({8, 8, 8, 8}), and the failing read is the unbounded strlen on that unterminated buffer. The harness models an unterminated string, which the triage rules classify as a harness issue, not a defect a real caller can reach.
+
+harness_issue

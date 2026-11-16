@@ -1,0 +1,5 @@
+With which = 1, c becomes array->child->next. That node is the harness's depth-cut struct, whose prev is null. Because c is not the first element, the code runs c->prev->next = c->next and dereferences that null prev.
+
+In a real cJSON array, the children form a doubly linked list: every element after the first has prev pointing to its predecessor, so child->next->prev == child, and the head's prev points to the last element. The caller at line 462 passes a parent found with get_item_from_pointer and checked with cJSON_IsArray, which is a genuine cJSON tree built by the library, so that invariant holds. The null prev here exists only because the harness gave each linked node independent pointer fields and cut the graph at depth 2. It produced a list state that cJSON's own list operations never build.
+
+harness_issue

@@ -1,0 +1,5 @@
+The content array is all zeros, so any in-bounds first byte is not '"' and the function would go straight to fail. The only way to get an out-of-bounds read at the first dereference is the cursor sitting at the end of the buffer: the harness allows offset == length (== 4), so buffer_at_offset(input_buffer)[0] reads content[4], one past the 4-element array.
+
+Real callers never do that. parse_value only calls parse_string after checking can_access_at_index(input_buffer, 0) and that the byte at the offset is '"'. parse_object calls it after buffer_skip_whitespace, which pulls the offset back when it reaches length. So at both call sites offset < length holds and the byte at the cursor is readable. The counterexample violates that precondition.
+
+missing_assumption

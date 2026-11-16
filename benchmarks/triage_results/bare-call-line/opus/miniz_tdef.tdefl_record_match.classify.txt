@@ -1,0 +1,5 @@
+The failing property is the function's own MZ_ASSERT stating its precondition: match_len >= TDEFL_MIN_MATCH_LEN (3) and 1 <= match_dist <= TDEFL_LZ_DICT_SIZE. The counterexample passes match_len = 0 and match_dist = 0.
+
+All three callers are inside tdefl_compress_normal. They call tdefl_record_match only after the match finder has produced a match. cur_match_len is checked against TDEFL_MIN_MATCH_LEN before a match is recorded, otherwise a literal is recorded instead. cur_match_dist is a distance into the dictionary, at least 1 and at most the dictionary size. m_saved_match_len and m_saved_match_dist are only replayed when a previous match of at least the minimum length was saved. The callers therefore establish exactly the asserted precondition, and the harness's nondeterministic arguments violate it. The other fields of `d` being independently nondeterministic is a further harness weakness, but the assertion failure itself is about the argument precondition.
+
+missing_assumption

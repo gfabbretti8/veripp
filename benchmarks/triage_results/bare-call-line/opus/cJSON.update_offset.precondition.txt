@@ -1,0 +1,1 @@
+buffer == NULL || buffer->buffer == NULL || (buffer->offset < buffer->length && memchr(buffer->buffer + buffer->offset, '\0', buffer->length - buffer->offset) != NULL)

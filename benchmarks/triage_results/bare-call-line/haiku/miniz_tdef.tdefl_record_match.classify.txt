@@ -1,0 +1,3 @@
+The counterexample sets match_len = 0 and match_dist = 0. Both violate the function's assertion (match_len >= TDEFL_MIN_MATCH_LEN, match_dist >= 1). The three call sites pass cur_match_len, d->m_saved_match_len and d->m_saved_match_dist, which are match lengths and distances produced by the match finder. Those values are only recorded as matches when they meet the minimum length and a distance of at least 1, so no shown caller passes the counterexample's values. The violated condition is a precondition on the two arguments, not a field combination in the object, so this is not a harness issue. Nothing in the call sites shows a feasible input that misbehaves, so this is not a real bug.
+
+missing_assumption

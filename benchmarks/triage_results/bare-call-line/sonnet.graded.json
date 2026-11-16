@@ -1,0 +1,154 @@
+[
+ {
+  "case": "lodepng.reverseBits",
+  "truth": "not_real",
+  "kind": "missing_assumption",
+  "correct": true,
+  "proposed": "num <= 32",
+  "accepted": [
+   "num <= 32"
+  ],
+  "vacuous": false
+ },
+ {
+  "case": "stb_image_write.stbiw__zlib_bitrev",
+  "truth": "not_real",
+  "kind": "missing_assumption",
+  "correct": true,
+  "proposed": "codebits >= 0 && codebits <= 30",
+  "accepted": [
+   "codebits >= 0 && codebits <= 30"
+  ],
+  "vacuous": false
+ },
+ {
+  "case": "miniz_tdef.tdefl_record_match",
+  "truth": "not_real",
+  "kind": "missing_assumption",
+  "correct": true,
+  "proposed": "(match_len >= 3) && (match_dist >= 1) && (match_dist <= 32768)",
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "parson.json_object_init",
+  "truth": "not_real",
+  "kind": "(no answer)",
+  "correct": null,
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "parson.json_serialize_string",
+  "truth": "not_real",
+  "kind": "missing_assumption",
+  "correct": true,
+  "proposed": null,
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "tinyexpr.npr",
+  "truth": "not_real",
+  "kind": "real_bug",
+  "correct": false,
+  "proposed": null,
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "cJSON.parse_string",
+  "truth": "not_real",
+  "kind": "missing_assumption",
+  "correct": true,
+  "proposed": "input_buffer->offset < input_buffer->length",
+  "accepted": [
+   "input_buffer->offset < input_buffer->length"
+  ],
+  "vacuous": false
+ },
+ {
+  "case": "cJSON.update_offset",
+  "truth": "not_real",
+  "kind": "harness_issue",
+  "correct": true,
+  "proposed": "buffer->offset < buffer->length",
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "cJSON.print_number",
+  "truth": "not_real",
+  "kind": "harness_issue",
+  "correct": true,
+  "proposed": "output_buffer != NULL && output_buffer->buffer != NULL",
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "cJSON_Utils.detach_item_from_array",
+  "truth": "not_real",
+  "kind": "harness_issue",
+  "correct": true,
+  "proposed": "array->child == 0 || array->child->next == 0 || array->child->next->prev != 0",
+  "accepted": [
+   "array->child == 0 || array->child->next == 0 || array->child->next->prev != 0"
+  ],
+  "vacuous": true
+ },
+ {
+  "case": "cJSON_Utils.insert_item_in_array",
+  "truth": "not_real",
+  "kind": "(no answer)",
+  "correct": null,
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "netbios_decode.netbiosns_name_decode",
+  "truth": "real",
+  "kind": "harness_issue",
+  "correct": false,
+  "proposed": "memchr(name_enc, 0, 4) != NULL",
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "ppp_slprintf_v.vslprintf_v",
+  "truth": "real",
+  "kind": "harness_issue",
+  "correct": false,
+  "proposed": "p[0] == 0 || p[1] == 0 || p[2] == 0 || p[3] == 0",
+  "accepted": [
+   "p[0] == 0 || p[1] == 0 || p[2] == 0 || p[3] == 0"
+  ],
+  "vacuous": false
+ },
+ {
+  "case": "tinyusb_utf16._convert_utf16le_to_utf8",
+  "truth": "real",
+  "kind": "real_bug",
+  "correct": true,
+  "proposed": null,
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "tinyusb_utf16.print_utf16",
+  "truth": "real",
+  "kind": "real_bug",
+  "correct": true,
+  "proposed": null,
+  "accepted": [],
+  "vacuous": false
+ },
+ {
+  "case": "off_by_one.sum_array",
+  "truth": "real",
+  "kind": "real_bug",
+  "correct": true,
+  "proposed": null,
+  "accepted": [],
+  "vacuous": false
+ }
+]

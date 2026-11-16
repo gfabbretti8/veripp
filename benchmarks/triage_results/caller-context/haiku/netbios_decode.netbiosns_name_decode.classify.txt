@@ -1,0 +1,7 @@
+The harness passes a 4-character buffer with no terminator, and the decoder runs past its end. The question is whether a real caller can produce that situation.
+
+The single call site (line 78) takes encname from a malloc'd packet of MIN_PACKET bytes, starting at offset HDR_LEN + 1, and fills every byte with 'A'. The packet has no NUL or '.' after the name. The decoder loops over the bytes, and since 'A' is a legal name character it keeps reading until it runs out of packet. Only the terminator stops it, and there is none inside the datagram. So the minimum-length datagram that netbiosns_recv accepts drives the decoder past the end of the packet buffer.
+
+A remote sender controls those bytes. A datagram at the minimum accepted length, with no terminator, is a feasible input that real callers receive, and it causes an out-of-bounds read. The harness's unterminated 4-byte array is a shape the real caller also produces. This is a real bug, not a harness artifact.
+
+real_bug

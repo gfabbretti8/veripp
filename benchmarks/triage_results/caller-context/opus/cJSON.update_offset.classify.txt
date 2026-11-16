@@ -1,0 +1,7 @@
+update_offset runs strlen from buffer->buffer + offset, so it relies on a NUL terminator somewhere between offset and the end of the allocation. The failure is strlen running off the 4-byte array: either the cursor sits at the end of the array (offset == length == 4), or no zero byte follows the cursor.
+
+At every real call site, update_offset runs right after print_value or print_string_ptr succeeds. Those printers call ensure() to reserve room and always write a terminating '\0' after what they emit, so the printbuffer at that point holds a NUL-terminated string starting at offset, inside the allocated length. This is an invariant of the printbuffer object: its content is written together with offset.
+
+The harness filled the bytes and offset independently, so it built a printbuffer with no terminator inside the buffer at or after the cursor. That is an unterminated string, a state no caller produces. The counterexample is about how the harness models the buffer, not about update_offset.
+
+harness_issue

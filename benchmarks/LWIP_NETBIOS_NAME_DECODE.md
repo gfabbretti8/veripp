@@ -2,6 +2,12 @@
 
 **Status: not reported upstream.** Internal record.
 
+> **Update, 2026-11-15.** lwIP master at `053a259` has a different
+> `netbiosns_name_decode`: it takes the encoded name's length and stops at
+> it, and veripp verifies it. The text below, including "Still present
+> upstream", describes the code this was found in;
+> `benchmarks/repro/netbios_decode.c` keeps that version.
+
 | | |
 |---|---|
 | Project | [lwIP](https://github.com/lwip-tcpip/lwip) 2.2.0, `src/apps/netbiosns/netbiosns.c` |

@@ -1,0 +1,1 @@
+match_len >= TDEFL_MIN_MATCH_LEN && match_dist >= 1 && match_dist <= TDEFL_LZ_DICT_SIZE

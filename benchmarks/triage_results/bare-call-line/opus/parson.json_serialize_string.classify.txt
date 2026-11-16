@@ -1,0 +1,5 @@
+The function has no output-length parameter, and its contract is set by how parson serializes. The serializer first runs with buf == NULL to count the bytes needed (`written_total`). It then allocates a buffer of that size and runs again with buf pointing into it. Both call sites, inside json_serialize_to_buffer_r, pass a `buf` that is either NULL or sized by that counting pass, so it always has room for the escaped output.
+
+The harness instead fixes `buf` at 2 bytes, because 2 is how far the body indexes in one step. Escaping 3 input characters, including 0x1f which becomes the 6-byte "\u001f", plus the quotes needs far more than 2 bytes, so the write overflows the artificial buffer. A real caller never hands over an output buffer smaller than the size the function itself reports. The counterexample comes from a buffer of the wrong shape in the harness, not from a defect in the code.
+
+harness_issue

@@ -1,0 +1,3 @@
+The harness makes `p` unterminated, which would normally point to a harness or contract issue. Here, though, the only real caller does exactly that: `ruser` is a malloc'd 8-byte buffer filled with 'u' and no NUL terminator, and the caller relies on the precision (`ruserlen`) to bound the read. The function ignores that bound for the length computation, because fillch is always ' ' and the code calls strlen(p) unconditionally before clamping to prec. strlen on `ruser` therefore reads past the 8-byte allocation. That is a heap over-read on input a real caller produces (an unterminated PAP username field). The counterexample shows the same defect: prec = 3, a 4-byte unterminated buffer, and strlen running off the end.
+
+real_bug

@@ -1,0 +1,3 @@
+json_serialize_string has no output-size parameter. It writes the full escaped string into `buf`, or only counts when buf is NULL. Its callers (via json_serialize_to_buffer_r) follow parson's two-pass scheme: they first run with buf == NULL to compute the serialization size, then allocate or check a buffer of that size and run again. The real contract is therefore that `buf` has room for the whole escaped output. The harness instead guesses a 2-byte `buf` ("2 is how far the body indexes"), but the function writes the quote, the escaped characters and the closing quote, up to 6 bytes per input character (e.g. 0x1f -> "\u001f"). The overflow at memcpy in APPEND_STRING comes from the harness giving buf the wrong shape, not from anything a real caller passes.
+
+harness_issue

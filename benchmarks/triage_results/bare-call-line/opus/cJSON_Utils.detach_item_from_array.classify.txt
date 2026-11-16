@@ -1,0 +1,5 @@
+With which = 1, c becomes array->child->next, which is array_obj_child_target_next_target. That node's prev is null because the harness hit its struct-depth bound. Since c is not the first element, the code runs `c->prev->next = c->next` and dereferences that null prev.
+
+In a real cJSON array the children form a doubly linked list. Every non-first element's prev points to its predecessor, so here child->next->prev == child, and only the head's prev is special (it points to the tail). Nothing a caller can build leaves a non-first node with a null prev. The harness wired the nodes up independently, including a depth cut that nulls `prev`, and produced a list that breaks the type's own linkage invariant. The counterexample is about how the harness modelled the input, not about the code.
+
+harness_issue

@@ -1,0 +1,3 @@
+The NaN arises in compare_double(test, d) where test comes from sscanf, which the harness leaves unmodelled so test is arbitrary (possibly NaN). d itself is finite here because NaN/inf is handled earlier. Real callers pass finite doubles and sscanf recovers a finite value from the printed text, so this is a harness modelling artifact, not a code bug.
+
+harness_issue

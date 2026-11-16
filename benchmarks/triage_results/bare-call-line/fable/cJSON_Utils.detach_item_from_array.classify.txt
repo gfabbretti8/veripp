@@ -1,0 +1,7 @@
+With which = 1 the loop steps to c = array->child->next, the second element. c is not the first element, so the code executes c->prev->next = c->next. In the harness that second element is `array_obj_child_target_next_target`, whose prev (and next) pointers were set to null because the struct depth bound was reached. So c->prev is NULL and the dereference fails.
+
+That state cannot exist in a real cJSON list. The children of an array form a doubly linked list: any element reached through some node's `next` has `prev` pointing back at that node (only the first child's prev is special, and it points at the last element). A second element with a null prev violates the type's own linkage invariant. The null here is not something the caller at line 462 passes; it is the harness cutting the object graph at depth 2 and filling the cut pointers with null, as the mechanical fact also notes. Line 393 is the definition itself, not a caller.
+
+The counterexample is about the harness's model of the list, not about the code.
+
+harness_issue

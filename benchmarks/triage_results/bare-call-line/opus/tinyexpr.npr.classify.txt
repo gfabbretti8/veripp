@@ -1,0 +1,5 @@
+npr(n, r) = ncr(n, r) * fac(r). With n = r = -1, both helpers are outside their domain. ncr rejects negative arguments, and fac rejects a negative argument. Both return NAN as the library's error value, and NAN * NAN is NaN. Nothing undefined happens. The "NaN on ieee_mul" only records that a domain-error NaN made by the helpers passes through the product.
+
+npr is static and has no call sites in this file. It is reached only indirectly, as a builtin evaluated from an expression, so no shown caller supplies these arguments. The arithmetic is well defined whenever the inputs are in the function's mathematical domain (0 <= r <= n). The counterexample relies only on breaking that domain, and nothing shown establishes it as a misbehaviour a real caller produces. Treated as a precondition violation, not a defect.
+
+missing_assumption

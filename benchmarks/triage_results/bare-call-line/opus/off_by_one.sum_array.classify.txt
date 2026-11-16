@@ -1,0 +1,3 @@
+The loop condition is `i <= n`, so it reads a[n], one element past an array of n elements. That happens for every n, including the most ordinary input: a correctly sized array of n ints. The counterexample uses n = 4 with a 4-element array, which is exactly what a correct caller passes, and the access a[4] is out of bounds. The reported trace also shows a signed overflow on the sum, but the out-of-bounds read alone is enough and does not depend on extreme values. `sum_array` also has external linkage, so any caller can pass it a normal (pointer, count) pair. No precondition on the inputs rules this out except a buffer larger than its stated length, which would contradict the function's own contract.
+
+real_bug

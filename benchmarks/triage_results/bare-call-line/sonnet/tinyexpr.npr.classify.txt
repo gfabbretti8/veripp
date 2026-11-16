@@ -1,0 +1,3 @@
+No call sites are shown, so there is no evidence of a precondition that callers respect. The input (-1, -1) is an ordinary pair of doubles that any caller could pass, and nothing shows the harness modelling it wrongly. With those inputs the multiplication yields NaN.
+
+real_bug

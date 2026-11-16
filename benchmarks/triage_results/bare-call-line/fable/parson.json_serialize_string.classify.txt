@@ -1,0 +1,3 @@
+The function has no length parameter for buf: it is written to be called either with buf == NULL (to count the bytes needed) or with a buf the caller has already sized from that count. The harness could not know that size and gave buf exactly 2 chars, then let len go up to 4 with arbitrary content; the counterexample (len = 3, first byte 0x1f expanding to a 6-byte \u001f escape) overruns that 2-byte buffer in the memcpy inside APPEND_STRING. The overrun is a consequence of the harness's arbitrary 2-element buffer, not of anything the two call sites pass: they forward a buf from the serialization routine whose size was computed for the whole output. This is a buffer of the wrong shape in the harness.
+
+harness_issue

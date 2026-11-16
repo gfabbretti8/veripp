@@ -1,0 +1,3 @@
+No call sites exist in the file, so npr is most likely reached through a function-pointer table, where it receives arbitrary doubles from user-supplied expressions. Nothing restricts n or r, so a negative n and r (here -1, -1) is a feasible input. It makes ncr and fac return NaN, and the multiplication then yields NaN. No call site or invariant rules this out.
+
+real_bug

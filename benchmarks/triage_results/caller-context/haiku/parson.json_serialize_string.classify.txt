@@ -1,0 +1,3 @@
+The counterexample is len = 3 with a `buf` of only 2 valid chars. The harness fixed `buf` at 2 elements, an arbitrary size chosen so the body does not index past it, but the function writes one character per input byte plus escapes and two quotes, so any output for a 3-character string needs more room than that. Both call sites pass a buffer that the caller has sized for the serialized output (the caller first runs the length computation and then allocates for the full output), so the harness has built a buffer of the wrong shape. The overflow is therefore a statement about the harness's undersized buffer, not about a feasible call.
+
+harness_issue

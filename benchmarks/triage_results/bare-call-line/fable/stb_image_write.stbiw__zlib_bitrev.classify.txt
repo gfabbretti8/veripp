@@ -1,0 +1,3 @@
+The counterexample uses codebits = -1, which makes `while (codebits--)` run for billions of iterations and shift res until it overflows. The function is static with two call sites: one passes the literal 5, the other is the stbiw__zlib_huffa(b,c) macro, which passes a Huffman code length (a small positive bit count, also used as the bit count for stbiw__zlib_add). No caller passes a negative or large bit count, so the counterexample violates a precondition every call site respects.
+
+missing_assumption

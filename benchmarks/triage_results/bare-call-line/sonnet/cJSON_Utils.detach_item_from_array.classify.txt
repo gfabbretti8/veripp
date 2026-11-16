@@ -1,0 +1,2 @@
+The failing dereference is c->prev->next for a non-first element (which=1). The harness cut prev to null at the struct depth bound, but in any real list every non-first element has a non-null prev (the type invariant of a doubly linked list). The caller at line 462 passes a real parent/index, so this null prev is the harness combining independently nondeterministic fields into a state the invariant forbids.
+harness_issue

@@ -1,0 +1,5 @@
+The violation is a NaN produced by `a - b` inside compare_double(test, d). Before that point, `d` has already been checked: NaN and Inf take the "null" branch, so `d` is finite. For two finite IEEE doubles, subtraction never yields NaN; the only NaN case for subtraction is inf - inf. So the NaN has to come from `test`, which sscanf parses out of number_buffer, and number_buffer was written by sprintf("%1.15g", d).
+
+The harness itself says sprintf is "declared but not defined in this translation unit, so their side effects are NOT modelled". number_buffer is therefore effectively arbitrary to the checker. sscanf can then read "nan" or "inf" out of it and hand back a NaN or Inf `test`, even though the real sprintf on a finite `d` always prints a finite decimal that parses back to a finite value. No real caller (the cJSON_Number case in print_value) can make this happen. The counterexample comes from the harness/model leaving sprintf unmodelled, not from the code.
+
+harness_issue

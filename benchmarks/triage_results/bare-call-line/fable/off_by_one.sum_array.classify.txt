@@ -1,0 +1,3 @@
+The loop runs for i = 0..n inclusive, so it reads a[n], one element past an array of n elements. The harness models `a` as exactly n valid elements, which is the natural contract for (pointer, count), and the call site passes (a, n) in exactly that way. The function also has external linkage. Any caller passing an n-element array hits the out-of-bounds read; no special input values are needed.
+
+real_bug

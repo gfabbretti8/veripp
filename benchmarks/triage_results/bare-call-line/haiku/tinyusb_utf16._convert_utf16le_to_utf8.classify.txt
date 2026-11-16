@@ -1,0 +1,5 @@
+The counterexample uses utf16_len = 3 and utf8_len = 4, with code units 1024, 0 and 4096. These are ordinary code points (2-byte, 1-byte and 3-byte UTF-8 respectively), so the input is valid UTF-16. The conversion writes 2 + 1 + 3 = 6 bytes into a destination that the harness sizes at 4. The function ignores utf8_len entirely (the TODO says so), so the write overruns whenever the output does not fit.
+
+The only shown call site is `_convert_utf16le_to_utf8(buf + 1, utf16_len, (uint8_t *) buf, ...`. Its output-size argument is cut off in the excerpt, so the caller's capacity guarantee cannot be read from it. The implicit precondition is that the output buffer has room for up to 3 bytes per input unit, i.e. utf8 capacity >= 3 * utf16_len (or at least the actual encoded length). The counterexample sets utf8_len = 4 against utf16_len = 3, which violates that. Nothing in the shown call site suggests a caller produces a short buffer with a long input, and the input values themselves are not extreme. The failure is therefore a missing capacity precondition that the function leaves unchecked, not a case of a caller passing bad data.
+
+missing_assumption

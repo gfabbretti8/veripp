@@ -1,0 +1,3 @@
+The caller passes an array of exactly n elements, and the loop uses i <= n, so it reads a[n], one past the end. The caller's own input satisfies the harness shape, so this is a genuine off-by-one.
+
+real_bug

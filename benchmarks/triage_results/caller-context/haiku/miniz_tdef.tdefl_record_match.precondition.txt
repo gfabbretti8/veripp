@@ -1,0 +1,1 @@
+match_len >= 3 && match_dist >= 1 && match_dist <= 32768

@@ -1,0 +1,5 @@
+The reported NaN comes from inside compare_double, on IEEE_SUB(a, b). A NaN from subtraction needs both operands to be infinite of the same sign. The caller only reaches the %1.15g and %1.17g path when d is finite (the isnan/isinf branch returns first), so an inf - inf NaN cannot come from d. The other operand, test, comes from sscanf on the printed buffer. The harness does not model sprintf or sscanf at all (the verifier notes their side effects are not modelled), so the contents of number_buffer and test are unconstrained. A real snprintf/sscanf on a finite double never yields a NaN, so the counterexample depends on an unmodelled libc result rather than on anything a caller can pass.
+
+The harness also builds the cJSON item with every field independent. valueint and valuedouble are separate nondeterministic values, but cJSON keeps them consistent for number nodes, so the object it builds holds a combination the type's invariants forbid. That matches the harness_issue description.
+
+harness_issue

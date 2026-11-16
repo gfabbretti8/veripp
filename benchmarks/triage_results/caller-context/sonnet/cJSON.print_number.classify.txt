@@ -1,0 +1,3 @@
+The failure is NaN inside compare_double, reached because sscanf is not modelled (its result is nondeterministic) and the item is a fully nondeterministic object. Real callers pass a cJSON_Number item with a real sscanf. This is about the harness.
+
+harness_issue

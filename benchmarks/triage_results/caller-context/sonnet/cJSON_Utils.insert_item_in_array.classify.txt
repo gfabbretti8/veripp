@@ -1,0 +1,3 @@
+The null dereference is of a prev/next field that the harness cut to null at its struct depth bound. In a real cJSON list, a non-head child always has a non-null prev. The failure comes from independently nondeterministic fields that violate the list invariants.
+
+harness_issue

@@ -1,0 +1,3 @@
+The violated property is the function's own MZ_ASSERT: match_len >= TDEFL_MIN_MATCH_LEN, match_dist >= 1, match_dist <= TDEFL_LZ_DICT_SIZE. The counterexample passes match_len = 0 and match_dist = 0 straight from nondeterministic parameters. The function is static with three call sites, all in the compressor's match loop, passing cur_match_len/cur_match_dist or the saved match length/distance, i.e. values produced by the match finder and only recorded once a match of at least the minimum length was found. The assertion documents the precondition those callers maintain; a zero-length, zero-distance match is not something they pass.
+
+missing_assumption

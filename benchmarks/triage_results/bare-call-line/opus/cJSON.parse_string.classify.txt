@@ -1,0 +1,5 @@
+The failure is at cJSON.c:832:5, at the top of parse_string. In the counterexample every content byte is 0, so the first read is `buffer_at_offset(input_buffer)[0]`. The harness only assumes `offset <= length` (length <= 4, content has 4 elements). With offset == length == 4, that read is content[4], one past the array, before any check runs.
+
+Real callers don't do this. parse_value (line 1401) reaches parse_string only after checking that it can access index 0 of the buffer and that the byte there is '"'. parse_object (line 1726) checks first that index 0 is accessible and fails if it is not. So both call sites guarantee offset < length, which also means at least one readable byte at the cursor. The counterexample breaks that precondition. Neither call site can produce it, so this is not a real bug in the code as it is used.
+
+missing_assumption

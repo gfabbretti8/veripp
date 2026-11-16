@@ -1,0 +1,5 @@
+The counterexample uses capacity = 0x8000000000000000. Then `cell_capacity * sizeof(size_t)` wraps to 0, malloc(0) succeeds, and the loop that fills cells with OBJECT_INVALID_IX writes past the zero-byte heap block.
+
+The real callers never pass that. Line 455 passes 0, which returns before any allocation. Line 540 is the grow path. It passes new_capacity, derived from the object's current cell_capacity: doubling a power-of-two table that starts at a small constant. Reaching 2^63 would take about 2^62 items already stored in memory, which cannot happen. The overflow comes only from an arbitrary huge capacity the callers never produce. The counterexample breaks a precondition that both call sites meet.
+
+missing_assumption

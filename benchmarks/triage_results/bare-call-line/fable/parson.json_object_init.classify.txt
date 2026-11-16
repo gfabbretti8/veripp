@@ -1,0 +1,5 @@
+The counterexample passes capacity = 0x8000000000000000. Then object->cell_capacity * sizeof(*object->cells) = 2^63 * 8 wraps to 0, so cells is a zero-byte allocation, while the loop `for (i = 0; i < object->cell_capacity; i++) object->cells[i] = OBJECT_INVALID_IX;` writes into it - the reported heap out-of-bounds write at line 493. The incoming contents of *object are irrelevant: the function overwrites every field before using it.
+
+What do real callers pass? Line 455 passes the constant 0, which returns before any allocation. Line 540 passes new_capacity from the grow-and-rehash path, which is derived from the object's current cell capacity (doubled, with a small starting minimum). That capacity is the size of a table that already exists in memory, so it can never be anywhere near 2^63 entries; the size computation cannot wrap for any value a caller can actually reach. Both call sites therefore respect capacity * sizeof(size_t) not overflowing, and the counterexample violates it.
+
+missing_assumption

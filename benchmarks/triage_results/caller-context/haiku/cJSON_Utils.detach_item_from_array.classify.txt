@@ -1,0 +1,5 @@
+The counterexample has which = 1. The walk reaches a node that is not the first element, and that node's prev pointer is null. The failing dereference is c->prev->next at the start of the unlinking. The null prev comes from the harness, not from the code. The verifier notes that the harness left next null at the depth cut, and the harness also sets the second node's prev to null, even though that node is linked into the list.
+
+In a real cJSON array, every element after the first has a non-null prev, because the list is doubly linked and maintained that way. The harness builds a node that is in the list but has prev = 0, which the type's own invariant forbids. The caller at line 462 gets its array from a parsed object, so this state never reaches the function.
+
+harness_issue

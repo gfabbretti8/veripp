@@ -1,0 +1,7 @@
+The counterexample hands the function an unterminated run of uppercase letters, and the decoder keeps reading past the end. On this harness alone that would be a harness issue, but the one real caller does the same thing.
+
+At line 78 the caller mallocs a packet of MIN_PACKET bytes and memsets every byte to 'A', so the packet has no '\0' and no '.'. It then passes encname = packet + HDR_LEN + 1, which points into raw datagram bytes rather than a C string. netbiosns_name_decode loops until it sees '\0' or '.', and it only limits the writes (idx < NETBIOS_NAME_LEN), not the reads. Every pair of 'A's is accepted as a valid encoded character, so pname walks off the end of the malloc'd packet. That is a heap out-of-bounds read, the same kind of read past the input that the counterexample shows at line 38.
+
+The unterminated input is not something only the harness invents: a minimum-length datagram from the network produces it. The read is not bounded by the packet length, so feasible input misbehaves.
+
+real_bug

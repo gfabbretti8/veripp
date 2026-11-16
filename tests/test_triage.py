@@ -342,3 +342,57 @@ class TestThePromptIsASizeAModelCanBeSent:
         assert _inputs_for_prompt(["n = 4", "a_buf = { 1, 2, 3, -1 }"]) == (
             "n = 4\na_buf = { 1, 2, 3, -1 }"
         )
+
+
+class TestTheCallerIsShownAboveTheCall:
+    """`f(encname, n)` names an argument; what it is, is in the caller. Shown
+    the call line alone, four model tiers dismissed a confirmed over-read as
+    a harness artifact (benchmarks/TRIAGE.md)."""
+
+    SOURCE = (
+        "static int decode(const char *p, int n) { return p[n]; }\n"
+        "\n"
+        "int other(void) {\n"
+        "    return 7;\n"
+        "}\n"
+        "\n"
+        "void on_packet(const char *packet, int len) {\n"
+        "    const char *name = packet + 12;   /* off the wire */\n"
+        "    if (len < 12) return;\n"
+        "    decode(name, len);\n"
+        "}\n"
+    )
+
+    def test_the_lines_that_say_where_an_argument_comes_from_are_there(self) -> None:
+        from veripp.triage import call_sites_in_context
+
+        (block,) = call_sites_in_context(self.SOURCE, "decode")
+        assert "const char *name = packet + 12;" in block
+        assert block.splitlines()[-1].startswith(">") and "decode(name, len);" in block
+
+    def test_it_stops_at_the_top_of_the_caller(self) -> None:
+        from veripp.triage import call_sites_in_context
+
+        (block,) = call_sites_in_context(self.SOURCE, "decode")
+        assert "void on_packet(" in block          # the caller's signature
+        assert "return 7;" not in block            # not the function above it
+
+    def test_the_prompt_carries_it(self) -> None:
+        from veripp.llm import TriageContext
+
+        text = TriageContext(
+            function="decode", signature="int decode(const char *p, int n)",
+            parameters=["p", "n"], function_source="...",
+            call_sites=["line 10: decode(name, len);"],
+            caller_context=[">    10 |     decode(name, len);"],
+        ).render()
+        assert "The caller's code leading up to each call" in text
+
+    def test_a_function_nobody_calls_adds_nothing(self) -> None:
+        from veripp.llm import TriageContext
+        from veripp.triage import call_sites_in_context
+
+        assert call_sites_in_context(self.SOURCE, "other") == []
+        text = TriageContext(function="f", signature="f", parameters=[],
+                             function_source="").render()
+        assert "leading up to each call" not in text

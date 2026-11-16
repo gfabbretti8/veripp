@@ -1,0 +1,5 @@
+The buffer contents in the counterexample are all zero, so strlen starting at any in-bounds position (offset 0..3) stops immediately. The only way strlen can read out of bounds is the cursor sitting exactly at the end: the harness allows offset == length == 4, so buffer->buffer + buffer->offset points one past the 4-element array and strlen's first read is out of bounds.
+
+Real callers do not do that. Every call site calls update_offset right after a print routine has written a NUL-terminated string at buffer + offset into space obtained from ensure(), which guarantees room beyond the current offset. So at each call site offset < length and there is a terminated string at the cursor. The counterexample violates that precondition (offset at the very end, nothing written there).
+
+missing_assumption

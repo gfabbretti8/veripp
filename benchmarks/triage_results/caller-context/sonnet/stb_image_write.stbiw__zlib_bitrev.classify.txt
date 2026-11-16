@@ -1,0 +1,3 @@
+Both call sites pass a non-negative bit count (the constant 5, or the Huffman code length). The counterexample uses codebits = -1, which no caller produces.
+
+missing_assumption

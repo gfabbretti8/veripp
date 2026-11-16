@@ -1,0 +1,1 @@
+input_buffer->offset < input_buffer->length

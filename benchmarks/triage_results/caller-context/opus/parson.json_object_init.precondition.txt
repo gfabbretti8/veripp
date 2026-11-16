@@ -1,0 +1,1 @@
+capacity <= SIZE_MAX / sizeof(size_t)

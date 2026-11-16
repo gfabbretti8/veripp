@@ -1,0 +1,5 @@
+The counterexample uses num = 4294967295. The loop then evaluates `bits >> (num - i - 1)` with a shift amount of 32 or more, which is undefined behaviour.
+
+Real callers pass small widths. Line 671 passes FIRSTBITS, a small compile-time constant (9 in lodepng). Line 709 passes `l`, a Huffman code length, which in DEFLATE is at most 15. Both call sites keep num well under 32, and nothing shown lets a caller pass a huge num. The counterexample breaks a precondition that every call site meets.
+
+missing_assumption

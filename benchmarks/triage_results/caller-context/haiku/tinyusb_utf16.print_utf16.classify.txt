@@ -1,0 +1,5 @@
+The single call site passes a 128-element buffer, and its first element is a USB string descriptor header. The low byte of that header is bLength, which comes from the device. The function computes ((buf[0] & 0xff) - 2) / sizeof(uint16_t) without a lower-bound check. When bLength is 1, the subtraction underflows (int -1 converted to size_t), giving a huge utf16_len. The following reads and writes then run far past the 128-element buffer.
+
+The call site itself sets up this case ("mode 1: bLength = 1 (the subtraction underflows)"), so a device that sends a descriptor with bLength of 0 or 1 is a feasible input for this code. Such a device is a real input source, and the function misbehaves on it. The counterexample's buf_len of 4 is a harness bound, but the defect it points at is reachable at the real call size.
+
+real_bug

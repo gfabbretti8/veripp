@@ -1,0 +1,3 @@
+The harness gives `a` exactly n valid elements, which matches what a caller must pass. The loop `i <= n` reads a[n], one past the end, so a well-formed input already misbehaves. The counterexample has n = 4 with a 4-element buffer, so this is a real off-by-one bug.
+
+real_bug

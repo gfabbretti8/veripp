@@ -292,10 +292,14 @@ endpoint (`--llm-base-url` or `$VERIPP_LLM_BASE_URL`). A provider's API key
 in the environment, set for some other tool perhaps, does not send your code
 anywhere on its own.
 
-How good the triage is has only partly been measured. The path works end to
-end, a 7B local model scored 0 of 2 on the benchmark, and no hosted model has
-been graded yet. [benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md)
-has the details.
+Triage has been measured on 16 findings whose answer was already known.
+Shown the caller's code above each call, as veripp now sends it, Claude
+Haiku, Sonnet and Opus each kept all 5 confirmed bugs and dismissed at
+least 9 of the false alarms (11, of which Opus answered 9); shown only the call line, every model dismissed
+at least one real bug. A 7B local model scored 0 of 2. The set is small and
+no model has been graded through its real API yet:
+[benchmarks/TRIAGE.md](https://github.com/gfabbretti8/veripp/blob/main/benchmarks/TRIAGE.md)
+has the method, the caveats and the raw answers.
 
 ## In CI
 

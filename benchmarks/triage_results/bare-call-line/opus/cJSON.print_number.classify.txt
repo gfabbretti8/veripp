@@ -1,0 +1,5 @@
+The property fails in compare_double(test, d) because `test - d` evaluates to NaN. The function has already sent NaN and infinite `d` to the "null" branch, so `d` is finite by the time it reaches the comparison. `test` comes from sscanf parsing what sprintf wrote into `number_buffer`. In real code that buffer holds the "%1.15g" rendering of a finite double, which parses back to a finite value, and finite minus finite cannot give NaN. Even a parsed overflow to infinity minus a finite `d` gives infinity, not NaN.
+
+The harness states that sprintf is declared but not defined, so its effects are not modelled. That leaves `number_buffer` with contents the checker does not constrain, sscanf can "read" any value including NaN, and this is how the NaN appears. The counterexample does not even give a value of `d` that matters. It comes from a library function the harness left unmodelled, not from anything the single caller (print_value on a real cJSON number) can produce. A NaN inside fabs/compare would also just make the comparison false and fall back to the %1.17g path, which is harmless anyway.
+
+harness_issue
