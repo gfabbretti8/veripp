@@ -270,6 +270,37 @@ class Signature:
         return self.return_type.replace(" ", "") in ("void", "")
 
 
+_NAMESPACE_RE = re.compile(
+    r"\bnamespace\s+([A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*)\s*\{"
+)
+
+
+def named_namespaces(source: str) -> list[str]:
+    """Every named namespace the text opens, fully qualified, outermost first.
+
+    A harness calls the function under test from `main`, outside whatever
+    namespace it was written in. Anonymous namespaces need nothing: their
+    names are already visible in the translation unit.
+    """
+    text = scrub(source)
+    found: list[str] = []
+    open_spans: list[tuple[int, str]] = []   # (closing brace, qualified name)
+    for m in _NAMESPACE_RE.finditer(text):
+        while open_spans and open_spans[-1][0] < m.start():
+            open_spans.pop()
+        name = re.sub(r"\s+", "", m.group(1))
+        if open_spans:
+            name = f"{open_spans[-1][1]}::{name}"
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            i += 1
+        open_spans.append((i, name))
+        if name not in found and name.split("::")[0] != "std":
+            found.append(name)
+    return found
+
+
 # ---------------------------------------------------------------- lexing ---
 
 

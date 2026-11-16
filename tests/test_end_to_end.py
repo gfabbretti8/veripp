@@ -93,3 +93,49 @@ def test_a_precondition_turns_a_counterexample_into_a_proof(capsys, tmp_path):
 
     ok_code, _ = run_cli(capsys, str(src), "--function", "average_guarded")
     assert ok_code == EXIT_VERIFIED
+
+
+NAMESPACED = """\
+namespace geo {
+struct Box { int w; int h; };
+int half(int x) { return x / 2; }
+int area(const Box& b) { return b.w * b.h; }
+class Counter {
+public:
+    int n = 0;
+    void add(int k) { n += k; }
+};
+namespace deep { int twice(int x) { return x + x; } }
+}
+"""
+
+
+class TestCodeInANamespace:
+    """`main` is outside every namespace. The harness called `half(x)` and
+    declared a plain `Box`, so the frontend rejected every function of a file
+    written inside `namespace geo` -- which is most C++ -- and the benchmark
+    notes put tinyxml2's failure down to the checker."""
+
+    @pytest.fixture()
+    def source(self, tmp_path):
+        path = tmp_path / "geo.cpp"
+        path.write_text(NAMESPACED, encoding="utf-8")
+        return str(path)
+
+    def test_a_function_in_a_namespace_is_proved(self, capsys, source):
+        code, out = run_cli(capsys, source, "--function", "half")
+        assert code == EXIT_VERIFIED, out
+
+    def test_a_type_in_a_namespace_can_be_a_parameter(self, capsys, source):
+        code, out = run_cli(capsys, source, "--function", "area")
+        assert code == EXIT_COUNTEREXAMPLE, out
+        assert "arithmetic overflow on mul" in out
+
+    def test_a_nested_namespace(self, capsys, source):
+        code, out = run_cli(capsys, source, "--function", "twice")
+        assert code == EXIT_COUNTEREXAMPLE, out
+        assert "arithmetic overflow on add" in out
+
+    def test_a_class_in_a_namespace(self, capsys, source):
+        code, out = run_cli(capsys, source, "--class", "Counter")
+        assert "parse_error" not in out and "PARSING ERROR" not in out, out

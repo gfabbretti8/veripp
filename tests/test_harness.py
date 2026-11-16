@@ -1091,3 +1091,30 @@ class TestTheRestOfStdint:
         assert nondet_for(type_) is not None
         typedefs = collect_scalar_typedefs(f"typedef {type_} pb_byte_t;\n")
         assert nondet_for("pb_byte_t", typedefs) is not None
+
+
+class TestNamespaces:
+    def test_named_namespaces_are_listed_fully_qualified(self):
+        from veripp.cppsig import named_namespaces
+
+        text = (
+            "namespace a { namespace b { int f(); } int g(); }\n"
+            "namespace { int hidden(); }\n"
+            "namespace c::d { int h(); }\n"
+            "// namespace commented { }\n"
+            'const char *s = "namespace quoted {";\n'
+            "namespace a { int again(); }\n"
+        )
+        assert named_namespaces(text) == ["a", "a::b", "c::d"]
+
+    def test_a_cpp_harness_opens_them_and_a_c_one_does_not(self, tmp_path):
+        from veripp.harness import generate
+
+        body = "namespace geo { int half(int x) { return x / 2; } }\n"
+        cpp = tmp_path / "geo.cpp"
+        cpp.write_text(body, encoding="utf-8")
+        assert "using namespace geo;" in generate(cpp, "half").code
+
+        c = tmp_path / "plain.c"
+        c.write_text("int half(int x) { return x / 2; }\n", encoding="utf-8")
+        assert "using namespace" not in generate(c, "half").code
