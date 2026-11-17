@@ -60,12 +60,18 @@ the compiler sees them, and `scan` suggests it when such refusals dominate:
 |---|---:|---:|---:|---:|---:|---:|
 | libpng `png.c` | 70 | 34 | 13 | 83% | 2 | 9 |
 | lodepng | 256 | 105 | 25 | 95% | 32 | 83 |
-| zlib (8 modules) | 117 | 43 | 16 | 74% | 3 | 25 |
+| zlib (8 modules) | 117 | 46 | 16 | 81% | 4 | 29 |
 
 libpng and lodepng gain on every column. zlib gains in `deflate` and
-`trees` (13% to 91% harnessable in `trees`) and loses in the small modules:
-`compress` and `uncompr` drop from fully harnessable to half, so its proved
-count falls from 52 to 43. That loss is not explained yet.
+`trees` (13% to 91% harnessable in `trees`). Its row was re-measured on
+2026-11-17, on the same commit, after a fix: the first measurement had
+`compress` and `uncompr` drop from fully harnessable to half, because GCC's
+`<stddef.h>` spells `size_t` as `long unsigned int` and veripp did not read
+that as an integer, so `z_size_t` could not be filled once the preprocessor
+had run. Both modules are fully harnessable again and the row went from 43
+proved and 74% to 46 and 81%. It is still under the 52 proved without
+`--preprocess`: 8 of those two modules' 10 functions are inconclusive
+here, and why has not been looked into.
 
 ## Earlier measurements
 
