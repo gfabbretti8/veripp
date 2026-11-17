@@ -39,6 +39,7 @@ from .cppsig import (
     collect_pointer_typedefs,
     collect_scalar_typedefs,
     included_names,
+    class_shape,
     find_class,
     find_function,
     find_struct,
@@ -446,7 +447,7 @@ def generate(
             stub_preamble.append(noop)
 
     body.append("")
-    call = _emit_call(signature, assumptions)
+    call = _emit_call(signature, assumptions, expanded, options, typedefs)
     roots: list[str] = []
     cxx = source.suffix != ".c"
     if (_CXX_ALLOCATES_RE if cxx else _ALLOCATES_RE).search(scrub(expanded)):
@@ -2140,16 +2141,22 @@ def _decl_type(type_: str) -> str:
     return t[:-1].strip() if t.endswith("&") else t
 
 
-def _emit_call(signature: Signature, assumptions: list[str]) -> list[str]:
+def _emit_call(
+    signature: Signature,
+    assumptions: list[str],
+    source_text: str = "",
+    options: HarnessOptions | None = None,
+    typedefs: dict[str, str] | None = None,
+) -> list[str]:
     args = ", ".join(p.name for p in signature.params)
+    if signature.class_name:
+        info = _receiver_class(signature, source_text)
+        if info is not None and signature.name in info.static_members:
+            signature.is_static = True
     if signature.class_name and not signature.is_static:
-        assumptions.append(
-            f"exactly one call, on a default-constructed `{signature.class_name}`: "
-            "object states reachable only through other call sequences are NOT "
-            "explored (write a sequence harness by hand for those)"
-        )
-        lines = [f"{signature.class_name} {_RECEIVER};",
-                 f"(void){_RECEIVER}.{signature.name}({args});"]
+        lines = _emit_receiver(signature, info, options or HarnessOptions(),
+                               typedefs or {}, assumptions)
+        lines.append(f"(void){_RECEIVER}.{signature.name}({args});")
     elif signature.class_name:
         lines = [f"(void){signature.class_name}::{signature.name}({args});"]
     else:
@@ -2157,6 +2164,111 @@ def _emit_call(signature: Signature, assumptions: list[str]) -> list[str]:
     if signature.returns_void:
         lines[-1] = lines[-1].replace("(void)", "", 1)
     return lines
+
+
+def _receiver_class(signature: Signature, source_text: str) -> ClassInfo | None:
+    """The class a member function belongs to, or a refusal that says why
+    nothing outside the class can call it.
+
+    None when the class's definition is not in the text veripp reads (a
+    header reached through an include path, say): then nothing is known and
+    the harness is written as it always was.
+    """
+    cls = signature.class_name
+    try:
+        info = class_shape(source_text, cls)
+    except SignatureError:
+        return None
+    access = info.member_access.get(signature.name)
+    if access and "public" not in access:
+        how = " and ".join(sorted(access))
+        raise HarnessError(
+            f"`{cls}::{signature.name}` is a {how} member function: only "
+            f"`{cls}`'s own code can call it, so a harness outside the class "
+            "cannot. Verify the public member functions that call it; what "
+            "they can make it do is what matters"
+        )
+    return info
+
+
+def _emit_receiver(
+    signature: Signature,
+    info: ClassInfo | None,
+    options: HarnessOptions,
+    typedefs: dict[str, str],
+    assumptions: list[str],
+) -> list[str]:
+    """Declare the object a member function is called on.
+
+    `T obj;` is only a declaration when `T` has an accessible default
+    constructor and destructor and is not abstract. tinyxml2 has all three
+    exceptions -- `XMLNode` is abstract, `XMLElement`'s constructor and
+    destructor are private because only an `XMLDocument` makes one -- and
+    57 of its 91 harnesses were rejected by the frontend for it, each
+    reported as a parse error in veripp's own harness. Those are refused
+    here instead, with the reason; a class that only lacks a *default*
+    constructor is built with a public one.
+    """
+    cls = signature.class_name
+    one_call = (
+        "object states reachable only through other call sequences are NOT "
+        "explored (write a sequence harness by hand for those)"
+    )
+    if info is None or (
+        info.default_constructible and info.pure_virtual is None
+        and info.destructor_access is None
+    ):
+        assumptions.append(
+            f"exactly one call, on a default-constructed `{cls}`: {one_call}"
+        )
+        return [f"{cls} {_RECEIVER};"]
+    target = f"`{cls}::{signature.name}`"
+    _refuse_undeclarable(info, f"to call {target} on")
+    taken = {p.name for p in signature.params}
+    renamed = replace(info, constructors=[
+        replace(ctor, params=[
+            replace(p, name=f"{p.name}_ctor") if p.name in taken else p
+            for p in ctor.params
+        ])
+        for ctor in info.constructors
+        # A copy or move constructor needs the object it is asked to make.
+        if not any(re.search(rf"\b{re.escape(cls)}\b", p.type) for p in ctor.params)
+    ])
+    built: list[str] = []
+    try:
+        lines = _emit_construction(renamed, options, typedefs, built)
+    except HarnessError as exc:
+        raise HarnessError(f"{exc}, so there is no object to call {target} on") from None
+    assumptions += built[:-1]
+    assumptions.append(
+        f"exactly one call, on a `{cls}` straight out of its constructor, "
+        f"`{lines[-1].rstrip(';')}`, with nondeterministic arguments: {one_call}"
+    )
+    return lines
+
+
+def _refuse_undeclarable(info: ClassInfo, purpose: str) -> None:
+    """Refuse a class no code outside it can have an object of."""
+    cls = info.name
+    if info.pure_virtual is not None:
+        raise HarnessError(
+            f"`{cls}` is an abstract class (`{info.pure_virtual}` is pure "
+            f"virtual), so there is no `{cls}` object {purpose}. Verify it "
+            "through a class derived from it"
+        )
+    if info.destructor_access is not None:
+        raise HarnessError(
+            f"`{cls}` has a {info.destructor_access} destructor: its objects "
+            "are made and destroyed by the library, not declared by a caller, "
+            f"so a harness has no `{cls}` object {purpose}"
+        )
+    if not info.default_constructible and not info.constructors:
+        how = " and ".join(sorted(set(info.hidden_constructors)))
+        raise HarnessError(
+            f"`{cls}` has no public constructor (the ones it declares are "
+            f"{how}): its objects are made by the library, so a harness has "
+            f"no `{cls}` object {purpose}"
+        )
 
 
 #: Whether anything in the translation unit can put memory on the heap. A
@@ -2190,11 +2302,11 @@ template <> struct veripp_keeper<true> {
 LEAK_ROOT_PREFIX = "veripp_kept_"
 
 #: A harness local: `struct S s_obj;`, `const int * a = a_buf;`,
-#: `JSON_Value * items[4];`. Statements never match -- they have one
+#: `JSON_Value * items[4];`, `Ring veripp_obj(cap);`. Statements never match -- they have one
 #: identifier before the `=`, not a type and a name.
 _HARNESS_LOCAL_RE = re.compile(
     r"^(?P<type>[A-Za-z_]\w*(?:[ \t]+[A-Za-z_]\w*)*[ \t]*\**)[ \t]*"
-    r"(?<![\w])(?P<name>[A-Za-z_]\w*)[ \t]*(?:\[(?P<count>\d+)\])?[ \t]*(?:=[^;]*)?;$"
+    r"(?<![\w])(?P<name>[A-Za-z_]\w*)[ \t]*(?:\[(?P<count>\d+)\])?[ \t]*(?:=[^;]*|\([^;]*\))?;$"
 )
 _NOT_A_TYPE = {"return", "else", "goto", "static", "typedef", "extern", "case"}
 
@@ -2559,6 +2671,7 @@ def generate_sequence(
     options = options or HarnessOptions()
     text = read_source(source)
     info = find_class(text, class_name)
+    _refuse_undeclarable(info, "to run a sequence of calls on")
     expanded = _with_local_includes(source, text, options.include_dirs)
     # Linked TUs resolve callees, so their definitions must be visible
     # here too, or veripp reports stubs the run does not actually have.
@@ -3118,7 +3231,7 @@ def _emit_object(
             if param.is_pointer else f"{declared}& {param.name} = {storage};",
         ]
 
-    info = find_struct(source_text, type_name)
+    info = _fillable_struct(source_text, type_name)
 
     storage = f"{param.name}_obj"
 
@@ -4129,9 +4242,37 @@ def _try_struct(source_text: str, type_name: str) -> StructInfo | None:
     if not re.fullmatch(r"[A-Za-z_]\w*", name):
         return None
     try:
-        return find_struct(source_text, name)
+        return _fillable_struct(source_text, name)
     except SignatureError:
         return None
+
+
+def _fillable_struct(source_text: str, name: str) -> StructInfo:
+    """`find_struct`, for a type the harness means to declare and fill.
+
+    That takes more than knowing the fields. `T obj; obj.f = ...;` is only
+    code when `T` can be declared by a caller -- it is not abstract, and its
+    default constructor and destructor are public -- and every field is
+    public. A C struct always qualifies. A C++ class with private state
+    does not, and filling it anyway is a harness the frontend rejects:
+    `'_flags' is a private member of 'tinyxml2::StrPair'`.
+    """
+    info = find_struct(source_text, name)
+    hidden = next((f.name for f in info.fields if f.access != "public"), None)
+    if hidden is not None:
+        raise SignatureError(
+            f"`{name}` has data members only its own code can set "
+            f"(`{hidden}` is {next(f.access for f in info.fields if f.name == hidden)})"
+        )
+    try:
+        shape = class_shape(source_text, name)
+    except SignatureError:
+        return info
+    if shape.pure_virtual is not None:
+        raise SignatureError(f"`{name}` is an abstract class")
+    if shape.destructor_access is not None or not shape.default_constructible:
+        raise SignatureError(f"`{name}` cannot be declared by a caller")
+    return info
 
 
 # --------------------------------------------------------- vacuity check ---

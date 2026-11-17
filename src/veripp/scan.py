@@ -415,12 +415,17 @@ class ScanReport:
                 "         real -- an assert in the function, or a documented caller\n"
                 "         contract -- or the proof is conditional on nothing."
             )
-        refused = len(self.refused)
+        # Only the refusals the preprocessor could change. A private member
+        # function or an abstract class is refused whatever the text says,
+        # and counting those sent tinyxml2 to --preprocess for 103 functions
+        # of which 14 were about a type.
+        refused = sum(
+            1 for r in self.refused
+            if "cannot construct" in r.detail or "conditional" in r.detail
+            or "not modelled" in r.detail)
         if (refused and not self.preprocessed
                 and refused >= max(len(self.proved), len(self.counterexamples),
-                                   len(self.inconclusive), 1)
-                and any("cannot construct" in r.detail or "conditional" in r.detail
-                        or "not modelled" in r.detail for r in self.refused)):
+                                   len(self.inconclusive), 1)):
             # nanopb: 66 of 84 functions refused for a struct with #ifdef
             # members; zlib: 39 for a typedef written `} FAR deflate_state;`.
             # Both are the text, not the code, and the preprocessor settles
@@ -562,6 +567,11 @@ def reached_lines(r: "FunctionResult", indent: str) -> list[str]:
 def _reason(detail: str) -> str:
     """Collapse a refusal message to its class, for counting."""
     for needle, label in (
+        ("member function: only", "private or protected member function"),
+        ("is an abstract class", "member of an abstract class"),
+        ("destructor: its objects", "member of a class only the library can construct"),
+        ("has no public constructor", "member of a class only the library can construct"),
+        ("so there is no object to call", "member of a class whose constructors veripp cannot call"),
         ("cannot build a nondeterministic value", "parameter type not modelled"),
         ("cannot construct", "parameter is a type veripp cannot construct"),
         ("defined more than one way under #if",

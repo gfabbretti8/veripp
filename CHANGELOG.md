@@ -9,6 +9,40 @@ run, and refuses to back results from one that cannot detect a planted bug.
 
 ## Unreleased
 
+### Fixed: the object a member function is called on
+- **A harness no longer declares an object it cannot have.** For `T::f`
+  veripp wrote `T veripp_obj;` whatever `T` was and left the frontend to
+  reject it, so a scan reported a parse error in veripp's own harness
+  and gave no reason. On tinyxml2 that was 57 of 91 harnesses. Now:
+  - a class with no default constructor is built with a public one, its
+    arguments nondeterministic (`Ring veripp_obj(cap);`), and the
+    assumptions say so. A constructor whose arguments all have defaults
+    counts as a default constructor;
+  - an abstract class, a class whose constructors are all private,
+    protected or deleted, and a class with a private or protected
+    destructor are refused: only the library makes those objects;
+  - a private or protected member function is refused: nothing outside
+    the class can call it;
+  - a static member function defined outside its class is called as one.
+    The `static` is on the declaration, and veripp read only the
+    definition, so it built a receiver the call did not need.
+  `scan` counts each under its own reason. `verify --class` refuses the
+  same classes. tinyxml2 after: no frontend rejections, the 57 are among
+  103 refused by name, and the 34 that remain are checker timeouts.
+- **A class is found behind an export macro.** `class TINYXML2_LIB
+  XMLNode`, or the `__attribute__((...))` the preprocessor leaves there,
+  and `class X final`, were not recognised as class definitions.
+- **A parameter of a class type is filled only if a caller could.** A
+  class with private data members, or one a caller cannot declare, is
+  refused as a type veripp cannot construct. It used to be filled field
+  by field into a harness the frontend rejected. Two things that hid
+  this: fields after a member function defined in the class kept the
+  access of the fields before it, and `typedef struct { ... } name;` was
+  read as having private members.
+- **The `--preprocess` suggestion counts only refusals about a type.** It
+  counted every refusal, and so recommended `--preprocess` for functions
+  it could not change.
+
 ### Added: a static function's counterexample is put to its callers
 - **`scan` and `verify` ask the callers.** A harness calls a function with
   anything its signature admits, which is the right question for an entry

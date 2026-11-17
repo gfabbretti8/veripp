@@ -48,7 +48,7 @@ tinyxml2's three causes were veripp's.
 | library | what happens | whose |
 |---|---|---|
 | tinyxml2 | every harness was rejected with `unknown type name 'XMLPrinter'`: veripp called into `namespace tinyxml2` without opening it | veripp; **fixed** 2026-11-16 |
-| tinyxml2 | 57 of 91 harnesses are still rejected: veripp default-constructs the receiver, and `XMLElement` has no default constructor and `XMLNode` is abstract | veripp; open. It should refuse these, or build the object through the library |
+| tinyxml2 | 57 of 91 harnesses were rejected: veripp wrote `T obj;` for the object a member function is called on, whatever `T` was. `XMLNode` is abstract, `XMLElement` and `XMLAttribute` have private destructors because only an `XMLDocument` makes one, and 14 of the functions are private or protected | veripp; **fixed** 2026-11-17: these are refused with the reason, and none reaches the frontend. Building the object through the library (`XMLDocument::NewElement`) was tried by hand and crashes the checker, so it would not have settled them |
 | tinyxml2 | the other 34 run out of time or memory, and some crash the checker (`esbmc exited with status -11` on `CloseElement`) | ESBMC; not reported from here |
 | jsoncpp `json_value.cpp` | the frontend rejects the file: `no member named 'pop_back' in 'std::basic_string<char>'` | ESBMC's C++ library model |
 | pugixml | the frontend rejects the header: `pugixml.hpp:383: constructor cannot be redeclared` | not investigated |

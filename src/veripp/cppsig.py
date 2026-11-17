@@ -249,6 +249,23 @@ class ClassInfo:
     default_constructible: bool = True
     constructors: list["Signature"] = field(default_factory=list)
     skipped: dict[str, str] = field(default_factory=dict)  # method -> why
+    #: The access of every constructor the class declares that is not
+    #: public, deleted ones included ("deleted"). With no public constructor
+    #: beside them, nothing outside the class can make one.
+    hidden_constructors: list[str] = field(default_factory=list)
+    #: "private" or "protected" when the destructor is: an object the caller
+    #: cannot destroy is one it cannot declare.
+    destructor_access: str | None = None
+    #: A pure virtual function this class has and does not define -- its own
+    #: or one a base class left to it. Such a class has no objects.
+    pure_virtual: str | None = None
+    #: Member function name -> every access it is declared with.
+    member_access: dict[str, set[str]] = field(default_factory=dict)
+    bases: list[str] = field(default_factory=list)
+    #: Member functions declared `static`. The keyword is on the declaration
+    #: in the class and not on a definition outside it, so the definition
+    #: alone cannot say.
+    static_members: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -395,7 +412,16 @@ class _ClassRange:
 # `union` belongs here: C libraries routinely hand out a union as a handle
 # type (LZ4_stream_t is `union LZ4_stream_u`), and a scanner that only knows
 # class and struct refuses every function taking one.
-_CLASS_RE = re.compile(r"\b(class|struct|union)\s+([A-Za-z_]\w*)\s*(?::[^;{]*)?\{")
+#
+# A library that exports its classes puts a macro between the keyword and the
+# name -- `class TINYXML2_LIB XMLNode` -- and once the preprocessor has run
+# that is an `__attribute__((...))`. Without allowing for it none of
+# tinyxml2's classes were found at all.
+_CLASS_RE = re.compile(
+    r"\b(class|struct|union)\s+"
+    r"(?:(?:[A-Z_][A-Z0-9_]*|__attribute__\s*\(\([^;{]*?\)\))\s+)?"
+    r"([A-Za-z_]\w*)\s*(?:final\s*)?(?::[^;{]*)?\{"
+)
 
 
 def find_class_ranges(scrubbed: str) -> list[_ClassRange]:
@@ -876,6 +902,28 @@ def find_class(source: str, name: str) -> ClassInfo:
     and protected members are skipped, and so is anything `find_function`
     refuses (templates, operators, overloads it cannot disambiguate).
     """
+    info = class_shape(source, name)
+    for member_name, access in info.member_access.items():
+        if "public" not in access:
+            continue
+        try:
+            info.methods.append(find_function(source, member_name))
+        except SignatureError as exc:
+            info.skipped[member_name] = str(exc).split(";")[0].split("(")[0].strip()
+    return info
+
+
+def class_shape(source: str, name: str) -> ClassInfo:
+    """What it takes to have an object of `name`, and who may call what.
+
+    Everything `find_class` knows except the methods' signatures: the
+    constructors and their access, the destructor's, whether the class is
+    abstract, and the access of each member function. A harness for one
+    member function needs exactly this to decide whether it can declare the
+    receiver at all -- and it used to decide nothing, write `T obj;`, and
+    leave the frontend to reject it without saying which of four different
+    things was wrong.
+    """
     scrubbed = scrub(source)
     all_ranges = find_class_ranges(scrubbed)
     ranges = [c for c in all_ranges if c.name == name]
@@ -909,35 +957,116 @@ def find_class(source: str, name: str) -> ClassInfo:
 
     is_struct = _is_struct(scrubbed, rng)
     info = ClassInfo(name=name, is_struct=is_struct, templated=False)
+    info.bases = _base_names(scrubbed, rng)
     access = "public" if is_struct else "private"
     ctor_declared = False
+    nullary = False
 
     for member_name, member_start, member_access in _members(scrubbed, rng, access):
-        if member_name == name:  # constructor
+        if member_name == name:
+            if scrubbed[:member_start].rstrip().endswith("~"):
+                if member_access != "public":
+                    info.destructor_access = member_access
+                continue
+            lparen = scrubbed.index("(", member_start)
+            if scrubbed[lparen + 1:].lstrip().startswith("*"):
+                continue  # `struct node (*next)(void);` is a C field
             ctor_declared = True
-            if member_access == "public":
-                try:
-                    info.constructors.append(_signature_at(source, scrubbed, member_start, name))
-                except SignatureError:
-                    pass
+            rparen = match_bracket(scrubbed, lparen)
+            if re.match(r"\s*(?:noexcept\s*)?=\s*delete\b", scrubbed[rparen + 1:]):
+                info.hidden_constructors.append("deleted")
+                continue
+            if member_access != "public":
+                info.hidden_constructors.append(member_access)
+                continue
+            raw = [a for a in split_top_level(scrubbed[lparen + 1 : rparen])
+                   if a.strip() not in ("", "void")]
+            # `Doc(bool entities = true, Mode mode = KEEP)` is a default
+            # constructor: every argument can be left out.
+            if all(len(split_top_level(a, "=")) > 1 for a in raw):
+                nullary = True
+            try:
+                info.constructors.append(_signature_at(source, scrubbed, member_start, name))
+            except SignatureError:
+                pass
             continue
-        if member_access != "public":
-            continue
-        try:
-            info.methods.append(find_function(source, member_name))
-        except SignatureError as exc:
-            info.skipped[member_name] = str(exc).split(";")[0].split("(")[0].strip()
+        info.member_access.setdefault(member_name, set()).add(member_access)
+        head = re.split(r"[;{}:]", scrubbed[rng.start:member_start])[-1]
+        if re.search(r"\bstatic\b", head):
+            info.static_members.add(member_name)
 
-    info.default_constructible = (
-        not ctor_declared
-        or any(not c.params for c in info.constructors)
-    )
+    info.default_constructible = not ctor_declared or nullary
+    pure = _unimplemented_pure_virtuals(scrubbed, all_ranges, rng)
+    info.pure_virtual = pure[0] if pure else None
     return info
+
+
+_PURE_VIRTUAL_RE = re.compile(
+    r"\bvirtual\b[^;{}]*?\b([A-Za-z_]\w*)\s*\([^;{}]*\)[^;{}()]*=\s*0\s*;"
+)
+
+
+def _top_level_text(scrubbed: str, rng: "_ClassRange") -> str:
+    """The class body with every nested brace block replaced by a `;`."""
+    out: list[str] = []
+    depth = 0
+    for ch in scrubbed[rng.start + 1 : rng.end]:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        # A block ends a declaration as a `;` does: `~T() {} virtual ...`.
+        out.append(ch if depth == 0 and ch != "}" else ";" if ch == "}" and depth == 0 else " ")
+    return "".join(out)
+
+
+def _base_names(scrubbed: str, rng: "_ClassRange") -> list[str]:
+    head = scrubbed[max(0, rng.start - 400) : rng.start]
+    m = None
+    for m in re.finditer(r"\b(?:class|struct)\b[^;{}]*$", head):
+        pass
+    if m is None or ":" not in m.group(0):
+        return []
+    clause = m.group(0).split(":", 1)[1]
+    names = []
+    for base in split_top_level(clause):
+        words = re.findall(r"[A-Za-z_]\w*", re.sub(r"<.*>", "", base))
+        words = [w for w in words if w not in ("public", "private", "protected", "virtual")]
+        if words:
+            names.append(words[-1])
+    return names
+
+
+def _unimplemented_pure_virtuals(
+    scrubbed: str, all_ranges: list["_ClassRange"], rng: "_ClassRange",
+    seen: frozenset[str] = frozenset(),
+) -> list[str]:
+    """The pure virtuals `rng` has and does not override, own or inherited.
+
+    A base class this text does not define is taken to leave nothing
+    behind: saying a class is abstract on a guess would refuse functions
+    that can be verified.
+    """
+    if rng.name in seen:
+        return []
+    seen = seen | {rng.name}
+    pure = _PURE_VIRTUAL_RE.findall(_top_level_text(scrubbed, rng))
+    declared = {name for name, _, _ in _members(scrubbed, rng, "public")}
+    for base in _base_names(scrubbed, rng):
+        candidates = [c for c in all_ranges if c.name == base and not c.templated]
+        if len(candidates) != 1:
+            continue
+        for name in _unimplemented_pure_virtuals(scrubbed, all_ranges, candidates[0], seen):
+            if name not in declared and name not in pure:
+                pure.append(name)
+    return pure
 
 
 def _is_struct(scrubbed: str, rng: "_ClassRange") -> bool:
     head = scrubbed[max(0, rng.start - 200) : rng.start]
-    m = list(re.finditer(r"\b(class|struct)\s+\w+", head))
+    # The keyword alone: `typedef struct { ... } name;` has no tag after it,
+    # and its members are as public as any other struct's.
+    m = list(re.finditer(r"\b(class|struct)\b", head))
     return bool(m) and m[-1].group(1) == "struct"
 
 
@@ -1069,7 +1198,11 @@ def find_struct(source: str, name: str) -> StructInfo:
     access = "public" if _is_struct(scrubbed, rng) or info.is_union else "private"
 
     for statement, start in _field_statements(scrubbed, rng):
-        acc = _ACCESS_RE.match(statement.strip())
+        # At the end, not the start: a member function defined in the class
+        # ends in `}` with no `;`, so its text runs on into the specifier
+        # after it -- `bool Empty() const { ... } private:` -- and matched
+        # from the start every field below that was given the access above.
+        acc = re.search(r"\b(public|private|protected)\s*:$", statement.strip())
         if acc:
             access = acc.group(1)
             continue

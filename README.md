@@ -455,10 +455,11 @@ that reproduces it are in
   not show the allocation. Leaks in `--sequence` harnesses are not reported
   yet.
 - **Only C and C-like C++ work.** ESBMC's C++ frontend doesn't handle
-  STL-heavy code: jsoncpp won't parse, and tinyxml2 crashes it. veripp also
-  default-constructs the object a member function is called on, so a class
-  with no default constructor, or an abstract one, gives a harness the
-  frontend rejects.
+  STL-heavy code: jsoncpp won't parse, and tinyxml2 crashes it. A member
+  function is called on an object the harness declares, built with a public
+  constructor if there is no default one. A class only its library can make
+  (abstract, or with a private constructor or destructor) is refused, and
+  so is a private or protected member function.
 - **Coverage varies by file.** Types defined outside the translation unit
   can't be constructed, and those functions are refused with the reason
   given. Run `veripp scan` to see how much of your code veripp reaches.
