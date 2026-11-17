@@ -56,7 +56,38 @@ def normalize_type(type_: str, typedefs: dict[str, str] | None = None) -> str:
             t = t[:-1].strip()
         t = typedefs.get(t, t) + suffix
         t = re.sub(r"\s*([*&])", r"\1", t)
-    return _TYPE_ALIASES.get(t, t)
+    return _TYPE_ALIASES.get(t) or _integer_spelling(t) or t
+
+
+_INTEGER_WORDS = {"signed", "__signed__", "unsigned", "short", "long", "int", "char"}
+
+
+def _integer_spelling(t: str) -> str | None:
+    """One spelling for an integer type however its specifiers are ordered.
+
+    The specifiers may come in any order and `int` and `signed` may be left
+    out or put in. GCC's own <stddef.h> says `typedef long unsigned int
+    size_t;`, so once the preprocessor has run that is how `size_t` is
+    spelled -- and read as an unknown type it took every parameter typed
+    through it out of reach: zlib's `z_size_t` under --preprocess.
+    """
+    suffix = ""
+    while t and t[-1] in "*&":
+        suffix = t[-1] + suffix
+        t = t[:-1].strip()
+    words = t.split()
+    if len(words) < 2 or not set(words) <= _INTEGER_WORDS:
+        return None
+    unsigned = "unsigned" in words
+    if "char" in words:
+        base = "unsigned char" if unsigned else (
+            "signed char" if {"signed", "__signed__"} & set(words) else "char")
+    else:
+        size = ("short" if "short" in words
+                else "long long" if words.count("long") == 2
+                else "long" if "long" in words else "")
+        base = " ".join(w for w in ("unsigned" if unsigned else "", size) if w) or "int"
+    return base + suffix
 
 
 _TYPEDEF_RE = re.compile(

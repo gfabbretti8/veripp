@@ -572,3 +572,28 @@ class TestFailuresInsideTheCheckersModel:
         report = json.loads(capsys.readouterr().out)
         (finding,) = report["counterexamples"]
         assert finding["file"] == str(src) and finding["line"] == 3
+
+
+class TestIntegerSpellings:
+    """GCC's <stddef.h> writes `typedef long unsigned int size_t;`."""
+
+    @pytest.mark.parametrize("spelled, canonical", [
+        ("long unsigned int", "unsigned long"),
+        ("int long unsigned", "unsigned long"),
+        ("long long unsigned int", "unsigned long long"),
+        ("short unsigned int", "unsigned short"),
+        ("long signed int", "long"),
+        ("const long unsigned int*", "unsigned long*"),
+        ("signed char", "signed char"),
+        ("unsigned int", "unsigned"),
+    ])
+    def test_any_order_is_one_type(self, spelled, canonical):
+        from veripp.cppsig import normalize_type
+
+        assert normalize_type(spelled) == canonical
+
+    def test_a_typedef_through_the_preprocessed_size_t_is_a_scalar(self):
+        from veripp.cppsig import collect_scalar_typedefs
+
+        text = "typedef long unsigned int size_t;\ntypedef size_t z_size_t;\n"
+        assert collect_scalar_typedefs(text)["z_size_t"] == "unsigned long"

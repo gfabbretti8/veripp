@@ -141,8 +141,11 @@ Found by the 2026-11-16 re-measurement (`benchmarks/CORPUS.md`,
       the object through the library, as `--constructors` does for
       parameters, is not done: tried by hand on tinyxml2 it crashes the
       checker.
-- [ ] `--preprocess` makes zlib's `compress` and `uncompr` less
-      harnessable (fully to half), and the cause is not known.
+- [x] `--preprocess` made zlib's `compress` and `uncompr` less
+      harnessable. GCC's <stddef.h> spells `size_t` as
+      `long unsigned int`, veripp knew only `unsigned long int`, and so
+      `z_size_t` stopped being a scalar once the preprocessor had run.
+      Integer types are now one type in any specifier order.
 - [ ] 244 of the corpus's 294 inconclusive results are the 30-second
       first-pass timeout on a 4-core machine. Which of them a longer
       budget settles has not been measured.

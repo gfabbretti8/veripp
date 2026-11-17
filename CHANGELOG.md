@@ -39,6 +39,13 @@ run, and refuses to back results from one that cannot detect a planted bug.
   this: fields after a member function defined in the class kept the
   access of the fields before it, and `typedef struct { ... } name;` was
   read as having private members.
+- **`--preprocess` no longer loses `size_t`.** An integer type's
+  specifiers may be written in any order, and GCC's own `<stddef.h>` says
+  `typedef long unsigned int size_t;`. veripp knew `unsigned long int`
+  and not that, so after the preprocessor had run, `size_t` and every
+  typedef through it was a type it could not fill. zlib's `compress.c`
+  and `uncompr.c` went from fully harnessable to half for it
+  (`z_size_t`); they are fully harnessable again.
 - **The `--preprocess` suggestion counts only refusals about a type.** It
   counted every refusal, and so recommended `--preprocess` for functions
   it could not change.
